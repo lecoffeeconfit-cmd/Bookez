@@ -1,22 +1,25 @@
 import { StatusBar } from 'expo-status-bar';
 import { LinearGradient } from 'expo-linear-gradient';
+import * as Speech from 'expo-speech';
 import { useEffect, useRef, useState } from 'react';
-import { Animated, Modal, Pressable, SafeAreaView, ScrollView, StyleSheet, Switch, Text, TextInput, TextInputProps, View, useWindowDimensions } from 'react-native';
+import { Alert, Animated, Modal, Pressable, SafeAreaView, ScrollView, Share, StyleSheet, Switch, Text, TextInput, TextInputProps, View, useWindowDimensions } from 'react-native';
 
-type Page = 'Library' | 'Plan' | 'Write' | 'Journey' | 'Profile' | 'Stats';
+type StudioSection = 'assemble' | 'read' | 'listen' | 'export';
+type Page = 'Library' | 'Plan' | 'Write' | 'Journey' | 'Profile' | 'Stats' | 'BookStudio';
 
 const C = {
   ink: '#202954', muted: '#6E7699', periwinkle: '#8B8AE8', sky: '#A5DCF7', lavender: '#C9BCF5',
   sage: '#A7D4AD', peach: '#FFC09D', coral: '#F78385', gold: '#F5C75C', paper: '#F8F8FF', white: '#FFFFFF',
 };
 
-type DictationInputProps = TextInputProps & { grow?: boolean };
+type InputMode = 'dictation' | 'writing';
+type DictationInputProps = TextInputProps & { grow?: boolean; onInputMode?: (mode: InputMode) => void };
 
-function DictationInput({ style, accessibilityLabel, grow = false, ...props }: DictationInputProps) {
+function DictationInput({ style, accessibilityLabel, grow = false, onInputMode, onKeyPress, ...props }: DictationInputProps) {
   const inputRef = useRef<TextInput>(null);
   return <View style={[s.dictationField, grow && s.dictationFieldGrow]}>
-    <TextInput ref={inputRef} {...props} accessibilityLabel={accessibilityLabel} style={[style, s.dictationTextInput]} />
-    <Pressable onPress={() => inputRef.current?.focus()} style={s.dictationButton} accessibilityRole="button" accessibilityLabel={`Open phone dictation${accessibilityLabel ? ` for ${accessibilityLabel}` : ''}`}>
+    <TextInput ref={inputRef} {...props} onKeyPress={(event) => { onKeyPress?.(event); onInputMode?.('writing'); }} accessibilityLabel={accessibilityLabel} style={[style, s.dictationTextInput]} />
+    <Pressable onPress={() => { onInputMode?.('dictation'); inputRef.current?.focus(); }} style={s.dictationButton} accessibilityRole="button" accessibilityLabel={`Open phone dictation${accessibilityLabel ? ` for ${accessibilityLabel}` : ''}`}>
       <Text style={s.dictationIcon}>🎙</Text>
     </Pressable>
   </View>;
@@ -25,6 +28,7 @@ function DictationInput({ style, accessibilityLabel, grow = false, ...props }: D
 const pageMeta: Record<Page, { icon: string; short: string }> = {
   Library: { icon: '▦', short: 'Library' }, Plan: { icon: '⌘', short: 'Plan' }, Write: { icon: '✎', short: 'Write' },
   Journey: { icon: '✦', short: 'Journey' }, Stats: { icon: '▥', short: 'Stats' }, Profile: { icon: '◉', short: 'Profile' },
+  BookStudio: { icon: '▣', short: 'Studio' },
 };
 
 const bottomNavPages: Page[] = ['Library', 'Plan', 'Write', 'Journey', 'Stats', 'Profile'];
@@ -39,9 +43,22 @@ type ProjectPlan = {
   partNotes: Record<string, string>;
   drafts: Record<string, string>;
   writeIndex: number;
+  activity?: Record<string, DailyWritingActivity>;
 };
 
-type Project = { title: string; color: string; mark: string; type: string; pageGoal: string; unitGoal: string; plan: ProjectPlan; updatedAt?: number };
+type DailyWritingActivity = { words: number; pages: number; completion: number; minutes: number; dictationUses: number; writingUses: number };
+
+type BookStudioAppearance = { fontSize: number; paragraphSpacing: number; lineSpacing: number; headingStyle: 'classic' | 'modern'; alignment: 'left' | 'center' };
+type BookStudioState = {
+  lastSection: StudioSection;
+  frontMatterIncluded: Record<string, boolean>;
+  frontMatterText: Record<string, string>;
+  backMatterIncluded: Record<string, boolean>;
+  backMatterText: Record<string, string>;
+  chapterOrder: string[];
+  appearance: BookStudioAppearance;
+};
+type Project = { title: string; color: string; mark: string; type: string; pageGoal: string; unitGoal: string; plan: ProjectPlan; updatedAt?: number; archived?: boolean; studio?: BookStudioState };
 
 const projectTypes = [
   { name: 'Fiction Book', example: 'Novel, novella, short stories', icon: '✦', color: C.periwinkle },
@@ -373,7 +390,7 @@ const defaultStructureFor = (blueprint: PlanBlueprint) => blueprint.structureIte
 
 const defaultPlanFor = (type: string): ProjectPlan => ({
   structure: defaultStructureFor(planBlueprints[type] ?? planBlueprints['Custom Project']),
-  idea: '', plotThread: '', people: '', plotNotes: {}, unitIdeas: [], partNotes: {}, drafts: {}, writeIndex: 0,
+  idea: '', plotThread: '', people: '', plotNotes: {}, unitIdeas: [], partNotes: {}, drafts: {}, writeIndex: 0, activity: {},
 });
 
 function Ambient({ children }: { children: React.ReactNode }) {
@@ -398,10 +415,13 @@ function Pill({ label, selected, onPress }: { label: string; selected?: boolean;
   return <Pressable onPress={onPress} style={[s.pill, selected && s.pillSelected]}><Text style={[s.pillText, selected && s.pillTextSelected]}>{label}</Text></Pressable>;
 }
 
-function Library({ projects, activeProject, onPage, onSelectProject, onProjectsChange }: { projects: Project[]; activeProject: string; onPage: (page: Page) => void; onSelectProject: (title: string) => void; onProjectsChange: (projects: Project[]) => void }) {
+function Library({ projects, activeProject, onPage, onSelectProject, onProjectsChange, onOpenBookStudio }: { projects: Project[]; activeProject: string; onPage: (page: Page) => void; onSelectProject: (title: string) => void; onProjectsChange: (projects: Project[]) => void; onOpenBookStudio: (title: string, section: StudioSection) => void }) {
   const [composerOpen, setComposerOpen] = useState(false);
   const [selectedType, setSelectedType] = useState(projectTypes[0]);
   const [projectName, setProjectName] = useState('');
+  const [menuProject, setMenuProject] = useState<Project | null>(null);
+  const [renameProject, setRenameProject] = useState<Project | null>(null);
+  const [renameValue, setRenameValue] = useState('');
 
   const createProject = () => {
     const name = projectName.trim() || `Untitled ${selectedType.name}`;
@@ -411,6 +431,28 @@ function Library({ projects, activeProject, onPage, onSelectProject, onProjectsC
     setComposerOpen(false);
   };
 
+  const selectAndOpen = (project: Project, nextPage: Page) => { onSelectProject(project.title); setMenuProject(null); onPage(nextPage); };
+  const duplicateProject = (project: Project) => {
+    const title = `${project.title} Copy`;
+    const copy: Project = { ...project, title, updatedAt: Date.now(), archived: false, plan: { ...project.plan, structure: { ...project.plan.structure }, plotNotes: { ...project.plan.plotNotes }, unitIdeas: [...project.plan.unitIdeas], partNotes: { ...project.plan.partNotes }, drafts: { ...project.plan.drafts }, activity: project.plan.activity ? { ...project.plan.activity } : {} }, studio: project.studio ? { ...project.studio, frontMatterIncluded: { ...project.studio.frontMatterIncluded }, frontMatterText: { ...project.studio.frontMatterText }, backMatterIncluded: { ...project.studio.backMatterIncluded }, backMatterText: { ...project.studio.backMatterText }, chapterOrder: [...project.studio.chapterOrder], appearance: { ...project.studio.appearance } } : undefined };
+    onProjectsChange([copy, ...projects]); onSelectProject(title); setMenuProject(null);
+  };
+  const saveRename = () => { if (!renameProject) return; const nextTitle = renameValue.trim(); if (!nextTitle || nextTitle === renameProject.title || projects.some((project) => project.title === nextTitle)) return; onProjectsChange(projects.map((project) => project.title === renameProject.title ? { ...project, title: nextTitle, updatedAt: Date.now() } : project)); if (activeProject === renameProject.title) onSelectProject(nextTitle); setRenameProject(null); setRenameValue(''); };
+  const confirmDelete = (project: Project) => Alert.alert(`Delete “${project.title}”?`, 'This permanently removes this book from the current Bookez session.', [{ text: 'Cancel', style: 'cancel' }, { text: 'Delete', style: 'destructive', onPress: () => { onProjectsChange(projects.filter((item) => item.title !== project.title)); if (activeProject === project.title && projects.some((item) => item.title !== project.title)) onSelectProject(projects.find((item) => item.title !== project.title)!.title); } }]);
+  const renderProjectCard = (project: Project) => {
+    const projectSnapshot = getJourneySnapshot(project);
+    const currentPart = projectSnapshot.nextPart?.title ?? (projectSnapshot.parts[projectSnapshot.parts.length - 1]?.title ?? 'No section selected');
+    return <View key={project.title} style={[s.libraryProjectCard, project.archived && s.libraryProjectCardArchived]}>
+      <Pressable onPress={() => onSelectProject(project.title)} style={s.libraryProjectTop} accessibilityLabel={`Select ${project.title}`}>
+        <View style={[s.projectMark, { backgroundColor: project.color }]}><Text style={s.projectMarkText}>{project.mark}</Text></View>
+        <View style={s.projectCopy}><Text numberOfLines={1} style={s.projectTitle}>{project.title}</Text><Text numberOfLines={1} style={s.projectType}>{project.type}{project.archived ? ' · Archived' : ''}</Text><Text numberOfLines={1} style={s.projectDetail}>{projectSnapshot.stage} · {projectSnapshot.progressPercent}% complete</Text></View>
+        <Pressable onPress={() => setMenuProject(project)} style={s.projectOverflowButton} accessibilityLabel={`More actions for ${project.title}`}><Text style={s.projectOverflowText}>•••</Text></Pressable>
+      </Pressable>
+      <View style={s.projectStats}><Text style={s.projectStatText}>{formatCount(projectSnapshot.wordCount)} words</Text><Text style={s.projectStatDot}>·</Text><Text numberOfLines={1} style={s.projectStatText}>{currentPart}</Text><Text style={s.projectStatDot}>·</Text><Text style={s.projectStatText}>{formatLastEdited(project.updatedAt)}</Text></View>
+      {!project.archived && <View style={s.projectCardActions}><Pressable onPress={() => selectAndOpen(project, 'Write')} style={s.projectContinueButton}><Text style={s.projectContinueText}>Continue writing</Text><Text style={s.projectContinueArrow}>→</Text></Pressable><Pressable onPress={() => { onSelectProject(project.title); onOpenBookStudio(project.title, 'read'); }} style={s.projectPreviewButton}><Text style={s.projectPreviewText}>Preview book</Text></Pressable></View>}
+    </View>;
+  };
+
   return <><PageHeader page="Library" onPage={onPage} /><Text style={s.intro}>Pick up a thread, or begin a brand new little world.</Text>
     <View style={s.focusCard}><LinearGradient colors={['#A6DDF7', '#8B8AE8']} style={StyleSheet.absoluteFill} />
       <Text style={s.focusEyebrow}>YOUR SELECTED BOOK</Text><Text style={s.focusTitle}>{activeProject}</Text><Text style={s.focusCopy}>Follow the thread from first idea to finished manuscript.</Text>
@@ -418,11 +460,9 @@ function Library({ projects, activeProject, onPage, onSelectProject, onProjectsC
       <Text style={s.focusShape}>◢</Text>
     </View>
     <View style={s.sectionBar}><Text style={s.sectionTitle}>Your projects</Text><Pressable onPress={() => setComposerOpen(true)} style={s.newProjectButton}><Text style={s.newProjectText}>+ NEW</Text></Pressable></View>
-    {projects.map((project) => { const projectSnapshot = getJourneySnapshot(project); return <Pressable key={project.title} onPress={() => onSelectProject(project.title)} style={[s.projectRow, activeProject === project.title && s.projectRowActive]}>
-      <View style={[s.projectMark, { backgroundColor: project.color }]}><Text style={s.projectMarkText}>{project.mark}</Text></View>
-      <View style={s.projectCopy}><Text style={s.projectTitle}>{project.title}</Text><Text style={s.projectDetail}>{projectSnapshot.stage} · {projectSnapshot.progressPercent}%</Text></View>
-      {activeProject === project.title ? <View style={s.continueTag}><Text style={s.continueTagText}>OPEN</Text></View> : <Text style={s.chevron}>›</Text>}
-    </Pressable>; })}
+    <Text style={s.librarySectionEyebrow}>YOUR BOOKS</Text>
+    {projects.filter((project) => !project.archived).map(renderProjectCard)}
+    {projects.some((project) => project.archived) && <><Text style={s.librarySectionEyebrow}>ARCHIVED</Text>{projects.filter((project) => project.archived).map(renderProjectCard)}</>}
     <Pressable onPress={() => setComposerOpen(true)} style={s.addProjectRow}><View style={s.addProjectPlus}><Text style={s.addProjectPlusText}>+</Text></View><View><Text style={s.addProjectTitle}>Start another project</Text><Text style={s.addProjectSub}>Choose a format and make it yours</Text></View></Pressable>
 
     <Modal animationType="slide" visible={composerOpen} transparent onRequestClose={() => setComposerOpen(false)}>
@@ -440,6 +480,22 @@ function Library({ projects, activeProject, onPage, onSelectProject, onProjectsC
         </ScrollView>
         <Pressable onPress={createProject} style={s.createProjectButton}><Text style={s.createProjectButtonText}>Create {selectedType.name}</Text><Text style={s.createProjectArrow}>→</Text></Pressable>
       </View></View>
+    </Modal>
+
+    <Modal animationType="fade" visible={menuProject !== null} transparent onRequestClose={() => setMenuProject(null)}>
+      <Pressable style={s.libraryMenuShade} onPress={() => setMenuProject(null)}><View style={s.libraryMenu}><Text style={s.libraryMenuOverline}>BOOK ACTIONS</Text><Text numberOfLines={1} style={s.libraryMenuTitle}>{menuProject?.title}</Text>
+        <Pressable onPress={() => menuProject && onOpenBookStudio(menuProject.title, getBookStudioState(menuProject).lastSection)} style={s.libraryMenuRow}><Text style={s.libraryMenuIcon}>▣</Text><Text style={s.libraryMenuLabel}>Open Book Studio</Text><Text style={s.libraryMenuArrow}>›</Text></Pressable>
+        <Pressable onPress={() => menuProject && onOpenBookStudio(menuProject.title, 'listen')} style={s.libraryMenuRow}><Text style={s.libraryMenuIcon}>◷</Text><Text style={s.libraryMenuLabel}>Listen to book</Text><Text style={s.libraryMenuArrow}>›</Text></Pressable>
+        <Pressable onPress={() => menuProject && onOpenBookStudio(menuProject.title, 'export')} style={s.libraryMenuRow}><Text style={s.libraryMenuIcon}>↗</Text><Text style={s.libraryMenuLabel}>Export</Text><Text style={s.libraryMenuArrow}>›</Text></Pressable>
+        <Pressable onPress={() => menuProject && selectAndOpen(menuProject, 'Journey')} style={s.libraryMenuRow}><Text style={s.libraryMenuIcon}>✦</Text><Text style={s.libraryMenuLabel}>View journey</Text><Text style={s.libraryMenuArrow}>›</Text></Pressable>
+        <Pressable onPress={() => { if (!menuProject) return; setRenameProject(menuProject); setRenameValue(menuProject.title); setMenuProject(null); }} style={s.libraryMenuRow}><Text style={s.libraryMenuIcon}>✎</Text><Text style={s.libraryMenuLabel}>Rename</Text><Text style={s.libraryMenuArrow}>›</Text></Pressable>
+        <Pressable onPress={() => menuProject && duplicateProject(menuProject)} style={s.libraryMenuRow}><Text style={s.libraryMenuIcon}>＋</Text><Text style={s.libraryMenuLabel}>Duplicate</Text><Text style={s.libraryMenuArrow}>›</Text></Pressable>
+        <Pressable onPress={() => { if (!menuProject) return; onProjectsChange(projects.map((project) => project.title === menuProject.title ? { ...project, archived: !project.archived, updatedAt: Date.now() } : project)); setMenuProject(null); }} style={s.libraryMenuRow}><Text style={s.libraryMenuIcon}>⌁</Text><Text style={s.libraryMenuLabel}>{menuProject?.archived ? 'Unarchive' : 'Archive'}</Text><Text style={s.libraryMenuArrow}>›</Text></Pressable>
+        <Pressable onPress={() => { if (menuProject) confirmDelete(menuProject); setMenuProject(null); }} style={s.libraryMenuRow}><Text style={s.libraryMenuIconDelete}>×</Text><Text style={s.libraryMenuDeleteLabel}>Delete</Text><Text style={s.libraryMenuArrow}>›</Text></Pressable>
+      </View></Pressable>
+    </Modal>
+    <Modal animationType="fade" visible={renameProject !== null} transparent onRequestClose={() => setRenameProject(null)}>
+      <View style={s.renameModalShade}><View style={s.renameSheet}><Text style={s.libraryMenuOverline}>BOOK DETAILS</Text><Text style={s.renameTitle}>Rename this book</Text><TextInput autoFocus value={renameValue} onChangeText={setRenameValue} style={s.renameInput} placeholder="Book title" placeholderTextColor="#9A9DB7" returnKeyType="done" onSubmitEditing={saveRename} /><View style={s.renameActions}><Pressable onPress={() => setRenameProject(null)} style={s.renameCancel}><Text style={s.renameCancelText}>Cancel</Text></Pressable><Pressable onPress={saveRename} style={s.renameSave}><Text style={s.renameSaveText}>Save name</Text></Pressable></View></View></View>
     </Modal>
   </>;
 }
@@ -646,6 +702,77 @@ function getWriteParts(project: Project, blueprint: PlanBlueprint): WritePart[] 
   return [...structureParts, ...unitParts];
 }
 
+type AssembledSection = { id: string; label: string; content: string; included: boolean; complete: boolean; kind: 'front' | 'back' };
+type AssembledChapter = { key: string; title: string; content: string; words: number; complete: boolean; kind: WritePart['kind'] };
+type AssembledBook = { bookId: string; title: string; status: 'draft' | 'review' | 'finished'; frontMatter: AssembledSection[]; chapters: AssembledChapter[]; backMatter: AssembledSection[]; totalWords: number; generatedAt: string; sourceRevision: string };
+
+const studioFrontMatter = [
+  { id: 'titlePage', label: 'Title page', automatic: true }, { id: 'copyrightPage', label: 'Copyright page' }, { id: 'dedication', label: 'Dedication' },
+  { id: 'epigraph', label: 'Epigraph' }, { id: 'tableOfContents', label: 'Table of contents', automatic: true }, { id: 'preface', label: 'Preface' }, { id: 'introduction', label: 'Introduction' },
+];
+const studioBackMatter = [
+  { id: 'acknowledgments', label: 'Acknowledgments' }, { id: 'aboutAuthor', label: 'About the author' }, { id: 'appendix', label: 'Appendix' },
+  { id: 'references', label: 'References' }, { id: 'resources', label: 'Resources' }, { id: 'endnotes', label: 'Endnotes' },
+];
+
+const defaultBookStudioState = (project: Project): BookStudioState => ({
+  lastSection: 'assemble',
+  frontMatterIncluded: { titlePage: true, copyrightPage: false, dedication: false, epigraph: false, tableOfContents: true, preface: false, introduction: false },
+  frontMatterText: { titlePage: project.title, copyrightPage: '', dedication: '', epigraph: '', preface: '', introduction: '' },
+  backMatterIncluded: { acknowledgments: false, aboutAuthor: false, appendix: false, references: false, resources: false, endnotes: false },
+  backMatterText: { acknowledgments: '', aboutAuthor: '', appendix: '', references: '', resources: '', endnotes: '' },
+  chapterOrder: [],
+  appearance: { fontSize: 16, paragraphSpacing: 10, lineSpacing: 1.55, headingStyle: 'classic', alignment: 'left' },
+});
+
+function getBookStudioState(project: Project): BookStudioState {
+  const defaults = defaultBookStudioState(project);
+  const saved = project.studio;
+  return {
+    ...defaults,
+    ...saved,
+    frontMatterIncluded: { ...defaults.frontMatterIncluded, ...saved?.frontMatterIncluded },
+    frontMatterText: { ...defaults.frontMatterText, ...saved?.frontMatterText, titlePage: project.title },
+    backMatterIncluded: { ...defaults.backMatterIncluded, ...saved?.backMatterIncluded },
+    backMatterText: { ...defaults.backMatterText, ...saved?.backMatterText },
+    appearance: { ...defaults.appearance, ...saved?.appearance },
+    chapterOrder: saved?.chapterOrder ?? [],
+  };
+}
+
+function assembleBook(project: Project, studio: BookStudioState): AssembledBook {
+  const blueprint = planBlueprints[project.type] ?? planBlueprints['Custom Project'];
+  const parts = getWriteParts(project, blueprint);
+  const partMap = new Map(parts.map((part) => [part.key, part]));
+  const orderedKeys = [...studio.chapterOrder.filter((key) => partMap.has(key)), ...parts.map((part) => part.key).filter((key) => !studio.chapterOrder.includes(key))];
+  const chapters = orderedKeys.map((key) => {
+    const part = partMap.get(key)!;
+    const content = project.plan.drafts[key]?.trim() ?? '';
+    return { key, title: part.title, content, words: countWords(content), complete: Boolean(content), kind: part.kind };
+  });
+  const tableOfContents = chapters.map((chapter, index) => `${index + 1}. ${chapter.title}`).join('\n');
+  const frontMatter = studioFrontMatter.map((item) => ({
+    id: item.id, label: item.label, kind: 'front' as const, included: Boolean(studio.frontMatterIncluded[item.id]), complete: item.automatic ? true : Boolean(studio.frontMatterText[item.id]?.trim()),
+    content: item.id === 'titlePage' ? project.title : item.id === 'tableOfContents' ? tableOfContents : studio.frontMatterText[item.id]?.trim() ?? '',
+  }));
+  const backMatter = studioBackMatter.map((item) => ({ id: item.id, label: item.label, kind: 'back' as const, included: Boolean(studio.backMatterIncluded[item.id]), complete: Boolean(studio.backMatterText[item.id]?.trim()), content: studio.backMatterText[item.id]?.trim() ?? '' }));
+  const totalWords = chapters.reduce((total, chapter) => total + chapter.words, 0);
+  const status = totalWords === 0 ? 'draft' : project.plan.writeIndex >= parts.length && parts.length > 0 ? 'finished' : 'review';
+  return { bookId: project.title, title: project.title, status, frontMatter, chapters, backMatter, totalWords, generatedAt: new Date().toISOString(), sourceRevision: String(project.updatedAt ?? totalWords) };
+}
+
+const buildBookText = (book: AssembledBook) => [...book.frontMatter.filter((section) => section.included && section.content), ...book.chapters.map((chapter) => ({ content: `${chapter.title}\n\n${chapter.content}` })), ...book.backMatter.filter((section) => section.included && section.content)].map((section) => section.content).join('\n\n\n').trim();
+const splitSpeechText = (value: string) => {
+  const maxLength = Math.max(500, Math.min(3500, Speech.maxSpeechInputLength || 3500));
+  if (value.length <= maxLength) return [value];
+  const sentences = value.match(/[^.!?]+[.!?]+|[^.!?]+$/g) ?? [value];
+  const chunks: string[] = [];
+  let current = '';
+  sentences.forEach((sentence) => { if ((current + sentence).length > maxLength && current) { chunks.push(current.trim()); current = ''; } current += sentence; });
+  if (current.trim()) chunks.push(current.trim());
+  return chunks;
+};
+
 type JourneyStatus = 'complete' | 'current' | 'future';
 type JourneyMilestone = { id: string; title: string; detail: string; icon: string; status: JourneyStatus };
 
@@ -673,6 +800,31 @@ type JourneySnapshot = {
 
 const countWords = (value: string) => value.trim() ? value.trim().split(/\s+/).length : 0;
 const formatCount = (value: number) => value.toLocaleString('en-US');
+const activityDateKey = (timestamp = Date.now()) => {
+  const date = new Date(timestamp);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+};
+const emptyDailyActivity = (): DailyWritingActivity => ({ words: 0, pages: 0, completion: 0, minutes: 0, dictationUses: 0, writingUses: 0 });
+
+function addActivity(plan: ProjectPlan, changes: Partial<DailyWritingActivity>, timestamp = Date.now()): Record<string, DailyWritingActivity> {
+  const key = activityDateKey(timestamp);
+  const current = plan.activity?.[key] ?? emptyDailyActivity();
+  return {
+    ...(plan.activity ?? {}),
+    [key]: {
+      words: Math.max(0, current.words + (changes.words ?? 0)),
+      pages: Math.max(0, current.pages + (changes.pages ?? 0)),
+      completion: Math.max(current.completion, changes.completion ?? current.completion),
+      minutes: Math.max(0, current.minutes + (changes.minutes ?? 0)),
+      dictationUses: Math.max(0, current.dictationUses + (changes.dictationUses ?? 0)),
+      writingUses: Math.max(0, current.writingUses + (changes.writingUses ?? 0)),
+    },
+  };
+}
+
+const activityDate = (key: string) => new Date(`${key}T12:00:00`);
+const formatActivityDay = (key: string, includeDate = false) => activityDate(key).toLocaleDateString('en-US', includeDate ? { weekday: 'short', month: 'short', day: 'numeric' } : { weekday: 'short' });
+const formatDuration = (minutes: number) => minutes < 1 ? '<1 min' : `${Math.round(minutes)} min`;
 
 function getJourneySnapshot(project: Project): JourneySnapshot {
   const blueprint = planBlueprints[project.type] ?? planBlueprints['Custom Project'];
@@ -744,6 +896,65 @@ const formatLastEdited = (updatedAt?: number) => {
   return new Date(updatedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 };
 
+type StatsRange = 'Week' | 'Month' | 'All time';
+type ActivityEntry = DailyWritingActivity & { key: string };
+
+function getStatsSnapshot(project: Project, range: StatsRange) {
+  const plan = project.plan ?? defaultPlanFor(project.type);
+  const journey = getJourneySnapshot(project);
+  const allEntries: ActivityEntry[] = Object.entries(plan.activity ?? {}).map(([key, value]) => ({ key, ...value })).sort((a, b) => a.key.localeCompare(b.key));
+  const cutoff = new Date();
+  cutoff.setHours(0, 0, 0, 0);
+  if (range === 'Week') cutoff.setDate(cutoff.getDate() - 6);
+  if (range === 'Month') cutoff.setDate(cutoff.getDate() - 29);
+  const entries = range === 'All time' ? allEntries : allEntries.filter((entry) => activityDate(entry.key) >= cutoff);
+  const writingDays = entries.filter((entry) => entry.words > 0);
+  const lifetimeWritingDays = allEntries.filter((entry) => entry.words > 0);
+  const totalLoggedWords = writingDays.reduce((total, entry) => total + entry.words, 0);
+  const totalLoggedPages = writingDays.reduce((total, entry) => total + entry.pages, 0);
+  const totalMinutes = entries.reduce((total, entry) => total + entry.minutes, 0);
+  const dictationUses = entries.reduce((total, entry) => total + entry.dictationUses, 0);
+  const writingUses = entries.reduce((total, entry) => total + entry.writingUses, 0);
+  const completionEntries = writingDays.filter((entry) => entry.completion > 0);
+  const sortedWritingDays = lifetimeWritingDays.map((entry) => entry.key).sort();
+  const activeKeySet = new Set(sortedWritingDays);
+  const todayKey = activityDateKey();
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  let streakCursor = activeKeySet.has(todayKey) ? new Date() : yesterday;
+  let currentStreak = 0;
+  while (activeKeySet.has(activityDateKey(streakCursor.getTime()))) {
+    currentStreak += 1;
+    streakCursor.setDate(streakCursor.getDate() - 1);
+  }
+  let longestStreak = 0;
+  let runningStreak = 0;
+  let previousKey = '';
+  sortedWritingDays.forEach((key) => {
+    const previousDate = previousKey ? activityDate(previousKey) : undefined;
+    const day = activityDate(key);
+    const consecutive = previousDate ? Math.round((day.getTime() - previousDate.getTime()) / 86_400_000) === 1 : false;
+    runningStreak = consecutive ? runningStreak + 1 : 1;
+    longestStreak = Math.max(longestStreak, runningStreak);
+    previousKey = key;
+  });
+  const strongestDay = writingDays.reduce<ActivityEntry | undefined>((best, entry) => !best || entry.words > best.words ? entry : best, undefined);
+  const inputTotal = dictationUses + writingUses;
+  const dailyRows = [...entries].sort((a, b) => b.key.localeCompare(a.key));
+  return {
+    journey, entries, writingDays, lifetimeWritingDays, totalLoggedWords, totalLoggedPages, totalMinutes, dictationUses, writingUses,
+    completionAverage: completionEntries.length ? completionEntries.reduce((total, entry) => total + entry.completion, 0) / completionEntries.length : 0,
+    averageWords: writingDays.length ? totalLoggedWords / writingDays.length : 0,
+    averagePages: writingDays.length ? totalLoggedPages / writingDays.length : 0,
+    averageMinutes: writingDays.length ? totalMinutes / writingDays.length : 0,
+    averageMinutesPerPage: totalLoggedPages ? totalMinutes / totalLoggedPages : 0,
+    currentStreak, longestStreak, activeDays: writingDays.length, lifetimeActiveDays: lifetimeWritingDays.length,
+    dictationPercent: inputTotal ? Math.round((dictationUses / inputTotal) * 100) : 0,
+    writingPercent: inputTotal ? Math.round((writingUses / inputTotal) * 100) : 0,
+    strongestDay, dailyRows, chartRows: Array.from({ length: 7 }, (_, index) => { const date = new Date(); date.setHours(0, 0, 0, 0); date.setDate(date.getDate() - (6 - index)); const key = activityDateKey(date.getTime()); return { key, ...(plan.activity?.[key] ?? emptyDailyActivity()) }; }),
+  };
+}
+
 function getWriteContext(part: WritePart, plan: ProjectPlan, blueprint: PlanBlueprint): { label: string; value: string }[] {
   const notes: { label: string; value: string }[] = [];
   if (plan.idea.trim()) notes.push({ label: 'Big idea', value: plan.idea });
@@ -804,6 +1015,37 @@ function Write({ projects, activeProject, onSelectProject, onUpdateProject, onPa
   const completedPartCount = parts.filter((part) => plan.drafts[part.key]?.trim()).length;
   const completionPercent = parts.length ? Math.round((completedPartCount / parts.length) * 100) : 0;
   const contextNotes = activePart ? getWriteContext(activePart, plan, blueprint) : [];
+  const lastActivityAt = useRef(Date.now());
+  const pendingWritingUses = useRef(0);
+  const latestPlans = useRef<Record<string, ProjectPlan>>({});
+  projects.forEach((project) => { latestPlans.current[project.title] = project.plan ?? defaultPlanFor(project.type); });
+
+  useEffect(() => {
+    const sessionProject = activeProject;
+    const sessionStartedAt = Date.now();
+    return () => {
+      const minutes = Math.min(60, Math.max(0, (Date.now() - sessionStartedAt) / 60_000));
+      if (minutes < 0.1) return;
+      const currentPlan = latestPlans.current[sessionProject] ?? defaultPlanFor('Custom Project');
+      onUpdateProject(sessionProject, { plan: { ...currentPlan, activity: addActivity(currentPlan, { minutes }) } });
+    };
+  }, [activeProject]);
+
+  const consumeActiveMinutes = () => {
+    const now = Date.now();
+    const minutes = Math.min(5, Math.max(0, (now - lastActivityAt.current) / 60_000));
+    lastActivityAt.current = now;
+    return minutes;
+  };
+  const recordInputMode = (mode: InputMode) => {
+    if (mode === 'writing') {
+      pendingWritingUses.current += 1;
+      return;
+    }
+    const currentPlan = currentProject.plan ?? defaultPlanFor(currentProject.type);
+    const nextPlan = { ...currentPlan, activity: addActivity(currentPlan, { dictationUses: 1, minutes: consumeActiveMinutes() }) };
+    onUpdateProject(activeProject, { plan: nextPlan });
+  };
 
   const chooseProject = (project: Project) => {
     onSelectProject(project.title);
@@ -812,17 +1054,27 @@ function Write({ projects, activeProject, onSelectProject, onUpdateProject, onPa
   };
   const updateDraft = (value: string) => {
     if (!activePart) return;
-    onUpdateProject(activeProject, { plan: { ...plan, drafts: { ...plan.drafts, [activePart.key]: value } } });
+    const currentPlan = currentProject.plan ?? defaultPlanFor(currentProject.type);
+    const previousValue = currentPlan.drafts[activePart.key] || '';
+    const wordDelta = Math.max(0, countWords(value) - countWords(previousValue));
+    const nextDrafts = { ...currentPlan.drafts, [activePart.key]: value };
+    const nextCompletedPartCount = parts.filter((part) => Boolean((part.key === activePart.key ? value : currentPlan.drafts[part.key])?.trim())).length;
+    const nextCompletionPercent = parts.length ? Math.round((nextCompletedPartCount / parts.length) * 100) : 0;
+    const nextActivity = addActivity(currentPlan, { words: wordDelta, pages: wordDelta / 250, completion: nextCompletionPercent, minutes: consumeActiveMinutes(), writingUses: pendingWritingUses.current });
+    pendingWritingUses.current = 0;
+    onUpdateProject(activeProject, { plan: { ...currentPlan, drafts: nextDrafts, activity: nextActivity } });
   };
   const goNext = () => {
     if (!parts.length) return;
     setNotesOpen(false);
-    onUpdateProject(activeProject, { plan: { ...plan, writeIndex: Math.min(parts.length, activeIndex + 1) } });
+    const currentPlan = currentProject.plan ?? defaultPlanFor(currentProject.type);
+    onUpdateProject(activeProject, { plan: { ...currentPlan, writeIndex: Math.min(parts.length, activeIndex + 1), activity: addActivity(currentPlan, { completion: completionPercent, minutes: consumeActiveMinutes() }) } });
   };
   const goBack = () => {
     if (!parts.length) return;
     setNotesOpen(false);
-    onUpdateProject(activeProject, { plan: { ...plan, writeIndex: Math.max(0, activeIndex - 1) } });
+    const currentPlan = currentProject.plan ?? defaultPlanFor(currentProject.type);
+    onUpdateProject(activeProject, { plan: { ...currentPlan, writeIndex: Math.max(0, activeIndex - 1), activity: addActivity(currentPlan, { completion: completionPercent, minutes: consumeActiveMinutes() }) } });
   };
   const updateDraftWithTool = (transform: (value: string) => string) => {
     if (!activePart) return;
@@ -851,7 +1103,7 @@ function Write({ projects, activeProject, onSelectProject, onUpdateProject, onPa
     {activePart && !completed && <>
       <View style={s.writePartHeader}><View style={s.writePartNumber}><Text style={s.writePartNumberText}>{String(activeIndex + 1).padStart(2, '0')}</Text></View><View style={s.writePartCopy}><Text style={s.writePartKicker}>{activePart.kind === 'unit' ? blueprint.unitLabel.toUpperCase() : 'STRUCTURE PART'}</Text><Text style={s.writePartTitle}>{activePart.title}</Text><Text style={s.writePartHelper}>{activePart.helper}</Text></View><View style={s.writeProgress}><View style={s.writeProgressTop}><Text style={s.writeProgressValue}>{completionPercent}%</Text><Text style={s.writeProgressLabel}>COMPLETE</Text></View><View style={s.writeProgressTrack}><View style={[s.writeProgressFill, { width: `${completionPercent}%` }]} /></View><Text style={s.writeProgressText}>{completed ? 'MANUSCRIPT READY' : `PART ${parts.length ? activeIndex + 1 : 0} / ${parts.length}`}</Text></View></View>
       <View style={s.writeNotesBanner}><Pressable onPress={() => setNotesOpen(!notesOpen)} style={s.writeNotesTapArea} accessibilityLabel="Open notes for this part"><View style={s.writeNotesIcon}><Text style={s.writeNotesIconText}>✦</Text></View><View style={s.writeNotesCopy}><View style={s.writeNotesTitleRow}><Text style={s.writeNotesLabel}>PLAN NOTES TO KEEP CLOSE</Text><Text style={s.writeNotesAction}>{notesOpen ? 'CLOSE' : 'ADD NOTE'}</Text></View>{contextNotes.length ? contextNotes.map((note) => <View key={note.label} style={s.writeNoteRow}><Text style={s.writeNoteLabel}>{note.label}</Text><Text style={s.writeNoteText}>{note.value}</Text></View>) : <Text style={s.writeNotesEmpty}>No notes yet. Tap here to add a thought for this part.</Text>}</View></Pressable>{plan.partNotes[activePart.key]?.trim() && !notesOpen && <View style={s.writeSavedNote}><Text style={s.writeSavedNoteLabel}>YOUR NOTE</Text><Text style={s.writeSavedNoteText}>{compactNote(plan.partNotes[activePart.key])}</Text></View>}{notesOpen && <View style={s.writeQuickNote}><Text style={s.writeQuickNoteLabel}>A NOTE FOR THIS PART</Text><DictationInput value={plan.partNotes[activePart.key] || ''} onChangeText={updatePartNote} placeholder="Capture a thought to keep beside the draft…" placeholderTextColor="#A0A3BB" multiline style={s.writeQuickNoteInput} accessibilityLabel="Note for this part" /></View>}</View>
-      <View style={s.writeEditorCard}><View style={s.writeEditorTop}><Text style={s.writeEditorLabel}>WRITE THIS PART</Text><Text style={s.writeEditorHint}>🎙 Dictate with your phone</Text></View><DictationInput value={plan.drafts[activePart.key] || ''} onChangeText={updateDraft} placeholder={`Begin your ${activePart.title.toLowerCase()}…`} placeholderTextColor="#9A9DB7" multiline autoCorrect spellCheck style={s.writeEditorInput} accessibilityLabel={activePart.title} /><View style={s.writeTools}><Pressable onPress={() => updateDraftWithTool(polishWriting)} disabled={!plan.drafts[activePart.key]?.trim()} style={[s.writeToolButton, !plan.drafts[activePart.key]?.trim() && s.writeToolDisabled]} accessibilityLabel="Polish writing"><Text style={s.writeToolIcon}>✦</Text><Text style={s.writeToolText}>Polish</Text></Pressable><Pressable onPress={() => updateDraftWithTool(grammarWriting)} disabled={!plan.drafts[activePart.key]?.trim()} style={[s.writeToolButton, !plan.drafts[activePart.key]?.trim() && s.writeToolDisabled]} accessibilityLabel="Fix grammar"><Text style={s.writeToolIcon}>Aa</Text><Text style={s.writeToolText}>Grammar</Text></Pressable><Text style={s.writeToolHint}>Quick local cleanup</Text></View></View>
+      <View style={s.writeEditorCard}><View style={s.writeEditorTop}><Text style={s.writeEditorLabel}>WRITE THIS PART</Text><Text style={s.writeEditorHint}>🎙 Dictate with your phone</Text></View><DictationInput value={plan.drafts[activePart.key] || ''} onChangeText={updateDraft} onInputMode={recordInputMode} placeholder={`Begin your ${activePart.title.toLowerCase()}…`} placeholderTextColor="#9A9DB7" multiline autoCorrect spellCheck style={s.writeEditorInput} accessibilityLabel={activePart.title} /><View style={s.writeTools}><Pressable onPress={() => updateDraftWithTool(polishWriting)} disabled={!plan.drafts[activePart.key]?.trim()} style={[s.writeToolButton, !plan.drafts[activePart.key]?.trim() && s.writeToolDisabled]} accessibilityLabel="Polish writing"><Text style={s.writeToolIcon}>✦</Text><Text style={s.writeToolText}>Polish</Text></Pressable><Pressable onPress={() => updateDraftWithTool(grammarWriting)} disabled={!plan.drafts[activePart.key]?.trim()} style={[s.writeToolButton, !plan.drafts[activePart.key]?.trim() && s.writeToolDisabled]} accessibilityLabel="Fix grammar"><Text style={s.writeToolIcon}>Aa</Text><Text style={s.writeToolText}>Grammar</Text></Pressable><Text style={s.writeToolHint}>Quick local cleanup</Text></View></View>
       <View style={s.writeNavigation}><Pressable onPress={goBack} disabled={activeIndex === 0} style={[s.writeSecondaryButton, activeIndex === 0 && s.writeButtonDisabled]}><Text style={s.writeSecondaryButtonText}>← Previous</Text></Pressable><Pressable onPress={goNext} style={s.writeNextButton}><Text style={s.writeNextButtonText}>{activeIndex === parts.length - 1 ? 'Finish manuscript' : 'Next part →'}</Text></Pressable></View>
     </>}
 
@@ -863,7 +1115,7 @@ function Write({ projects, activeProject, onSelectProject, onUpdateProject, onPa
   </>;
 }
 
-function Journey({ projects, activeProject, onSelectProject, onPage, onBack }: { projects: Project[]; activeProject: string; onSelectProject: (title: string) => void; onPage: (page: Page) => void; onBack: () => void }) {
+function Journey({ projects, activeProject, onSelectProject, onPage, onBack, onOpenBookStudio }: { projects: Project[]; activeProject: string; onSelectProject: (title: string) => void; onPage: (page: Page) => void; onBack: () => void; onOpenBookStudio: (title: string, section: StudioSection) => void }) {
   const currentProject = projects.find((project) => project.title === activeProject) ?? projects[0];
   const snapshot = getJourneySnapshot(currentProject);
   const milestones = getJourneyMilestones(snapshot);
@@ -913,7 +1165,7 @@ function Journey({ projects, activeProject, onSelectProject, onPage, onBack }: {
       <View style={s.journeyProgressTrack}><View style={[s.journeyProgressFill, { width: `${snapshot.progressPercent}%` }]} /></View>
       <View style={s.journeyStatsRow}><View style={s.journeyStat}><Text style={s.journeyStatValue}>{formatCount(snapshot.wordCount)}</Text><Text style={s.journeyStatLabel}>WORDS WRITTEN</Text><Text style={s.journeyStatSub}>{snapshot.targetWords ? `of ${formatCount(snapshot.targetWords)} est. target` : 'Target not set'}</Text></View><View style={s.journeyStatDivider} /><View style={s.journeyStat}><Text style={s.journeyStatValue}>{snapshot.completedUnits} of {snapshot.unitCount}</Text><Text style={s.journeyStatLabel}>{snapshot.blueprint.unitLabelPlural.toUpperCase()}</Text><Text style={s.journeyStatSub}>with a draft</Text></View></View>
       <View style={s.journeyNextRow}><View style={s.journeyNextDot}><Text style={s.journeyNextDotText}>{currentMilestone.icon}</Text></View><View style={s.journeyNextCopy}><Text style={s.journeyNextEyebrow}>NEXT MILESTONE</Text><Text style={s.journeyNextTitle}>{currentMilestone.title}</Text></View><Text style={s.journeyNextArrow}>→</Text></View>
-      <Pressable onPress={() => onPage(nextPage)} style={s.journeyContinueButton}><Text style={s.journeyContinueText}>Continue Journey</Text><Text style={s.journeyContinueAction}>{nextAction}</Text><Text style={s.journeyContinueArrow}>→</Text></Pressable>
+      <Pressable onPress={() => snapshot.manuscriptComplete ? onOpenBookStudio(currentProject.title, 'read') : onPage(nextPage)} style={s.journeyContinueButton}><Text style={s.journeyContinueText}>{snapshot.manuscriptComplete ? 'Open Book Studio' : 'Continue Journey'}</Text><Text style={s.journeyContinueAction}>{nextAction}</Text><Text style={s.journeyContinueArrow}>→</Text></Pressable>
     </View>
 
     <View style={s.journeyMapHeading}><View><Text style={s.journeyMapEyebrow}>THE LONG WAY AROUND</Text><Text style={s.journeyMapTitle}>One book, one steady path.</Text></View><Text style={s.journeyMapHint}>Scroll to travel</Text></View>
@@ -940,27 +1192,150 @@ function Journey({ projects, activeProject, onSelectProject, onPage, onBack }: {
     </Modal>
 
     <Modal animationType="fade" visible={menuOpen} transparent onRequestClose={() => setMenuOpen(false)}>
-      <Pressable style={s.journeyMenuShade} onPress={() => setMenuOpen(false)}><View style={s.journeyMenu}><Text style={s.journeySheetEyebrow}>THIS BOOK</Text><Text style={s.journeyMenuTitle}>{currentProject.title}</Text><Pressable onPress={() => { setMenuOpen(false); onPage('Plan'); }} style={s.journeyMenuRow}><Text style={s.journeyMenuIcon}>⌁</Text><Text style={s.journeyMenuLabel}>Open planning</Text><Text style={s.journeyMenuArrow}>›</Text></Pressable><Pressable onPress={() => { setMenuOpen(false); onPage('Write'); }} style={s.journeyMenuRow}><Text style={s.journeyMenuIcon}>✎</Text><Text style={s.journeyMenuLabel}>Open manuscript</Text><Text style={s.journeyMenuArrow}>›</Text></Pressable></View></Pressable>
+      <Pressable style={s.journeyMenuShade} onPress={() => setMenuOpen(false)}><View style={s.journeyMenu}><Text style={s.journeySheetEyebrow}>THIS BOOK</Text><Text style={s.journeyMenuTitle}>{currentProject.title}</Text><Pressable onPress={() => { setMenuOpen(false); onOpenBookStudio(currentProject.title, getBookStudioState(currentProject).lastSection); }} style={s.journeyMenuRow}><Text style={s.journeyMenuIcon}>▣</Text><Text style={s.journeyMenuLabel}>Open Book Studio</Text><Text style={s.journeyMenuArrow}>›</Text></Pressable><Pressable onPress={() => { setMenuOpen(false); onPage('Plan'); }} style={s.journeyMenuRow}><Text style={s.journeyMenuIcon}>⌁</Text><Text style={s.journeyMenuLabel}>Open planning</Text><Text style={s.journeyMenuArrow}>›</Text></Pressable><Pressable onPress={() => { setMenuOpen(false); onPage('Write'); }} style={s.journeyMenuRow}><Text style={s.journeyMenuIcon}>✎</Text><Text style={s.journeyMenuLabel}>Open manuscript</Text><Text style={s.journeyMenuArrow}>›</Text></Pressable></View></Pressable>
     </Modal>
   </>;
 }
 
-function Profile() {
+function BookStudio({ projects, project, initialSection, onBack, onPage, onSelectProject, onUpdateProject, onOpenBookStudio }: { projects: Project[]; project?: Project; initialSection: StudioSection; onBack: () => void; onPage: (page: Page) => void; onSelectProject: (title: string) => void; onUpdateProject: (title: string, changes: Partial<Project>) => void; onOpenBookStudio: (title: string, section: StudioSection) => void }) {
+  const [section, setSection] = useState<StudioSection>(initialSection);
+  const [studio, setStudio] = useState<BookStudioState>(() => project ? getBookStudioState(project) : defaultBookStudioState({ title: 'Book', type: 'Custom Project', color: C.periwinkle, mark: '✦', pageGoal: '0', unitGoal: '0', plan: defaultPlanFor('Custom Project') }));
+  const [openAccordion, setOpenAccordion] = useState<string | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [readerIndex, setReaderIndex] = useState(0);
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [speakingLabel, setSpeakingLabel] = useState('');
+  const speechRun = useRef(0);
+
+  useEffect(() => {
+    if (!project) return;
+    setStudio(getBookStudioState(project));
+    setSection(initialSection || getBookStudioState(project).lastSection);
+    setReaderIndex(0);
+  }, [project?.title, initialSection]);
+  useEffect(() => () => { speechRun.current += 1; Speech.stop(); }, []);
+
+  if (!project) return <View style={s.studioError}><Text style={s.studioErrorIcon}>⌁</Text><Text style={s.studioErrorTitle}>Book not found</Text><Text style={s.studioErrorCopy}>This book is no longer available in your library.</Text><Pressable onPress={onBack} style={s.studioPrimaryButton}><Text style={s.studioPrimaryButtonText}>Back to Library</Text></Pressable></View>;
+
+  const book = assembleBook(project, studio);
+  const snapshot = getJourneySnapshot(project);
+  const updateStudio = (changes: Partial<BookStudioState>) => { const next = { ...studio, ...changes }; setStudio(next); onUpdateProject(project.title, { studio: next }); };
+  const changeSection = (nextSection: StudioSection) => { setSection(nextSection); updateStudio({ lastSection: nextSection }); };
+  const openWritingPart = (key: string) => { const originalIndex = getWriteParts(project, snapshot.blueprint).findIndex((part) => part.key === key); onUpdateProject(project.title, { plan: { ...project.plan, writeIndex: Math.max(0, originalIndex) } }); onPage('Write'); };
+  const refreshPreview = () => updateStudio({ lastSection: section });
+  const toggleIncluded = (group: 'frontMatterIncluded' | 'backMatterIncluded', id: string) => updateStudio({ [group]: { ...studio[group], [id]: !studio[group][id] } } as Partial<BookStudioState>);
+  const updateText = (group: 'frontMatterText' | 'backMatterText', id: string, value: string) => updateStudio({ [group]: { ...studio[group], [id]: value } } as Partial<BookStudioState>);
+  const moveChapter = (index: number, direction: -1 | 1) => { const keys = book.chapters.map((chapter) => chapter.key); const nextIndex = index + direction; if (nextIndex < 0 || nextIndex >= keys.length) return; [keys[index], keys[nextIndex]] = [keys[nextIndex], keys[index]]; updateStudio({ chapterOrder: keys }); };
+  const shareBook = async () => { const text = buildBookText(book); if (!text) { Alert.alert('Nothing to export yet', 'Write at least one part before sharing this book.'); return; } try { await Share.share({ title: project.title, message: text }); } catch { Alert.alert('Export unavailable', 'Your device could not open the share sheet.'); } };
+  const speechSegments = book.chapters.filter((chapter) => chapter.content).map((chapter) => ({ label: chapter.title, text: chapter.content }));
+  const speakSegments = (segments: { label: string; text: string }[], startIndex = 0) => {
+    const run = speechRun.current + 1; speechRun.current = run; Speech.stop();
+    const speakAt = (segmentIndex: number, chunkIndex = 0) => {
+      if (speechRun.current !== run || segmentIndex >= segments.length) { if (speechRun.current === run) { setIsSpeaking(false); setSpeakingLabel(''); } return; }
+      const chunks = splitSpeechText(segments[segmentIndex].text);
+      if (chunkIndex === 0) setSpeakingLabel(segments[segmentIndex].label);
+      Speech.speak(chunks[chunkIndex], { rate: 0.95, onStart: () => setIsSpeaking(true), onDone: () => chunkIndex + 1 < chunks.length ? speakAt(segmentIndex, chunkIndex + 1) : speakAt(segmentIndex + 1), onError: () => { setIsSpeaking(false); setSpeakingLabel(''); } });
+    };
+    if (!segments.length) { Alert.alert('Nothing to listen to yet', 'Write at least one part before starting read-aloud.'); return; }
+    speakAt(Math.min(startIndex, segments.length - 1));
+  };
+  const stopSpeaking = () => { speechRun.current += 1; Speech.stop(); setIsSpeaking(false); setSpeakingLabel(''); };
+  const accordion = (id: string, title: string, hint: string, content: React.ReactNode) => <View style={s.studioAccordion}><Pressable onPress={() => setOpenAccordion(openAccordion === id ? null : id)} style={s.studioAccordionHeader}><View style={s.studioAccordionIcon}><Text style={s.studioAccordionIconText}>{openAccordion === id ? '−' : '+'}</Text></View><View style={s.studioAccordionCopy}><Text style={s.studioAccordionTitle}>{title}</Text><Text style={s.studioAccordionHint}>{hint}</Text></View><Text style={s.studioAccordionChevron}>{openAccordion === id ? '⌃' : '⌄'}</Text></Pressable>{openAccordion === id && <View style={s.studioAccordionBody}>{content}</View>}</View>;
+  const renderAssemble = () => <><View style={s.studioSummaryCard}><View><Text style={s.studioKicker}>ASSEMBLED BOOK</Text><Text style={s.studioSummaryTitle}>{book.totalWords ? `${formatCount(book.totalWords)} words ready to read` : 'Your book is waiting for words'}</Text><Text style={s.studioSummaryCopy}>{book.chapters.length} planned parts · {book.chapters.filter((chapter) => chapter.complete).length} drafted · {book.status === 'finished' ? 'Finished manuscript' : 'Draft in progress'}</Text></View><View style={[s.studioStatusDot, book.status === 'finished' && s.studioStatusDotFinished]}><Text style={s.studioStatusDotText}>{book.status === 'finished' ? '✓' : '•'}</Text></View></View>
+    {accordion('order', 'Book order', 'Arrange the manuscript without changing its content.', <>{book.chapters.map((chapter, index) => <View key={chapter.key} style={s.studioOrderRow}><View style={s.studioOrderNumber}><Text style={s.studioOrderNumberText}>{String(index + 1).padStart(2, '0')}</Text></View><View style={s.studioOrderCopy}><Text style={s.studioOrderTitle}>{chapter.title}</Text><Text style={s.studioOrderMeta}>{chapter.complete ? `${formatCount(chapter.words)} words` : 'Missing content'}</Text></View><Pressable onPress={() => moveChapter(index, -1)} disabled={index === 0} style={[s.studioMoveButton, index === 0 && s.studioMoveDisabled]}><Text style={s.studioMoveText}>↑</Text></Pressable><Pressable onPress={() => moveChapter(index, 1)} disabled={index === book.chapters.length - 1} style={[s.studioMoveButton, index === book.chapters.length - 1 && s.studioMoveDisabled]}><Text style={s.studioMoveText}>↓</Text></Pressable><Pressable onPress={() => openWritingPart(chapter.key)} style={s.studioOpenWrite}><Text style={s.studioOpenWriteText}>Write</Text></Pressable></View>)}</>)}
+    {accordion('front', 'Front matter', 'Optional pages before the manuscript.', <>{studioFrontMatter.map((item) => <View key={item.id} style={s.studioMatterRow}><Pressable onPress={() => toggleIncluded('frontMatterIncluded', item.id)} style={[s.studioCheck, studio.frontMatterIncluded[item.id] && s.studioCheckOn]}><Text style={s.studioCheckText}>{studio.frontMatterIncluded[item.id] ? '✓' : ''}</Text></Pressable><View style={s.studioMatterCopy}><Text style={s.studioMatterTitle}>{item.label}</Text><Text style={s.studioMatterMeta}>{item.automatic ? 'Generated from this book' : studio.frontMatterIncluded[item.id] ? (studio.frontMatterText[item.id] ? 'Ready' : 'Needs text') : 'Not included'}</Text>{studio.frontMatterIncluded[item.id] && !item.automatic && <TextInput value={studio.frontMatterText[item.id]} onChangeText={(value) => updateText('frontMatterText', item.id, value)} multiline placeholder={`Add ${item.label.toLowerCase()}…`} placeholderTextColor="#9A9DB7" style={s.studioMatterInput} />}</View></View>)}</>)}
+    {accordion('manuscript', 'Manuscript', 'Only planned parts and their real drafts appear here.', <>{book.chapters.map((chapter) => <View key={chapter.key} style={s.studioManuscriptRow}><View style={[s.studioManuscriptDot, chapter.complete && s.studioManuscriptDotComplete]}><Text style={s.studioManuscriptDotText}>{chapter.complete ? '✓' : '·'}</Text></View><View style={s.studioOrderCopy}><Text style={s.studioOrderTitle}>{chapter.title}</Text><Text style={s.studioOrderMeta}>{chapter.complete ? `${formatCount(chapter.words)} words in the assembled manuscript` : 'No draft yet — this part stays out of the preview'}</Text></View><Pressable onPress={() => openWritingPart(chapter.key)} style={s.studioOpenWrite}><Text style={s.studioOpenWriteText}>{chapter.complete ? 'Edit' : 'Write'}</Text></Pressable></View>)}</>)}
+    {accordion('back', 'Back matter', 'Optional pages after the manuscript.', <>{studioBackMatter.map((item) => <View key={item.id} style={s.studioMatterRow}><Pressable onPress={() => toggleIncluded('backMatterIncluded', item.id)} style={[s.studioCheck, studio.backMatterIncluded[item.id] && s.studioCheckOn]}><Text style={s.studioCheckText}>{studio.backMatterIncluded[item.id] ? '✓' : ''}</Text></Pressable><View style={s.studioMatterCopy}><Text style={s.studioMatterTitle}>{item.label}</Text><Text style={s.studioMatterMeta}>{studio.backMatterIncluded[item.id] ? (studio.backMatterText[item.id] ? 'Ready' : 'Needs text') : 'Not included'}</Text>{studio.backMatterIncluded[item.id] && <TextInput value={studio.backMatterText[item.id]} onChangeText={(value) => updateText('backMatterText', item.id, value)} multiline placeholder={`Add ${item.label.toLowerCase()}…`} placeholderTextColor="#9A9DB7" style={s.studioMatterInput} />}</View></View>)}</>)}
+    {accordion('appearance', 'Appearance', 'Formatting used by the read preview.', <><View style={s.studioControlRow}><Text style={s.studioControlLabel}>Font size</Text><View style={s.studioControlOptions}><Pressable onPress={() => updateStudio({ appearance: { ...studio.appearance, fontSize: 15 } })} style={[s.studioOption, studio.appearance.fontSize === 15 && s.studioOptionSelected]}><Text style={s.studioOptionText}>Small</Text></Pressable><Pressable onPress={() => updateStudio({ appearance: { ...studio.appearance, fontSize: 18 } })} style={[s.studioOption, studio.appearance.fontSize === 18 && s.studioOptionSelected]}><Text style={s.studioOptionText}>Large</Text></Pressable></View></View><View style={s.studioControlRow}><Text style={s.studioControlLabel}>Heading style</Text><View style={s.studioControlOptions}><Pressable onPress={() => updateStudio({ appearance: { ...studio.appearance, headingStyle: 'classic' } })} style={[s.studioOption, studio.appearance.headingStyle === 'classic' && s.studioOptionSelected]}><Text style={s.studioOptionText}>Classic</Text></Pressable><Pressable onPress={() => updateStudio({ appearance: { ...studio.appearance, headingStyle: 'modern' } })} style={[s.studioOption, studio.appearance.headingStyle === 'modern' && s.studioOptionSelected]}><Text style={s.studioOptionText}>Modern</Text></Pressable></View></View><View style={s.studioControlRow}><Text style={s.studioControlLabel}>Alignment</Text><View style={s.studioControlOptions}><Pressable onPress={() => updateStudio({ appearance: { ...studio.appearance, alignment: 'left' } })} style={[s.studioOption, studio.appearance.alignment === 'left' && s.studioOptionSelected]}><Text style={s.studioOptionText}>Left</Text></Pressable><Pressable onPress={() => updateStudio({ appearance: { ...studio.appearance, alignment: 'center' } })} style={[s.studioOption, studio.appearance.alignment === 'center' && s.studioOptionSelected]}><Text style={s.studioOptionText}>Center</Text></Pressable></View></View></>)}
+    <Pressable onPress={refreshPreview} style={s.studioPrimaryButton}><Text style={s.studioPrimaryButtonText}>Refresh book preview</Text><Text style={s.studioPrimaryButtonArrow}>↗</Text></Pressable></>;
+  const renderRead = () => <><View style={s.readerToolbar}><View><Text style={s.studioKicker}>READ PREVIEW</Text><Text style={s.readerToolbarTitle}>{book.totalWords ? `${formatCount(book.totalWords)} words` : 'No drafted content yet'}</Text></View><Pressable onPress={() => changeSection('listen')} style={s.readerListenButton}><Text style={s.readerListenText}>◷ Listen</Text></Pressable></View><View style={s.readerToc}><Text style={s.readerTocTitle}>In this book</Text>{book.chapters.map((chapter, index) => <Pressable key={chapter.key} onPress={() => setReaderIndex(index)} style={[s.readerTocRow, readerIndex === index && s.readerTocRowSelected]}><Text style={s.readerTocNumber}>{String(index + 1).padStart(2, '0')}</Text><Text numberOfLines={1} style={s.readerTocLabel}>{chapter.title}</Text><Text style={s.readerTocState}>{chapter.complete ? '✓' : '—'}</Text></Pressable>)}</View><View style={s.readerBook}><View style={s.readerTitlePage}><Text style={s.readerTitleKicker}>BOOKEZ STUDIO</Text><Text style={[s.readerBookTitle, studio.appearance.headingStyle === 'modern' && s.readerBookTitleModern]}>{book.title}</Text><Text style={s.readerBookStatus}>{book.status === 'finished' ? 'Finished manuscript' : 'Work in progress'}</Text></View>{book.frontMatter.filter((item) => item.included && item.id !== 'titlePage' && item.id !== 'tableOfContents').map((item) => <View key={item.id} style={s.readerMatter}><Text style={s.readerMatterTitle}>{item.label}</Text><Text style={[s.readerBody, { textAlign: studio.appearance.alignment }]}>{item.content}</Text></View>)}{book.chapters.map((chapter, index) => <View key={chapter.key} style={s.readerChapter}><Text style={[s.readerChapterTitle, studio.appearance.headingStyle === 'modern' && s.readerChapterTitleModern]}>{chapter.title}</Text>{chapter.content ? chapter.content.split(/\n\s*\n/).map((paragraph, paragraphIndex) => <Text key={`${chapter.key}-${paragraphIndex}`} style={[s.readerBody, { fontSize: studio.appearance.fontSize, lineHeight: studio.appearance.fontSize * studio.appearance.lineSpacing, marginBottom: studio.appearance.paragraphSpacing, textAlign: studio.appearance.alignment }]}>{paragraph}</Text>) : <View style={s.readerMissing}><Text style={s.readerMissingIcon}>⌁</Text><Text style={s.readerMissingTitle}>This part is not drafted yet.</Text><Text style={s.readerMissingCopy}>It is intentionally left out of the reading flow until you write it.</Text><Pressable onPress={() => openWritingPart(chapter.key)} style={s.readerWriteButton}><Text style={s.readerWriteButtonText}>Open in Write</Text></Pressable></View>}</View>)}{book.backMatter.filter((item) => item.included).map((item) => <View key={item.id} style={s.readerMatter}><Text style={s.readerMatterTitle}>{item.label}</Text><Text style={[s.readerBody, { textAlign: studio.appearance.alignment }]}>{item.content}</Text></View>)}</View></>;
+  const renderListen = () => <><View style={s.listenHero}><View style={s.listenOrb}><Text style={s.listenOrbText}>{isSpeaking ? '◷' : '♫'}</Text></View><View style={s.listenHeroCopy}><Text style={s.studioKicker}>READ ALOUD</Text><Text style={s.listenTitle}>{isSpeaking ? `Listening to ${speakingLabel}` : 'Hear the book take shape.'}</Text><Text style={s.listenCopy}>Uses your device’s built-in voice and the same drafted manuscript shown in Read.</Text></View></View><View style={s.listenControls}><Pressable onPress={isSpeaking ? stopSpeaking : () => speakSegments(speechSegments)} style={[s.studioPrimaryButton, isSpeaking && s.studioStopButton]}><Text style={s.studioPrimaryButtonText}>{isSpeaking ? 'Stop listening' : 'Listen to book'}</Text><Text style={s.studioPrimaryButtonArrow}>{isSpeaking ? '×' : '▶'}</Text></Pressable><Text style={s.listenNote}>On iPhone, turn off silent mode to hear speech.</Text></View><Text style={s.studioSectionTitle}>Drafted parts</Text>{book.chapters.map((chapter) => <View key={chapter.key} style={s.listenRow}><View style={s.listenRowIcon}><Text style={s.listenRowIconText}>{chapter.complete ? '♫' : '—'}</Text></View><View style={s.studioOrderCopy}><Text style={s.studioOrderTitle}>{chapter.title}</Text><Text style={s.studioOrderMeta}>{chapter.complete ? `${formatCount(chapter.words)} words` : 'Not available until drafted'}</Text></View>{chapter.complete && <Pressable onPress={() => speakSegments([{ label: chapter.title, text: chapter.content }])} style={s.listenRowButton}><Text style={s.listenRowButtonText}>Listen</Text></Pressable>}</View>)}</>;
+  const renderExport = () => <><View style={s.exportHero}><Text style={s.studioKicker}>EXPORT</Text><Text style={s.exportTitle}>Take the book with you.</Text><Text style={s.exportCopy}>Bookez can share the assembled manuscript as plain text using your device’s share sheet. PDF, EPUB, and DOCX are not available in this build.</Text></View><View style={s.exportStats}><View><Text style={s.exportStatValue}>{formatCount(book.totalWords)}</Text><Text style={s.exportStatLabel}>WORDS</Text></View><View style={s.exportStatDivider} /><View><Text style={s.exportStatValue}>{book.chapters.filter((chapter) => chapter.complete).length}/{book.chapters.length}</Text><Text style={s.exportStatLabel}>PARTS DRAFTED</Text></View></View><Pressable onPress={shareBook} style={s.studioPrimaryButton}><Text style={s.studioPrimaryButtonText}>Share plain-text book</Text><Text style={s.studioPrimaryButtonArrow}>↗</Text></Pressable><Text style={s.exportFootnote}>The share sheet lets you send the current assembled text to another app or save it where your device supports it.</Text></>;
+
+  return <View style={s.studioPage}><View style={s.studioHeader}><Pressable onPress={onBack} style={s.studioBackButton} accessibilityLabel="Back to Library"><Text style={s.studioBackIcon}>‹</Text></Pressable><Pressable onPress={() => setPickerOpen(true)} style={s.studioHeaderCopy}><Text style={s.studioOverline}>BOOKEZ / BOOK STUDIO</Text><Text numberOfLines={1} style={s.studioHeaderTitle}>{project.title}</Text><Text style={s.studioHeaderMeta}>{snapshot.stage} · {snapshot.progressPercent}% · {project.updatedAt ? `Saved ${formatLastEdited(project.updatedAt)}` : 'Local draft'}</Text></Pressable><Pressable onPress={() => setMenuOpen(true)} style={s.studioOverflowButton} accessibilityLabel="Open Book Studio menu"><Text style={s.studioOverflowText}>•••</Text></Pressable></View><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.studioTabs}>{(['assemble', 'read', 'listen', 'export'] as StudioSection[]).map((item) => <Pressable key={item} onPress={() => changeSection(item)} style={[s.studioTab, section === item && s.studioTabSelected]}><Text style={[s.studioTabText, section === item && s.studioTabTextSelected]}>{item[0].toUpperCase() + item.slice(1)}</Text></Pressable>)}</ScrollView>{section === 'assemble' ? renderAssemble() : section === 'read' ? renderRead() : section === 'listen' ? renderListen() : renderExport()}
+    <Modal animationType="fade" visible={menuOpen} transparent onRequestClose={() => setMenuOpen(false)}><Pressable style={s.studioMenuShade} onPress={() => setMenuOpen(false)}><View style={s.studioMenu}><Text style={s.libraryMenuOverline}>THIS BOOK</Text><Text numberOfLines={1} style={s.libraryMenuTitle}>{project.title}</Text><Pressable onPress={() => { setMenuOpen(false); openWritingPart(book.chapters[readerIndex]?.key ?? book.chapters[0]?.key ?? ''); }} style={s.libraryMenuRow}><Text style={s.libraryMenuIcon}>✎</Text><Text style={s.libraryMenuLabel}>Continue writing</Text><Text style={s.libraryMenuArrow}>›</Text></Pressable><Pressable onPress={() => { setMenuOpen(false); onPage('Journey'); }} style={s.libraryMenuRow}><Text style={s.libraryMenuIcon}>✦</Text><Text style={s.libraryMenuLabel}>View journey</Text><Text style={s.libraryMenuArrow}>›</Text></Pressable><Pressable onPress={() => { setMenuOpen(false); changeSection('read'); }} style={s.libraryMenuRow}><Text style={s.libraryMenuIcon}>◌</Text><Text style={s.libraryMenuLabel}>Review book</Text><Text style={s.libraryMenuArrow}>›</Text></Pressable><Pressable onPress={() => { setMenuOpen(false); changeSection('export'); }} style={s.libraryMenuRow}><Text style={s.libraryMenuIcon}>↗</Text><Text style={s.libraryMenuLabel}>Export</Text><Text style={s.libraryMenuArrow}>›</Text></Pressable><Pressable onPress={() => { setMenuOpen(false); refreshPreview(); }} style={s.libraryMenuRow}><Text style={s.libraryMenuIcon}>⟳</Text><Text style={s.libraryMenuLabel}>Refresh preview</Text><Text style={s.libraryMenuArrow}>›</Text></Pressable></View></Pressable></Modal>
+    <Modal animationType="slide" visible={pickerOpen} transparent onRequestClose={() => setPickerOpen(false)}><View style={s.studioPickerShade}><Pressable style={s.studioPickerDismiss} onPress={() => setPickerOpen(false)} /><View style={s.studioPickerSheet}><View style={s.sheetHandle} /><Text style={s.studioPickerOverline}>YOUR BOOKS</Text><Text style={s.studioPickerTitle}>Switch book</Text>{projects.map((item) => <Pressable key={item.title} onPress={() => { setPickerOpen(false); onSelectProject(item.title); onOpenBookStudio(item.title, section); }} style={[s.studioPickerRow, item.title === project.title && s.studioPickerRowSelected]}><View style={[s.studioPickerMark, { backgroundColor: item.color }]}><Text style={s.studioPickerMarkText}>{item.mark}</Text></View><View style={s.studioPickerCopy}><Text numberOfLines={1} style={s.studioPickerBookTitle}>{item.title}</Text><Text style={s.studioPickerBookMeta}>{item.type}</Text></View>{item.title === project.title && <Text style={s.studioPickerCheck}>✓</Text>}</Pressable>)}</View></View></Modal>
+  </View>;
+}
+
+type LegalDocument = 'privacy' | 'terms';
+type AccountAction = 'logout' | 'delete';
+
+function Profile({ onLogout, onDeleteAccount }: { onLogout: () => void; onDeleteAccount: () => void }) {
   const [reminders, setReminders] = useState(true); const [cloud, setCloud] = useState(true);
+  const [legalDocument, setLegalDocument] = useState<LegalDocument | null>(null);
+  const [accountAction, setAccountAction] = useState<AccountAction | null>(null);
+  const isPrivacy = legalDocument === 'privacy';
+
+  const confirmAccountAction = () => {
+    const action = accountAction;
+    setAccountAction(null);
+    if (action === 'logout') onLogout();
+    if (action === 'delete') onDeleteAccount();
+  };
+
   return <><View style={s.profileTop}><View style={s.profileAvatar}><Text style={s.profileAvatarText}>L</Text><View style={s.profileHalo} /></View><Text style={s.profileName}>Lena Morris</Text><Text style={s.profileEmail}>lena@bookez.studio</Text><View style={s.pathfinder}><Text style={s.pathfinderText}>✦ PATHFINDER</Text></View></View>
     <Text style={s.preferenceTitle}>Your space</Text>
     <View style={s.preferences}><View style={s.prefRow}><View><Text style={s.prefTitle}>Writing reminders</Text><Text style={s.prefSub}>A gentle nudge each evening</Text></View><Switch value={reminders} onValueChange={setReminders} trackColor={{ false: '#D7D9E6', true: '#BAB6F1' }} thumbColor={reminders ? C.periwinkle : '#FFF'} /></View><View style={s.prefLine} /><View style={s.prefRow}><View><Text style={s.prefTitle}>Cloud backup</Text><Text style={s.prefSub}>Keep every chapter safe</Text></View><Switch value={cloud} onValueChange={setCloud} trackColor={{ false: '#D7D9E6', true: '#B7DAB9' }} thumbColor={cloud ? '#75AF80' : '#FFF'} /></View></View>
-    <Text style={s.preferenceTitle}>Preferences</Text>{['Appearance', 'Writing goals', 'Export your work'].map((item) => <Pressable key={item} style={s.settingsRow}><Text style={s.settingsText}>{item}</Text><Text style={s.chevron}>›</Text></Pressable>)}
+    <Text style={s.preferenceTitle}>Privacy & terms</Text>
+    <View style={s.settingsCard}>
+      <Pressable onPress={() => setLegalDocument('privacy')} style={s.settingsRow}><View style={s.settingsRowCopy}><View style={[s.settingsIcon, s.settingsIconBlue]}><Text style={s.settingsIconText}>⌁</Text></View><View><Text style={s.settingsText}>Privacy policy</Text><Text style={s.settingsSub}>How Bookez handles your writing</Text></View></View><Text style={s.chevron}>›</Text></Pressable>
+      <View style={s.prefLine} />
+      <Pressable onPress={() => setLegalDocument('terms')} style={s.settingsRow}><View style={s.settingsRowCopy}><View style={[s.settingsIcon, s.settingsIconGold]}><Text style={s.settingsIconText}>§</Text></View><View><Text style={s.settingsText}>Terms of service</Text><Text style={s.settingsSub}>The simple rules for using Bookez</Text></View></View><Text style={s.chevron}>›</Text></Pressable>
+    </View>
+
+    <Text style={s.preferenceTitle}>Account</Text>
+    <View style={s.accountCard}>
+      <Pressable onPress={() => setAccountAction('delete')} style={s.accountActionRow}><View style={[s.settingsIcon, s.settingsIconCoral]}><Text style={s.settingsIconText}>×</Text></View><View style={s.settingsRowCopy}><Text style={s.deleteText}>Delete account</Text><Text style={s.settingsSub}>Permanently remove your account and drafts</Text></View><Text style={s.chevron}>›</Text></Pressable>
+      <View style={s.prefLine} />
+      <Pressable onPress={() => setAccountAction('logout')} style={s.accountActionRow}><View style={[s.settingsIcon, s.settingsIconSage]}><Text style={s.settingsIconText}>↗</Text></View><View style={s.settingsRowCopy}><Text style={s.settingsText}>Log out</Text><Text style={s.settingsSub}>Pause here and come back anytime</Text></View><Text style={s.chevron}>›</Text></Pressable>
+    </View>
+    <Text style={s.profileFootnote}>You stay in control of your words, always.</Text>
+
+    <Modal animationType="slide" visible={legalDocument !== null} transparent onRequestClose={() => setLegalDocument(null)}>
+      <View style={s.profileModalShade}><Pressable style={s.profileModalDismiss} onPress={() => setLegalDocument(null)} /><View style={s.legalSheet}><View style={s.sheetHandle} /><View style={s.legalHeader}><View><Text style={s.legalOverline}>BOOKEZ / {isPrivacy ? 'PRIVACY' : 'TERMS'}</Text><Text style={s.legalTitle}>{isPrivacy ? 'Privacy policy' : 'Terms of service'}</Text></View><Pressable onPress={() => setLegalDocument(null)} style={s.closeButton}><Text style={s.closeButtonText}>×</Text></Pressable></View><ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={s.legalContent}>
+        <Text style={s.legalUpdated}>Effective August 1, 2026</Text>
+        {isPrivacy ? <><Text style={s.legalIntro}>Bookez is a quiet place to make things. This policy explains what we collect, why we use it, and the choices you have.</Text><Text style={s.legalSectionTitle}>What we collect</Text><Text style={s.legalBody}>We collect the account details you provide, like your name and email, plus the projects, plans, and drafts you save in Bookez.</Text><Text style={s.legalSectionTitle}>How we use it</Text><Text style={s.legalBody}>We use this information to provide the writing workspace, keep your projects in sync when cloud backup is on, and send reminders only when you choose them.</Text><Text style={s.legalSectionTitle}>Your choices</Text><Text style={s.legalBody}>You can turn reminders and cloud backup off in your profile. You can also request a copy of your data or delete your account at any time.</Text><Text style={s.legalSectionTitle}>Questions</Text><Text style={s.legalBody}>For privacy questions, contact hello@bookez.studio.</Text></> : <><Text style={s.legalIntro}>Bookez gives you a focused space for planning and writing. By using it, you agree to use the service thoughtfully and keep your account details secure.</Text><Text style={s.legalSectionTitle}>Your work is yours</Text><Text style={s.legalBody}>You keep ownership of the stories, notes, and other content you create in Bookez. Please only upload material you have the right to use.</Text><Text style={s.legalSectionTitle}>Using Bookez</Text><Text style={s.legalBody}>Please do not misuse the service, interfere with other writers, or use Bookez for unlawful activity. We may update features as the studio grows.</Text><Text style={s.legalSectionTitle}>Your account</Text><Text style={s.legalBody}>Keep your login details private. You can log out whenever you like or permanently delete your account from this page.</Text><Text style={s.legalSectionTitle}>Questions</Text><Text style={s.legalBody}>For questions about these terms, contact hello@bookez.studio.</Text></>}
+      </ScrollView></View></View>
+    </Modal>
+
+    <Modal animationType="fade" visible={accountAction !== null} transparent onRequestClose={() => setAccountAction(null)}>
+      <View style={s.profileModalShade}><Pressable style={s.profileModalDismiss} onPress={() => setAccountAction(null)} /><View style={s.confirmSheet}><View style={[s.confirmIcon, accountAction === 'delete' ? s.confirmIconDelete : s.confirmIconLogout]}><Text style={s.confirmIconText}>{accountAction === 'delete' ? '×' : '↗'}</Text></View><Text style={s.confirmTitle}>{accountAction === 'delete' ? 'Delete your account?' : 'Log out of Bookez?'}</Text><Text style={s.confirmCopy}>{accountAction === 'delete' ? 'This removes your account and all saved drafts. This action cannot be undone.' : 'Your projects will stay safe. You can sign back in whenever you are ready to write.'}</Text><Pressable onPress={confirmAccountAction} style={[s.confirmButton, accountAction === 'delete' && s.confirmButtonDelete]}><Text style={s.confirmButtonText}>{accountAction === 'delete' ? 'Delete account' : 'Log out'}</Text></Pressable><Pressable onPress={() => setAccountAction(null)} style={s.cancelButton}><Text style={s.cancelButtonText}>Keep my account</Text></Pressable></View></View>
+    </Modal>
   </>;
 }
 
-function Stats() {
-  const [range, setRange] = useState('Week');
-  const bars = [44, 62, 38, 78, 55, 92, 67];
-  return <><View style={s.statsHero}><Text style={s.planHeroOverline}>THE MIDNIGHT ATLAS</Text><Text style={s.statsTitle}>A little look{`\n`}at your rhythm.</Text><View style={s.rangeRow}>{['Week', 'Month', 'All time'].map((item) => <Pill key={item} label={item} selected={range === item} onPress={() => setRange(item)} />)}</View></View>
-    <View style={s.statsNumbers}><View><Text style={s.bigNumber}>{range === 'Week' ? '3,842' : range === 'Month' ? '11,260' : '48,915'}</Text><Text style={s.bigNumberLabel}>WORDS WRITTEN</Text></View><View style={s.statHighlight}><Text style={s.statHighlightTop}>+18%</Text><Text style={s.statHighlightBottom}>from last week</Text></View></View>
-    <View style={s.chartCard}><View style={s.chartHeader}><Text style={s.chartTitle}>Words this week</Text><Text style={s.chartTotal}>3.8K</Text></View><View style={s.chart}>{bars.map((height, index) => <View key={index} style={s.barCol}><View style={[s.bar, { height }, index === 5 && s.barActive]} /><Text style={s.barLabel}>{['M', 'T', 'W', 'T', 'F', 'S', 'S'][index]}</Text></View>)}</View></View>
-    <Text style={s.preferenceTitle}>Small wins</Text><View style={s.winGrid}><View style={[s.winCard, { backgroundColor: '#F3F0FF' }]}><Text style={s.winIcon}>⌁</Text><Text style={s.winValue}>7 days</Text><Text style={s.winLabel}>LONGEST STREAK</Text></View><View style={[s.winCard, { backgroundColor: '#FFF1E6' }]}><Text style={s.winIcon}>✦</Text><Text style={s.winValue}>12</Text><Text style={s.winLabel}>CHAPTERS MADE</Text></View></View>
+function AccountExit({ deleted, onReturn }: { deleted: boolean; onReturn: () => void }) {
+  return <View style={s.accountExit}><View style={[s.accountExitIcon, deleted ? s.confirmIconDelete : s.confirmIconLogout]}><Text style={s.confirmIconText}>{deleted ? '×' : '↗'}</Text></View><Text style={s.accountExitTitle}>{deleted ? 'Your account is gone.' : 'You’re all signed out.'}</Text><Text style={s.accountExitCopy}>{deleted ? 'This Bookez preview has no live account connection yet, so you can keep exploring the interface as a new visitor.' : 'Your writing space is paused until you sign back in.'}</Text><Pressable onPress={onReturn} style={s.accountExitButton}><Text style={s.accountExitButtonText}>Return to Bookez</Text><Text style={s.accountExitButtonArrow}>→</Text></Pressable></View>;
+}
+
+function Stats({ projects, activeProject, onPage }: { projects: Project[]; activeProject: string; onPage: (page: Page) => void }) {
+  const [range, setRange] = useState<StatsRange>('Week');
+  const currentProject = projects.find((project) => project.title === activeProject) ?? projects[0];
+  const stats = getStatsSnapshot(currentProject, range);
+  const maxChartWords = Math.max(1, ...stats.chartRows.map((row) => row.words));
+  const inputTotal = stats.dictationUses + stats.writingUses;
+  const hasActivity = stats.entries.length > 0;
+  const average = (value: number, suffix = '') => value ? `${value >= 10 ? Math.round(value) : value.toFixed(1)}${suffix}` : '—';
+
+  return <>
+    <View style={s.statsHero}><View style={s.statsHeroTop}><View style={{ flex: 1 }}><Text style={s.planHeroOverline}>YOUR WRITING RHYTHM</Text><Text style={s.statsTitle}>Small steps{`\n`}add up.</Text></View><Pressable onPress={() => onPage('Journey')} style={s.statsJourneyButton}><Text style={s.statsJourneyButtonText}>View Journey</Text><Text style={s.statsJourneyButtonArrow}>↗</Text></Pressable></View><Text numberOfLines={1} style={s.statsBookName}>{currentProject.title}</Text><View style={s.rangeRow}>{(['Week', 'Month', 'All time'] as StatsRange[]).map((item) => <Pill key={item} label={item} selected={range === item} onPress={() => setRange(item)} />)}</View></View>
+
+    <View style={s.statsNumbers}><View style={s.statsHeadlineMetric}><Text style={s.bigNumber}>{stats.currentStreak || '—'}</Text><Text style={s.bigNumberLabel}>DAY STREAK</Text><Text style={s.statsMetricHint}>{stats.activeDays ? `${stats.activeDays} days here · ${stats.lifetimeActiveDays} lifetime` : 'Write to start a streak'}</Text></View><View style={s.statsHeadlineDivider} /><View style={s.statsHeadlineMetric}><Text style={s.bigNumber}>{formatCount(stats.journey.wordCount)}</Text><Text style={s.bigNumberLabel}>CURRENT WORDS</Text><Text style={s.statsMetricHint}>{stats.journey.progressPercent}% journey complete</Text></View></View>
+
+    <View style={s.statsMetricGrid}><View style={[s.statsMetricCard, { backgroundColor: '#F3F0FF' }]}><Text style={s.statsMetricIcon}>✎</Text><Text style={s.statsMetricCardValue}>{average(stats.averageWords)}</Text><Text style={s.statsMetricCardLabel}>AVG WORDS / DAY</Text></View><View style={[s.statsMetricCard, { backgroundColor: '#FFF3E9' }]}><Text style={s.statsMetricIcon}>▤</Text><Text style={s.statsMetricCardValue}>{average(stats.averagePages)}</Text><Text style={s.statsMetricCardLabel}>AVG EST. PAGES / DAY</Text></View><View style={[s.statsMetricCard, { backgroundColor: '#EEF9EF' }]}><Text style={s.statsMetricIcon}>◷</Text><Text style={s.statsMetricCardValue}>{stats.averageMinutes ? formatDuration(stats.averageMinutes) : '—'}</Text><Text style={s.statsMetricCardLabel}>AVG ACTIVE / DAY</Text></View><View style={[s.statsMetricCard, { backgroundColor: '#EEF4FF' }]}><Text style={s.statsMetricIcon}>◌</Text><Text style={s.statsMetricCardValue}>{stats.completionAverage ? `${Math.round(stats.completionAverage)}%` : '—'}</Text><Text style={s.statsMetricCardLabel}>AVG % COMPLETED / DAY</Text></View></View>
+
+    <View style={s.chartCard}><View style={s.chartHeader}><View><Text style={s.chartTitle}>Words by day</Text><Text style={s.statsCardHint}>{range === 'Week' ? 'Last seven days' : range === 'Month' ? 'Last thirty days' : 'Logged writing days'}</Text></View><Text style={s.chartTotal}>{stats.totalLoggedWords ? formatCount(stats.totalLoggedWords) : '—'}</Text></View><View style={s.chart}>{stats.chartRows.map((row, index) => <View key={row.key} style={s.barCol}><View style={[s.bar, { height: row.words ? Math.max(7, Math.round((row.words / maxChartWords) * 95)) : 3 }, row.words > 0 && index === stats.chartRows.length - 1 && s.barActive]} /><Text style={s.barLabel}>{formatActivityDay(row.key)}</Text></View>)}</View>{!hasActivity && <Text style={s.statsEmptyHint}>No writing days logged yet. Your next manuscript session will start the rhythm here.</Text>}</View>
+
+    <View style={s.statsSectionHeader}><View><Text style={s.statsSectionTitle}>Daily ledger</Text><Text style={s.statsCardHint}>Words, estimated pages, time, and completion</Text></View><Text style={s.statsSectionCount}>{stats.activeDays ? `${stats.activeDays} days` : 'No days yet'}</Text></View>
+    {stats.dailyRows.length ? stats.dailyRows.map((entry) => <View key={entry.key} style={s.statsDayRow}><View style={s.statsDayCopy}><Text style={s.statsDayTitle}>{formatActivityDay(entry.key, true)}</Text><Text style={s.statsDaySub}>{formatDuration(entry.minutes)} active</Text></View><View style={s.statsDayMetric}><Text style={s.statsDayValue}>{formatCount(entry.words)}</Text><Text style={s.statsDayLabel}>WORDS</Text></View><View style={s.statsDayMetric}><Text style={s.statsDayValue}>{entry.pages ? entry.pages.toFixed(1) : '—'}</Text><Text style={s.statsDayLabel}>EST. PAGES</Text></View><View style={s.statsDayMetric}><Text style={s.statsDayValue}>{entry.completion ? `${Math.round(entry.completion)}%` : '—'}</Text><Text style={s.statsDayLabel}>DONE</Text></View></View>) : <View style={s.statsEmptyCard}><Text style={s.statsEmptyIcon}>⌁</Text><Text style={s.statsEmptyTitle}>Your daily record is waiting.</Text><Text style={s.statsEmptyCopy}>Start writing in the manuscript and Bookez will track your words, pace, pages, and progress by day.</Text></View>}
+
+    <View style={s.statsBreakdownCard}><View style={s.statsSectionHeader}><View><Text style={s.statsSectionTitle}>How you write</Text><Text style={s.statsCardHint}>Input events in the selected range</Text></View><Text style={s.statsSectionCount}>{inputTotal ? `${inputTotal} events` : 'No events yet'}</Text></View>{inputTotal ? <><View style={s.inputMixTrack}><View style={[s.inputMixDictation, { width: `${stats.dictationPercent}%` }]} /><View style={[s.inputMixWriting, { width: `${stats.writingPercent}%` }]} /></View><View style={s.inputMixLegend}><View style={s.inputMixLegendItem}><View style={[s.inputMixDot, { backgroundColor: C.coral }]} /><Text style={s.inputMixLabel}>Dictation</Text><Text style={s.inputMixValue}>{stats.dictationPercent}%</Text></View><View style={s.inputMixLegendItem}><View style={[s.inputMixDot, { backgroundColor: C.periwinkle }]} /><Text style={s.inputMixLabel}>Keyboard / writing</Text><Text style={s.inputMixValue}>{stats.writingPercent}%</Text></View></View></> : <Text style={s.statsEmptyHint}>Tap the microphone or type in the manuscript to build this breakdown.</Text>}</View>
+
+    <View style={s.statsInsightCard}><Text style={s.statsInsightEyebrow}>A LITTLE SOMETHING TO NOTICE</Text>{stats.strongestDay ? <><Text style={s.statsInsightTitle}>Your strongest day was {formatActivityDay(stats.strongestDay.key, true)}.</Text><Text style={s.statsInsightCopy}>{formatCount(stats.strongestDay.words)} words, about {stats.strongestDay.pages.toFixed(1)} pages, with {Math.round(stats.strongestDay.completion)}% of the writing path complete.</Text></> : <><Text style={s.statsInsightTitle}>Your rhythm will reveal itself here.</Text><Text style={s.statsInsightCopy}>Once you have a writing day logged, you’ll see your strongest day and average active time per page.</Text></>}<View style={s.statsInsightMetric}><Text style={s.statsInsightMetricLabel}>AVG ACTIVE TIME / EST. PAGE</Text><Text style={s.statsInsightMetricValue}>{stats.averageMinutesPerPage ? formatDuration(stats.averageMinutesPerPage) : '—'}</Text></View></View>
+
+    <Text style={s.preferenceTitle}>Book at a glance</Text><View style={s.statsBookCard}><View><Text style={s.statsBookCardLabel}>ESTIMATED MANUSCRIPT PAGES</Text><Text style={s.statsBookCardValue}>{stats.journey.wordCount ? `${(stats.journey.wordCount / 250).toFixed(1)}` : '—'}</Text></View><View style={s.statsBookCardDivider} /><View><Text style={s.statsBookCardLabel}>{stats.journey.blueprint.unitLabelPlural.toUpperCase()} WITH DRAFTS</Text><Text style={s.statsBookCardValue}>{stats.journey.completedUnits} / {stats.journey.unitCount}</Text></View></View>
   </>;
 }
 
@@ -970,6 +1345,8 @@ function Navigation({ page, onPage }: { page: Page; onPage: (page: Page) => void
 
 export default function App() {
   const [page, setPage] = useState<Page>('Library');
+  const [accountState, setAccountState] = useState<'active' | 'signedOut' | 'deleted'>('active');
+  const [studioRoute, setStudioRoute] = useState<{ title: string; section: StudioSection }>({ title: 'The Midnight Atlas', section: 'assemble' });
   const [projects, setProjects] = useState<Project[]>([
     { title: 'The Midnight Atlas', color: C.periwinkle, mark: '✦', type: 'Fiction Book', pageGoal: '240', unitGoal: '24', plan: defaultPlanFor('Fiction Book') },
     { title: 'Letters to June', color: C.coral, mark: '✉', type: 'Memoir & Biography', pageGoal: '260', unitGoal: '18', plan: defaultPlanFor('Memoir & Biography') },
@@ -977,15 +1354,24 @@ export default function App() {
   ]);
   const [activeProject, setActiveProject] = useState('The Midnight Atlas');
   const updateProject = (title: string, changes: Partial<Project>) => setProjects((current) => current.map((project) => project.title === title ? { ...project, ...changes, updatedAt: Date.now() } : project));
+  const openBookStudio = (title: string, section: StudioSection) => { setActiveProject(title); setStudioRoute({ title, section }); setPage('BookStudio'); };
+  const returnFromAccount = () => {
+    if (accountState === 'deleted') {
+      setProjects([{ title: 'The Midnight Atlas', color: C.periwinkle, mark: '✦', type: 'Fiction Book', pageGoal: '240', unitGoal: '24', plan: defaultPlanFor('Fiction Book') }]);
+      setActiveProject('The Midnight Atlas');
+    }
+    setAccountState('active');
+  };
   const renderPage = () => {
-    if (page === 'Library') return <Library projects={projects} activeProject={activeProject} onPage={setPage} onSelectProject={setActiveProject} onProjectsChange={setProjects} />;
+    if (page === 'Library') return <Library projects={projects} activeProject={activeProject} onPage={setPage} onSelectProject={setActiveProject} onProjectsChange={setProjects} onOpenBookStudio={openBookStudio} />;
     if (page === 'Plan') return <Plan projects={projects} activeProject={activeProject} onSelectProject={setActiveProject} onUpdateProject={updateProject} onPage={setPage} />;
     if (page === 'Write') return <Write projects={projects} activeProject={activeProject} onSelectProject={setActiveProject} onUpdateProject={updateProject} onPage={setPage} />;
-    if (page === 'Journey') return <Journey projects={projects} activeProject={activeProject} onSelectProject={setActiveProject} onPage={setPage} onBack={() => setPage('Library')} />;
-    if (page === 'Profile') return <Profile />;
-    return <Stats />;
+    if (page === 'Journey') return <Journey projects={projects} activeProject={activeProject} onSelectProject={setActiveProject} onPage={setPage} onBack={() => setPage('Library')} onOpenBookStudio={openBookStudio} />;
+    if (page === 'BookStudio') return <BookStudio projects={projects} project={projects.find((project) => project.title === studioRoute.title) ?? projects.find((project) => project.title === activeProject)} initialSection={studioRoute.section} onBack={() => setPage('Library')} onPage={setPage} onSelectProject={setActiveProject} onUpdateProject={updateProject} onOpenBookStudio={openBookStudio} />;
+    if (page === 'Profile') return <Profile onLogout={() => { setAccountState('signedOut'); setPage('Library'); }} onDeleteAccount={() => { setProjects([]); setAccountState('deleted'); setPage('Library'); }} />;
+    return <Stats projects={projects} activeProject={activeProject} onPage={setPage} />;
   };
-  return <><StatusBar style="dark" /><Ambient><SafeAreaView style={s.safe}><ScrollView contentContainerStyle={s.content} showsVerticalScrollIndicator={false}>{renderPage()}</ScrollView><Navigation page={page} onPage={setPage} /></SafeAreaView></Ambient></>;
+  return <><StatusBar style="dark" /><Ambient><SafeAreaView style={s.safe}>{accountState === 'active' ? <><ScrollView contentContainerStyle={s.content} showsVerticalScrollIndicator={false}>{renderPage()}</ScrollView><Navigation page={page} onPage={setPage} /></> : <ScrollView contentContainerStyle={s.content} showsVerticalScrollIndicator={false}><AccountExit deleted={accountState === 'deleted'} onReturn={returnFromAccount} /></ScrollView>}</SafeAreaView></Ambient></>;
 }
 
 const s = StyleSheet.create({
@@ -1023,6 +1409,10 @@ const s = StyleSheet.create({
   journeyModalShade: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(32,41,84,0.22)' }, journeyModalDismiss: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 }, journeySelectorSheet: { padding: 20, paddingBottom: 26, borderTopLeftRadius: 29, borderTopRightRadius: 29, backgroundColor: '#FBFAFF', shadowColor: '#39365B', shadowOpacity: 0.2, shadowRadius: 20, shadowOffset: { width: 0, height: -5 }, elevation: 10 }, journeySheetEyebrow: { color: C.periwinkle, fontSize: 8, letterSpacing: 1, fontWeight: '700' }, journeySheetTitle: { color: C.ink, fontSize: 23, fontWeight: '700', letterSpacing: -0.4, marginTop: 5 }, journeySheetHint: { color: C.muted, fontSize: 10, marginTop: 5, marginBottom: 9 }, journeyBookRow: { minHeight: 67, marginTop: 8, padding: 9, borderRadius: 17, flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF', borderWidth: 1, borderColor: '#EBEAF2' }, journeyBookRowActive: { backgroundColor: '#F3F1FF', borderColor: '#D8D1FA' }, journeyBookRowCopy: { flex: 1, marginLeft: 10 }, journeyBookRowTitle: { color: C.ink, fontSize: 12, fontWeight: '700' }, journeyBookRowMeta: { color: C.muted, fontSize: 9, marginTop: 3 }, journeyBookRowEdited: { color: '#9A9CB1', fontSize: 8, marginTop: 4 }, journeyBookRowCheck: { color: C.periwinkle, fontSize: 17, fontWeight: '700', marginLeft: 7 }, journeyMenuShade: { flex: 1, alignItems: 'flex-end', backgroundColor: 'rgba(32,41,84,0.18)', paddingTop: 58, paddingHorizontal: 20 }, journeyMenu: { width: 218, padding: 13, borderRadius: 20, backgroundColor: '#FBFAFF', shadowColor: '#39365B', shadowOpacity: 0.2, shadowRadius: 17, shadowOffset: { width: 0, height: 7 }, elevation: 8 }, journeyMenuTitle: { color: C.ink, fontSize: 13, fontWeight: '700', marginTop: 4, marginBottom: 7 }, journeyMenuRow: { minHeight: 38, paddingHorizontal: 5, flexDirection: 'row', alignItems: 'center', borderTopWidth: 1, borderTopColor: '#ECEBF3' }, journeyMenuIcon: { color: C.periwinkle, fontSize: 14, width: 22 }, journeyMenuLabel: { flex: 1, color: C.ink, fontSize: 10, fontWeight: '600' }, journeyMenuArrow: { color: C.muted, fontSize: 18 },
   journeyHero: { paddingTop: 13, alignItems: 'center' }, journeyTitle: { color: C.ink, textAlign: 'center', fontSize: 27, fontWeight: '700', lineHeight: 32, letterSpacing: -0.7, marginTop: 8 }, journeyRing: { height: 153, width: 153, borderRadius: 77, marginTop: 23, borderWidth: 15, borderColor: C.periwinkle, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.65)', shadowColor: '#7772AF', shadowOpacity: 0.15, shadowRadius: 16, shadowOffset: { width: 0, height: 8 }, elevation: 5 }, journeyRingValue: { color: C.ink, fontSize: 32, fontWeight: '700' }, journeyRingLabel: { color: C.muted, fontSize: 8, letterSpacing: 0.8, marginTop: 2, fontWeight: '700' }, nextCard: { marginTop: 25, borderRadius: 21, backgroundColor: '#FFF4E9', padding: 15, flexDirection: 'row', alignItems: 'center' }, nextIcon: { width: 40, height: 40, borderRadius: 20, backgroundColor: C.peach, alignItems: 'center', justifyContent: 'center' }, nextIconText: { color: '#A35B4D', fontSize: 19 }, nextOverline: { color: '#B36B61', fontSize: 8, letterSpacing: 0.75, fontWeight: '700', marginLeft: 11 }, nextTitle: { color: C.ink, fontSize: 12, lineHeight: 17, fontWeight: '700', marginLeft: 11, marginTop: 4 }, journeyRow: { minHeight: 67, flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: 'rgba(111,111,153,0.1)' }, journeyIcon: { width: 38, height: 38, borderRadius: 14, justifyContent: 'center', alignItems: 'center' }, journeyIconText: { color: '#FFF', fontSize: 16 }, journeyRowTitle: { color: C.ink, fontSize: 13, fontWeight: '700', marginLeft: 11 }, journeyRowDate: { color: C.muted, fontSize: 9, letterSpacing: 0.5, marginTop: 4, marginLeft: 11 }, journeyArrow: { color: C.periwinkle, fontSize: 21 },
   profileTop: { alignItems: 'center', paddingTop: 17 }, profileAvatar: { width: 84, height: 84, borderRadius: 42, backgroundColor: '#FFF7F1', alignItems: 'center', justifyContent: 'center', shadowColor: '#65608A', shadowOpacity: 0.16, shadowRadius: 14, shadowOffset: { width: 0, height: 6 }, elevation: 4 }, profileAvatarText: { fontSize: 33, color: C.coral, fontWeight: '700' }, profileHalo: { position: 'absolute', width: 96, height: 96, borderRadius: 48, borderWidth: 2, borderColor: '#FFF', opacity: 0.8 }, profileName: { color: C.ink, fontSize: 23, fontWeight: '700', marginTop: 16 }, profileEmail: { color: C.muted, fontSize: 12, marginTop: 5 }, pathfinder: { paddingHorizontal: 11, paddingVertical: 7, backgroundColor: '#FFF3CB', borderRadius: 13, marginTop: 13 }, pathfinderText: { color: '#A97819', fontSize: 9, letterSpacing: 0.7, fontWeight: '700' }, preferenceTitle: { marginTop: 28, marginBottom: 10, color: C.ink, fontSize: 17, fontWeight: '700' }, preferences: { backgroundColor: 'rgba(255,255,255,0.75)', borderRadius: 20, paddingHorizontal: 15 }, prefRow: { minHeight: 70, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }, prefTitle: { color: C.ink, fontSize: 13, fontWeight: '700' }, prefSub: { color: C.muted, fontSize: 10, marginTop: 4 }, prefLine: { height: 1, backgroundColor: '#EBEBF1' }, settingsRow: { paddingVertical: 15, flexDirection: 'row', justifyContent: 'space-between', borderBottomWidth: 1, borderBottomColor: 'rgba(111,111,153,0.1)' }, settingsText: { color: C.ink, fontSize: 13, fontWeight: '600' },
-  statsHero: { paddingTop: 13 }, statsTitle: { fontSize: 29, lineHeight: 33, letterSpacing: -0.7, color: C.ink, fontWeight: '700', marginTop: 8 }, rangeRow: { flexDirection: 'row', gap: 8, marginTop: 21 }, pill: { paddingVertical: 8, paddingHorizontal: 13, backgroundColor: 'rgba(255,255,255,0.65)', borderRadius: 13 }, pillSelected: { backgroundColor: C.periwinkle }, pillText: { color: C.muted, fontSize: 10, fontWeight: '700' }, pillTextSelected: { color: '#FFF' }, statsNumbers: { marginTop: 24, padding: 18, backgroundColor: '#FFF', borderRadius: 23, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', shadowColor: '#706C98', shadowOpacity: 0.1, shadowRadius: 13, shadowOffset: { width: 0, height: 6 }, elevation: 2 }, bigNumber: { color: C.ink, fontSize: 29, fontWeight: '700', letterSpacing: -0.6 }, bigNumberLabel: { color: C.muted, fontSize: 8, letterSpacing: 0.7, fontWeight: '700', marginTop: 5 }, statHighlight: { padding: 10, backgroundColor: '#EEF9EF', borderRadius: 14 }, statHighlightTop: { color: '#62A16D', fontSize: 13, fontWeight: '700', textAlign: 'center' }, statHighlightBottom: { color: '#6F9173', fontSize: 8, marginTop: 3 }, chartCard: { marginTop: 17, backgroundColor: '#F4F2FF', borderRadius: 22, padding: 17 }, chartHeader: { flexDirection: 'row', justifyContent: 'space-between' }, chartTitle: { color: C.ink, fontSize: 13, fontWeight: '700' }, chartTotal: { color: C.periwinkle, fontWeight: '700', fontSize: 13 }, chart: { height: 125, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', marginTop: 14 }, barCol: { alignItems: 'center', justifyContent: 'flex-end', width: 25, height: '100%' }, bar: { width: 15, borderRadius: 8, backgroundColor: '#CFC8F6' }, barActive: { backgroundColor: C.coral }, barLabel: { color: C.muted, fontSize: 9, marginTop: 8 }, winGrid: { flexDirection: 'row', gap: 10 }, winCard: { flex: 1, padding: 15, borderRadius: 20, minHeight: 123 }, winIcon: { fontSize: 19, color: C.periwinkle }, winValue: { color: C.ink, fontWeight: '700', fontSize: 21, marginTop: 15 }, winLabel: { color: C.muted, fontSize: 8, letterSpacing: 0.55, fontWeight: '700', marginTop: 5 },
+  settingsCard: { paddingHorizontal: 15, borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.75)' }, settingsRowCopy: { flex: 1, flexDirection: 'row', alignItems: 'center', minWidth: 0 }, settingsIcon: { width: 36, height: 36, borderRadius: 13, alignItems: 'center', justifyContent: 'center', marginRight: 10 }, settingsIconBlue: { backgroundColor: '#EAF4FF' }, settingsIconGold: { backgroundColor: '#FFF4D7' }, settingsIconSage: { backgroundColor: '#ECF8EE' }, settingsIconCoral: { backgroundColor: '#FFF0EC' }, settingsIconText: { color: C.ink, fontSize: 17, fontWeight: '700' }, settingsSub: { color: C.muted, fontSize: 9, marginTop: 3 }, accountCard: { paddingHorizontal: 15, borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.75)' }, accountActionRow: { minHeight: 67, flexDirection: 'row', alignItems: 'center' }, deleteText: { color: '#C96567', fontSize: 13, fontWeight: '600' }, profileFootnote: { color: '#9A9CB1', fontSize: 9, textAlign: 'center', marginTop: 20, marginBottom: 4 }, profileModalShade: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(32,41,84,0.25)' }, profileModalDismiss: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 }, legalSheet: { maxHeight: '88%', padding: 20, paddingBottom: 25, borderTopLeftRadius: 29, borderTopRightRadius: 29, backgroundColor: '#FBFAFF', shadowColor: '#39365B', shadowOpacity: 0.2, shadowRadius: 20, shadowOffset: { width: 0, height: -5 }, elevation: 10 }, legalHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' }, legalOverline: { color: C.periwinkle, fontSize: 8, letterSpacing: 1, fontWeight: '700' }, legalTitle: { color: C.ink, fontSize: 24, letterSpacing: -0.4, fontWeight: '700', marginTop: 5 }, legalContent: { paddingTop: 18, paddingBottom: 10 }, legalUpdated: { color: '#9A9CB1', fontSize: 9, letterSpacing: 0.3 }, legalIntro: { color: C.muted, fontSize: 12, lineHeight: 18, marginTop: 13 }, legalSectionTitle: { color: C.ink, fontSize: 13, fontWeight: '700', marginTop: 21, marginBottom: 5 }, legalBody: { color: C.muted, fontSize: 11, lineHeight: 17 }, confirmSheet: { padding: 22, paddingBottom: 25, borderTopLeftRadius: 29, borderTopRightRadius: 29, backgroundColor: '#FBFAFF', alignItems: 'center', shadowColor: '#39365B', shadowOpacity: 0.2, shadowRadius: 20, shadowOffset: { width: 0, height: -5 }, elevation: 10 }, confirmIcon: { width: 54, height: 54, borderRadius: 20, alignItems: 'center', justifyContent: 'center', marginBottom: 13 }, confirmIconDelete: { backgroundColor: '#FFF0EC' }, confirmIconLogout: { backgroundColor: '#ECF8EE' }, confirmIconText: { color: C.ink, fontSize: 25, fontWeight: '700' }, confirmTitle: { color: C.ink, fontSize: 22, fontWeight: '700', letterSpacing: -0.4, textAlign: 'center' }, confirmCopy: { color: C.muted, fontSize: 11, lineHeight: 17, textAlign: 'center', marginTop: 8, maxWidth: 305 }, confirmButton: { alignSelf: 'stretch', minHeight: 48, marginTop: 20, borderRadius: 15, backgroundColor: C.periwinkle, alignItems: 'center', justifyContent: 'center' }, confirmButtonDelete: { backgroundColor: C.coral }, confirmButtonText: { color: '#FFF', fontSize: 11, fontWeight: '700' }, cancelButton: { minHeight: 42, alignItems: 'center', justifyContent: 'center' }, cancelButtonText: { color: C.muted, fontSize: 10, fontWeight: '700' }, accountExit: { flex: 1, minHeight: 620, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 22 }, accountExitIcon: { width: 72, height: 72, borderRadius: 27, alignItems: 'center', justifyContent: 'center', marginBottom: 18 }, accountExitTitle: { color: C.ink, fontSize: 27, fontWeight: '700', letterSpacing: -0.6, textAlign: 'center' }, accountExitCopy: { color: C.muted, fontSize: 12, lineHeight: 18, textAlign: 'center', maxWidth: 290, marginTop: 10 }, accountExitButton: { minHeight: 49, marginTop: 25, paddingHorizontal: 18, borderRadius: 15, backgroundColor: C.periwinkle, flexDirection: 'row', alignItems: 'center' }, accountExitButtonText: { color: '#FFF', fontSize: 11, fontWeight: '700' }, accountExitButtonArrow: { color: '#FFF', fontSize: 18, marginLeft: 12 },
+  statsHero: { paddingTop: 13 }, statsHeroTop: { flexDirection: 'row', alignItems: 'flex-start' }, statsJourneyButton: { marginTop: 8, paddingHorizontal: 10, paddingVertical: 8, borderRadius: 12, backgroundColor: '#F4F2FF', flexDirection: 'row', alignItems: 'center', gap: 5 }, statsJourneyButtonText: { color: C.periwinkle, fontSize: 9, fontWeight: '700' }, statsJourneyButtonArrow: { color: C.periwinkle, fontSize: 13 }, statsTitle: { fontSize: 29, lineHeight: 33, letterSpacing: -0.7, color: C.ink, fontWeight: '700', marginTop: 8 }, statsBookName: { color: C.muted, fontSize: 11, fontWeight: '600', marginTop: 10 }, rangeRow: { flexDirection: 'row', gap: 8, marginTop: 17 }, pill: { paddingVertical: 8, paddingHorizontal: 13, backgroundColor: 'rgba(255,255,255,0.65)', borderRadius: 13 }, pillSelected: { backgroundColor: C.periwinkle }, pillText: { color: C.muted, fontSize: 10, fontWeight: '700' }, pillTextSelected: { color: '#FFF' }, statsNumbers: { marginTop: 20, padding: 18, backgroundColor: '#FFF', borderRadius: 23, flexDirection: 'row', alignItems: 'center', shadowColor: '#706C98', shadowOpacity: 0.1, shadowRadius: 13, shadowOffset: { width: 0, height: 6 }, elevation: 2 }, statsHeadlineMetric: { flex: 1 }, statsHeadlineDivider: { width: 1, height: 47, backgroundColor: '#E8E7F0', marginHorizontal: 15 }, bigNumber: { color: C.ink, fontSize: 29, fontWeight: '700', letterSpacing: -0.6 }, bigNumberLabel: { color: C.muted, fontSize: 8, letterSpacing: 0.7, fontWeight: '700', marginTop: 5 }, statsMetricHint: { color: '#9A9CB1', fontSize: 8, marginTop: 5 }, statsMetricGrid: { marginTop: 12, flexDirection: 'row', flexWrap: 'wrap', gap: 10 }, statsMetricCard: { width: '48%', minHeight: 104, padding: 13, borderRadius: 18 }, statsMetricIcon: { color: C.periwinkle, fontSize: 17 }, statsMetricCardValue: { color: C.ink, fontSize: 19, fontWeight: '700', marginTop: 13 }, statsMetricCardLabel: { color: C.muted, fontSize: 7, letterSpacing: 0.5, fontWeight: '700', marginTop: 5 }, chartCard: { marginTop: 17, backgroundColor: '#F4F2FF', borderRadius: 22, padding: 17 }, chartHeader: { flexDirection: 'row', justifyContent: 'space-between' }, chartTitle: { color: C.ink, fontSize: 13, fontWeight: '700' }, chartTotal: { color: C.periwinkle, fontWeight: '700', fontSize: 13 }, statsCardHint: { color: '#9A9CB1', fontSize: 8, marginTop: 3 }, chart: { height: 125, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', marginTop: 14 }, barCol: { alignItems: 'center', justifyContent: 'flex-end', width: 25, height: '100%' }, bar: { width: 15, borderRadius: 8, backgroundColor: '#CFC8F6' }, barActive: { backgroundColor: C.coral }, barLabel: { color: C.muted, fontSize: 9, marginTop: 8 }, statsEmptyHint: { color: C.muted, fontSize: 10, lineHeight: 15, marginTop: 11 }, statsSectionHeader: { marginTop: 24, flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between' }, statsSectionTitle: { color: C.ink, fontSize: 17, fontWeight: '700' }, statsSectionCount: { color: C.periwinkle, fontSize: 9, fontWeight: '700', marginBottom: 2 }, statsDayRow: { marginTop: 9, padding: 11, borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.78)', flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: '#ECEBF3' }, statsDayCopy: { flex: 1 }, statsDayTitle: { color: C.ink, fontSize: 10, fontWeight: '700' }, statsDaySub: { color: '#9A9CB1', fontSize: 8, marginTop: 4 }, statsDayMetric: { width: 43, alignItems: 'flex-end', marginLeft: 4 }, statsDayValue: { color: C.ink, fontSize: 10, fontWeight: '700' }, statsDayLabel: { color: C.muted, fontSize: 6, letterSpacing: 0.35, fontWeight: '700', marginTop: 3 }, statsEmptyCard: { marginTop: 10, padding: 18, borderRadius: 18, backgroundColor: '#F4F2FF', alignItems: 'center' }, statsEmptyIcon: { color: C.periwinkle, fontSize: 24 }, statsEmptyTitle: { color: C.ink, fontSize: 14, fontWeight: '700', marginTop: 8 }, statsEmptyCopy: { color: C.muted, fontSize: 10, lineHeight: 15, textAlign: 'center', marginTop: 5 }, statsBreakdownCard: { marginTop: 22, padding: 16, borderRadius: 21, backgroundColor: '#FFF', shadowColor: '#706C98', shadowOpacity: 0.08, shadowRadius: 11, shadowOffset: { width: 0, height: 5 }, elevation: 2 }, inputMixTrack: { height: 12, marginTop: 16, borderRadius: 6, overflow: 'hidden', flexDirection: 'row', backgroundColor: '#E8E7F3' }, inputMixDictation: { height: 12, backgroundColor: C.coral }, inputMixWriting: { height: 12, backgroundColor: C.periwinkle }, inputMixLegend: { marginTop: 13, flexDirection: 'row', justifyContent: 'space-between', gap: 10 }, inputMixLegendItem: { flex: 1, flexDirection: 'row', alignItems: 'center' }, inputMixDot: { width: 8, height: 8, borderRadius: 4, marginRight: 5 }, inputMixLabel: { color: C.muted, fontSize: 8, flex: 1 }, inputMixValue: { color: C.ink, fontSize: 9, fontWeight: '700' }, statsInsightCard: { marginTop: 17, padding: 17, borderRadius: 21, backgroundColor: '#FFF4E8' }, statsInsightEyebrow: { color: '#A97819', fontSize: 8, letterSpacing: 0.8, fontWeight: '700' }, statsInsightTitle: { color: C.ink, fontSize: 15, lineHeight: 20, fontWeight: '700', marginTop: 8 }, statsInsightCopy: { color: '#866F50', fontSize: 10, lineHeight: 15, marginTop: 5 }, statsInsightMetric: { marginTop: 14, paddingTop: 11, borderTopWidth: 1, borderTopColor: '#F0DDB8', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }, statsInsightMetricLabel: { color: '#A97819', fontSize: 7, letterSpacing: 0.55, fontWeight: '700' }, statsInsightMetricValue: { color: C.ink, fontSize: 12, fontWeight: '700' }, statsBookCard: { marginTop: 10, padding: 16, borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.78)', flexDirection: 'row', alignItems: 'center' }, statsBookCardDivider: { width: 1, height: 40, backgroundColor: '#E8E7EF', marginHorizontal: 15 }, statsBookCardLabel: { color: C.muted, fontSize: 7, letterSpacing: 0.5, fontWeight: '700' }, statsBookCardValue: { color: C.ink, fontSize: 19, fontWeight: '700', marginTop: 6 }, winGrid: { flexDirection: 'row', gap: 10 }, winCard: { flex: 1, padding: 15, borderRadius: 20, minHeight: 123 }, winIcon: { fontSize: 19, color: C.periwinkle }, winValue: { color: C.ink, fontWeight: '700', fontSize: 21, marginTop: 15 }, winLabel: { color: C.muted, fontSize: 8, letterSpacing: 0.55, fontWeight: '700', marginTop: 5 },
+  librarySectionEyebrow: { color: C.muted, fontSize: 8, letterSpacing: 1, fontWeight: '700', marginTop: 22, marginBottom: 9 }, libraryProjectCard: { marginBottom: 11, padding: 12, borderRadius: 21, backgroundColor: 'rgba(255,255,255,0.82)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.9)', shadowColor: '#68638D', shadowOpacity: 0.08, shadowRadius: 10, shadowOffset: { width: 0, height: 5 }, elevation: 2 }, libraryProjectCardArchived: { opacity: 0.66 }, libraryProjectTop: { flexDirection: 'row', alignItems: 'center' }, projectType: { color: C.muted, fontSize: 9, marginTop: 3 }, projectOverflowButton: { width: 34, height: 34, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F4F2FF' }, projectOverflowText: { color: C.muted, fontSize: 13, letterSpacing: 1, marginTop: -6 }, projectStats: { marginTop: 11, paddingTop: 10, borderTopWidth: 1, borderTopColor: '#EBEBF2', flexDirection: 'row', alignItems: 'center', gap: 6 }, projectStatText: { color: C.muted, fontSize: 9, flexShrink: 1 }, projectStatDot: { color: '#B4B5C8', fontSize: 9 }, projectCardActions: { marginTop: 11, flexDirection: 'row', gap: 8 }, projectContinueButton: { flex: 1, minHeight: 39, paddingHorizontal: 12, borderRadius: 13, backgroundColor: C.periwinkle, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, projectContinueText: { color: '#FFF', fontSize: 10, fontWeight: '700' }, projectContinueArrow: { color: '#FFF', fontSize: 16 }, projectPreviewButton: { minHeight: 39, paddingHorizontal: 12, borderRadius: 13, borderWidth: 1, borderColor: '#D8D5F5', backgroundColor: '#F7F5FF', alignItems: 'center', justifyContent: 'center' }, projectPreviewText: { color: C.periwinkle, fontSize: 10, fontWeight: '700' }, libraryMenuShade: { flex: 1, backgroundColor: 'rgba(29,33,69,0.22)', paddingTop: 80, paddingHorizontal: 20, alignItems: 'flex-end' }, libraryMenu: { width: 270, padding: 13, borderRadius: 22, backgroundColor: '#FBFAFF', shadowColor: '#4E4A7F', shadowOpacity: 0.22, shadowRadius: 20, shadowOffset: { width: 0, height: 9 }, elevation: 8 }, libraryMenuOverline: { color: C.periwinkle, fontSize: 8, letterSpacing: 1, fontWeight: '700', marginBottom: 4 }, libraryMenuTitle: { color: C.ink, fontSize: 15, fontWeight: '700', marginBottom: 5 }, libraryMenuRow: { minHeight: 40, paddingHorizontal: 5, borderTopWidth: 1, borderTopColor: '#ECEBF3', flexDirection: 'row', alignItems: 'center' }, libraryMenuIcon: { color: C.periwinkle, width: 26, fontSize: 15 }, libraryMenuIconDelete: { color: C.coral, width: 26, fontSize: 18 }, libraryMenuLabel: { flex: 1, color: C.ink, fontSize: 10, fontWeight: '600' }, libraryMenuDeleteLabel: { flex: 1, color: C.coral, fontSize: 10, fontWeight: '600' }, libraryMenuArrow: { color: C.muted, fontSize: 18 }, renameModalShade: { flex: 1, justifyContent: 'center', padding: 20, backgroundColor: 'rgba(32,41,84,0.25)' }, renameSheet: { padding: 20, borderRadius: 24, backgroundColor: '#FBFAFF' }, renameTitle: { color: C.ink, fontSize: 22, fontWeight: '700', marginTop: 4 }, renameInput: { minHeight: 46, marginTop: 16, paddingHorizontal: 13, borderRadius: 13, borderWidth: 1, borderColor: '#DCDCEA', color: C.ink, fontSize: 13, backgroundColor: '#FFF' }, renameActions: { marginTop: 15, flexDirection: 'row', justifyContent: 'flex-end', gap: 9 }, renameCancel: { minHeight: 40, paddingHorizontal: 13, borderRadius: 12, alignItems: 'center', justifyContent: 'center' }, renameCancelText: { color: C.muted, fontSize: 10, fontWeight: '700' }, renameSave: { minHeight: 40, paddingHorizontal: 14, borderRadius: 12, backgroundColor: C.periwinkle, alignItems: 'center', justifyContent: 'center' }, renameSaveText: { color: '#FFF', fontSize: 10, fontWeight: '700' },
+  studioPage: { paddingBottom: 7 }, studioHeader: { minHeight: 57, flexDirection: 'row', alignItems: 'center' }, studioBackButton: { width: 39, height: 39, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.72)' }, studioBackIcon: { color: C.ink, fontSize: 28, lineHeight: 29, marginTop: -2 }, studioHeaderCopy: { flex: 1, marginLeft: 11, marginRight: 8 }, studioOverline: { color: C.muted, fontSize: 7, letterSpacing: 1, fontWeight: '700' }, studioHeaderTitle: { color: C.ink, fontSize: 20, fontWeight: '700', marginTop: 3 }, studioHeaderMeta: { color: C.muted, fontSize: 8, marginTop: 3 }, studioOverflowButton: { width: 39, height: 39, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.72)' }, studioOverflowText: { color: C.muted, fontSize: 14, letterSpacing: 1, marginTop: -7 }, studioTabs: { gap: 7, paddingTop: 10, paddingBottom: 4, paddingRight: 20 }, studioTab: { minWidth: 80, minHeight: 35, paddingHorizontal: 12, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.65)' }, studioTabSelected: { backgroundColor: C.periwinkle }, studioTabText: { color: C.muted, fontSize: 10, fontWeight: '700' }, studioTabTextSelected: { color: '#FFF' }, studioKicker: { color: C.periwinkle, fontSize: 8, letterSpacing: 1, fontWeight: '700' }, studioSummaryCard: { marginTop: 15, padding: 16, borderRadius: 22, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#FFF', shadowColor: '#6B6794', shadowOpacity: 0.1, shadowRadius: 12, shadowOffset: { width: 0, height: 6 }, elevation: 3 }, studioSummaryTitle: { color: C.ink, fontSize: 17, fontWeight: '700', marginTop: 5 }, studioSummaryCopy: { color: C.muted, fontSize: 9, marginTop: 5 }, studioStatusDot: { width: 35, height: 35, borderRadius: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFF1D0' }, studioStatusDotFinished: { backgroundColor: '#E9F7EB' }, studioStatusDotText: { color: '#A97819', fontSize: 20, fontWeight: '700' }, studioAccordion: { marginTop: 10, borderRadius: 19, backgroundColor: 'rgba(255,255,255,0.8)', borderWidth: 1, borderColor: '#ECEBF3' }, studioAccordionHeader: { minHeight: 66, padding: 12, flexDirection: 'row', alignItems: 'center' }, studioAccordionIcon: { width: 27, height: 27, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F0EEFF' }, studioAccordionIconText: { color: C.periwinkle, fontSize: 17, fontWeight: '700' }, studioAccordionCopy: { flex: 1, marginLeft: 10 }, studioAccordionTitle: { color: C.ink, fontSize: 13, fontWeight: '700' }, studioAccordionHint: { color: C.muted, fontSize: 9, marginTop: 3 }, studioAccordionChevron: { color: C.periwinkle, fontSize: 18, marginLeft: 8 }, studioAccordionBody: { paddingHorizontal: 12, paddingBottom: 12, borderTopWidth: 1, borderTopColor: '#EEEEF4' }, studioOrderRow: { minHeight: 53, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#F0EFF5', flexDirection: 'row', alignItems: 'center', gap: 5 }, studioOrderNumber: { width: 27, height: 27, borderRadius: 9, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F0EEFF' }, studioOrderNumberText: { color: C.periwinkle, fontSize: 8, fontWeight: '700' }, studioOrderCopy: { flex: 1, minWidth: 0 }, studioOrderTitle: { color: C.ink, fontSize: 11, fontWeight: '700' }, studioOrderMeta: { color: C.muted, fontSize: 8, marginTop: 3 }, studioMoveButton: { width: 26, height: 26, borderRadius: 9, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F4F2FF' }, studioMoveDisabled: { opacity: 0.3 }, studioMoveText: { color: C.periwinkle, fontSize: 14, fontWeight: '700' }, studioOpenWrite: { minHeight: 27, paddingHorizontal: 7, borderRadius: 9, backgroundColor: '#FFF3E9', alignItems: 'center', justifyContent: 'center' }, studioOpenWriteText: { color: '#A97819', fontSize: 8, fontWeight: '700' }, studioMatterRow: { paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#F0EFF5', flexDirection: 'row', alignItems: 'flex-start' }, studioCheck: { width: 23, height: 23, borderRadius: 8, borderWidth: 1.5, borderColor: '#D2D2DF', alignItems: 'center', justifyContent: 'center' }, studioCheckOn: { backgroundColor: C.periwinkle, borderColor: C.periwinkle }, studioCheckText: { color: '#FFF', fontSize: 12, fontWeight: '700' }, studioMatterCopy: { flex: 1, marginLeft: 10 }, studioMatterTitle: { color: C.ink, fontSize: 11, fontWeight: '700' }, studioMatterMeta: { color: C.muted, fontSize: 8, marginTop: 3 }, studioMatterInput: { minHeight: 51, marginTop: 7, padding: 8, borderRadius: 10, borderWidth: 1, borderColor: '#E2E1EC', color: C.ink, fontSize: 10, lineHeight: 15, textAlignVertical: 'top', backgroundColor: '#FFF' }, studioManuscriptRow: { minHeight: 53, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#F0EFF5', flexDirection: 'row', alignItems: 'center' }, studioManuscriptDot: { width: 27, height: 27, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F2F1F7' }, studioManuscriptDotComplete: { backgroundColor: '#E9F7EB' }, studioManuscriptDotText: { color: C.muted, fontSize: 15, fontWeight: '700' }, studioControlRow: { minHeight: 51, borderBottomWidth: 1, borderBottomColor: '#F0EFF5', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, studioControlLabel: { color: C.ink, fontSize: 10, fontWeight: '700' }, studioControlOptions: { flexDirection: 'row', gap: 6 }, studioOption: { minHeight: 30, paddingHorizontal: 9, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F2F1F7' }, studioOptionSelected: { backgroundColor: '#EEEDFF', borderWidth: 1, borderColor: C.periwinkle }, studioOptionText: { color: C.muted, fontSize: 9, fontWeight: '700' }, studioPrimaryButton: { minHeight: 49, marginTop: 16, paddingHorizontal: 15, borderRadius: 15, backgroundColor: C.periwinkle, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, studioPrimaryButtonText: { color: '#FFF', fontSize: 11, fontWeight: '700' }, studioPrimaryButtonArrow: { color: '#FFF', fontSize: 19 }, studioStopButton: { backgroundColor: C.coral }, studioMenuShade: { flex: 1, backgroundColor: 'rgba(29,33,69,0.22)', paddingTop: 75, paddingHorizontal: 20, alignItems: 'flex-end' }, studioMenu: { width: 260, padding: 13, borderRadius: 21, backgroundColor: '#FBFAFF' }, studioPickerShade: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(32,41,84,0.22)' }, studioPickerDismiss: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 }, studioPickerSheet: { padding: 20, paddingBottom: 25, borderTopLeftRadius: 29, borderTopRightRadius: 29, backgroundColor: '#FBFAFF' }, studioPickerOverline: { color: C.periwinkle, fontSize: 8, letterSpacing: 1, fontWeight: '700' }, studioPickerTitle: { color: C.ink, fontSize: 22, fontWeight: '700', marginTop: 5, marginBottom: 8 }, studioPickerRow: { minHeight: 57, marginTop: 8, padding: 9, borderRadius: 16, flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF', borderWidth: 1, borderColor: '#ECEBF3' }, studioPickerRowSelected: { backgroundColor: '#F3F1FF', borderColor: '#D9D2FA' }, studioPickerMark: { width: 36, height: 36, borderRadius: 12, alignItems: 'center', justifyContent: 'center' }, studioPickerMarkText: { color: '#FFF', fontSize: 16 }, studioPickerCopy: { flex: 1, marginLeft: 9 }, studioPickerBookTitle: { color: C.ink, fontSize: 11, fontWeight: '700' }, studioPickerBookMeta: { color: C.muted, fontSize: 8, marginTop: 3 }, studioPickerCheck: { color: C.periwinkle, fontSize: 17, fontWeight: '700' }, studioError: { minHeight: 500, alignItems: 'center', justifyContent: 'center', padding: 24 }, studioErrorIcon: { color: C.periwinkle, fontSize: 29 }, studioErrorTitle: { color: C.ink, fontSize: 22, fontWeight: '700', marginTop: 10 }, studioErrorCopy: { color: C.muted, fontSize: 11, textAlign: 'center', marginTop: 7, lineHeight: 17 },
+  readerToolbar: { marginTop: 15, padding: 15, borderRadius: 20, backgroundColor: '#FFF', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, readerToolbarTitle: { color: C.ink, fontSize: 16, fontWeight: '700', marginTop: 5 }, readerListenButton: { minHeight: 35, paddingHorizontal: 10, borderRadius: 12, backgroundColor: '#FFF3E9', alignItems: 'center', justifyContent: 'center' }, readerListenText: { color: '#A97819', fontSize: 9, fontWeight: '700' }, readerToc: { marginTop: 11, padding: 13, borderRadius: 20, backgroundColor: '#F2F0FF' }, readerTocTitle: { color: C.ink, fontSize: 12, fontWeight: '700', marginBottom: 5 }, readerTocRow: { minHeight: 32, paddingHorizontal: 7, borderRadius: 9, flexDirection: 'row', alignItems: 'center' }, readerTocRowSelected: { backgroundColor: '#FFF' }, readerTocNumber: { color: C.periwinkle, width: 23, fontSize: 8, fontWeight: '700' }, readerTocLabel: { flex: 1, color: C.ink, fontSize: 9 }, readerTocState: { color: C.muted, fontSize: 10 }, readerBook: { marginTop: 14, padding: 18, borderRadius: 23, backgroundColor: '#FFFDF9', shadowColor: '#81798C', shadowOpacity: 0.1, shadowRadius: 15, shadowOffset: { width: 0, height: 7 }, elevation: 3 }, readerTitlePage: { minHeight: 180, alignItems: 'center', justifyContent: 'center', borderBottomWidth: 1, borderBottomColor: '#EEE7DD' }, readerTitleKicker: { color: C.coral, fontSize: 8, letterSpacing: 1.2, fontWeight: '700' }, readerBookTitle: { maxWidth: 275, color: C.ink, fontSize: 31, lineHeight: 36, fontWeight: '700', textAlign: 'center', marginTop: 13 }, readerBookTitleModern: { letterSpacing: 1, textTransform: 'uppercase' }, readerBookStatus: { color: C.muted, fontSize: 9, marginTop: 9 }, readerMatter: { paddingVertical: 24, borderBottomWidth: 1, borderBottomColor: '#EEE7DD' }, readerMatterTitle: { color: C.ink, fontSize: 15, fontWeight: '700', textAlign: 'center', marginBottom: 10 }, readerChapter: { paddingTop: 29, paddingBottom: 8 }, readerChapterTitle: { color: C.ink, fontSize: 21, lineHeight: 27, fontWeight: '700', marginBottom: 14 }, readerChapterTitleModern: { color: C.periwinkle, letterSpacing: 0.7, textTransform: 'uppercase', fontSize: 17 }, readerBody: { color: '#46465C', fontSize: 16, lineHeight: 25 }, readerMissing: { padding: 15, borderRadius: 15, backgroundColor: '#F5F2FF', alignItems: 'center' }, readerMissingIcon: { color: C.periwinkle, fontSize: 22 }, readerMissingTitle: { color: C.ink, fontSize: 12, fontWeight: '700', marginTop: 7 }, readerMissingCopy: { color: C.muted, fontSize: 9, lineHeight: 14, textAlign: 'center', marginTop: 4 }, readerWriteButton: { minHeight: 33, marginTop: 11, paddingHorizontal: 10, borderRadius: 10, backgroundColor: C.periwinkle, alignItems: 'center', justifyContent: 'center' }, readerWriteButtonText: { color: '#FFF', fontSize: 9, fontWeight: '700' }, listenHero: { marginTop: 15, padding: 17, borderRadius: 22, backgroundColor: '#F1F0FF', flexDirection: 'row', alignItems: 'center' }, listenOrb: { width: 55, height: 55, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: C.periwinkle }, listenOrbText: { color: '#FFF', fontSize: 25 }, listenHeroCopy: { flex: 1, marginLeft: 13 }, listenTitle: { color: C.ink, fontSize: 19, fontWeight: '700', marginTop: 5 }, listenCopy: { color: C.muted, fontSize: 10, lineHeight: 15, marginTop: 5 }, listenControls: { marginTop: 2 }, listenNote: { color: '#9A9CB1', fontSize: 8, textAlign: 'center', marginTop: 7 }, studioSectionTitle: { color: C.ink, fontSize: 16, fontWeight: '700', marginTop: 23, marginBottom: 9 }, listenRow: { minHeight: 61, padding: 10, marginBottom: 7, borderRadius: 16, backgroundColor: '#FFF', flexDirection: 'row', alignItems: 'center' }, listenRowIcon: { width: 33, height: 33, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFF3E9' }, listenRowIconText: { color: '#A97819', fontSize: 15 }, listenRowButton: { minHeight: 30, paddingHorizontal: 9, borderRadius: 10, backgroundColor: '#EEEDFF', justifyContent: 'center' }, listenRowButtonText: { color: C.periwinkle, fontSize: 8, fontWeight: '700' }, exportHero: { marginTop: 15, padding: 18, borderRadius: 22, backgroundColor: '#EAF4FF' }, exportTitle: { color: C.ink, fontSize: 24, lineHeight: 29, fontWeight: '700', marginTop: 6 }, exportCopy: { color: C.muted, fontSize: 11, lineHeight: 17, marginTop: 8 }, exportStats: { marginTop: 11, padding: 17, borderRadius: 19, backgroundColor: '#FFF', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-around' }, exportStatValue: { color: C.ink, fontSize: 22, fontWeight: '700', textAlign: 'center' }, exportStatLabel: { color: C.muted, fontSize: 8, letterSpacing: 0.7, fontWeight: '700', marginTop: 4, textAlign: 'center' }, exportStatDivider: { width: 1, height: 34, backgroundColor: '#E9E8F0' }, exportFootnote: { color: '#9A9CB1', fontSize: 9, lineHeight: 14, textAlign: 'center', marginTop: 14, paddingHorizontal: 12 },
   navShell: { position: 'absolute', left: 13, right: 13, bottom: 12, height: 67, paddingHorizontal: 4, backgroundColor: 'rgba(255,255,255,0.94)', borderRadius: 24, flexDirection: 'row', justifyContent: 'space-around', alignItems: 'center', shadowColor: '#5F5C8B', shadowOpacity: 0.16, shadowRadius: 18, shadowOffset: { width: 0, height: 8 }, elevation: 7 }, navItem: { width: 45, alignItems: 'center' }, navIcon: { height: 26, color: '#A3A6C1', fontSize: 18 }, navIconActive: { color: C.periwinkle }, navLabel: { color: '#A3A6C1', fontSize: 8 }, navLabelActive: { color: C.ink, fontWeight: '700' },
 });
