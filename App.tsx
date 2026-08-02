@@ -1,7 +1,7 @@
 import { StatusBar } from 'expo-status-bar';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useState } from 'react';
-import { Modal, Pressable, SafeAreaView, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { Animated, Modal, Pressable, SafeAreaView, ScrollView, StyleSheet, Switch, Text, TextInput, TextInputProps, View, useWindowDimensions } from 'react-native';
 
 type Page = 'Library' | 'Plan' | 'Write' | 'Journey' | 'Profile' | 'Stats';
 
@@ -10,12 +10,38 @@ const C = {
   sage: '#A7D4AD', peach: '#FFC09D', coral: '#F78385', gold: '#F5C75C', paper: '#F8F8FF', white: '#FFFFFF',
 };
 
+type DictationInputProps = TextInputProps & { grow?: boolean };
+
+function DictationInput({ style, accessibilityLabel, grow = false, ...props }: DictationInputProps) {
+  const inputRef = useRef<TextInput>(null);
+  return <View style={[s.dictationField, grow && s.dictationFieldGrow]}>
+    <TextInput ref={inputRef} {...props} accessibilityLabel={accessibilityLabel} style={[style, s.dictationTextInput]} />
+    <Pressable onPress={() => inputRef.current?.focus()} style={s.dictationButton} accessibilityRole="button" accessibilityLabel={`Open phone dictation${accessibilityLabel ? ` for ${accessibilityLabel}` : ''}`}>
+      <Text style={s.dictationIcon}>🎙</Text>
+    </Pressable>
+  </View>;
+}
+
 const pageMeta: Record<Page, { icon: string; short: string }> = {
   Library: { icon: '▦', short: 'Library' }, Plan: { icon: '⌘', short: 'Plan' }, Write: { icon: '✎', short: 'Write' },
-  Journey: { icon: '✦', short: 'Journey' }, Profile: { icon: '◉', short: 'Profile' }, Stats: { icon: '▥', short: 'Stats' },
+  Journey: { icon: '✦', short: 'Journey' }, Stats: { icon: '▥', short: 'Stats' }, Profile: { icon: '◉', short: 'Profile' },
 };
 
-type Project = { title: string; detail: string; color: string; mark: string; type: string; pageGoal: string; unitGoal: string };
+const bottomNavPages: Page[] = ['Library', 'Plan', 'Write', 'Journey', 'Stats', 'Profile'];
+
+type ProjectPlan = {
+  structure: Record<string, boolean>;
+  idea: string;
+  plotThread: string;
+  people: string;
+  plotNotes: Record<string, string>;
+  unitIdeas: string[];
+  partNotes: Record<string, string>;
+  drafts: Record<string, string>;
+  writeIndex: number;
+};
+
+type Project = { title: string; color: string; mark: string; type: string; pageGoal: string; unitGoal: string; plan: ProjectPlan; updatedAt?: number };
 
 const projectTypes = [
   { name: 'Fiction Book', example: 'Novel, novella, short stories', icon: '✦', color: C.periwinkle },
@@ -345,6 +371,11 @@ const defaultStructureFor = (blueprint: PlanBlueprint) => blueprint.structureIte
   return result;
 }, {});
 
+const defaultPlanFor = (type: string): ProjectPlan => ({
+  structure: defaultStructureFor(planBlueprints[type] ?? planBlueprints['Custom Project']),
+  idea: '', plotThread: '', people: '', plotNotes: {}, unitIdeas: [], partNotes: {}, drafts: {}, writeIndex: 0,
+});
+
 function Ambient({ children }: { children: React.ReactNode }) {
   return <View style={s.page}>
     <LinearGradient colors={['#EAF0FF', '#FAF7FF', '#FFF9F1']} style={StyleSheet.absoluteFill} />
@@ -374,7 +405,7 @@ function Library({ projects, activeProject, onPage, onSelectProject, onProjectsC
 
   const createProject = () => {
     const name = projectName.trim() || `Untitled ${selectedType.name}`;
-    onProjectsChange([{ title: name, detail: `New ${selectedType.name} · 0%`, color: selectedType.color, mark: selectedType.icon, type: selectedType.name, pageGoal: planBlueprints[selectedType.name].defaultPages, unitGoal: planBlueprints[selectedType.name].defaultUnits }, ...projects]);
+    onProjectsChange([{ title: name, color: selectedType.color, mark: selectedType.icon, type: selectedType.name, pageGoal: planBlueprints[selectedType.name].defaultPages, unitGoal: planBlueprints[selectedType.name].defaultUnits, plan: defaultPlanFor(selectedType.name), updatedAt: Date.now() }, ...projects]);
     onSelectProject(name);
     setProjectName('');
     setComposerOpen(false);
@@ -382,23 +413,23 @@ function Library({ projects, activeProject, onPage, onSelectProject, onProjectsC
 
   return <><PageHeader page="Library" onPage={onPage} /><Text style={s.intro}>Pick up a thread, or begin a brand new little world.</Text>
     <View style={s.focusCard}><LinearGradient colors={['#A6DDF7', '#8B8AE8']} style={StyleSheet.absoluteFill} />
-      <Text style={s.focusEyebrow}>CONTINUE WRITING</Text><Text style={s.focusTitle}>{activeProject}</Text><Text style={s.focusCopy}>Your next scene is waiting for you.</Text>
-      <Pressable onPress={() => onPage('Write')} style={s.lightAction}><Text style={s.lightActionText}>Open manuscript</Text><Text style={s.lightArrow}>→</Text></Pressable>
+      <Text style={s.focusEyebrow}>YOUR SELECTED BOOK</Text><Text style={s.focusTitle}>{activeProject}</Text><Text style={s.focusCopy}>Follow the thread from first idea to finished manuscript.</Text>
+      <View style={s.focusActions}><Pressable onPress={() => onPage('Write')} style={s.lightAction}><Text style={s.lightActionText}>Open manuscript</Text><Text style={s.lightArrow}>→</Text></Pressable><Pressable onPress={() => onPage('Journey')} style={s.focusJourneyAction}><Text style={s.focusJourneyActionText}>View journey</Text></Pressable></View>
       <Text style={s.focusShape}>◢</Text>
     </View>
     <View style={s.sectionBar}><Text style={s.sectionTitle}>Your projects</Text><Pressable onPress={() => setComposerOpen(true)} style={s.newProjectButton}><Text style={s.newProjectText}>+ NEW</Text></Pressable></View>
-    {projects.map((project) => <Pressable key={project.title} onPress={() => onSelectProject(project.title)} style={[s.projectRow, activeProject === project.title && s.projectRowActive]}>
+    {projects.map((project) => { const projectSnapshot = getJourneySnapshot(project); return <Pressable key={project.title} onPress={() => onSelectProject(project.title)} style={[s.projectRow, activeProject === project.title && s.projectRowActive]}>
       <View style={[s.projectMark, { backgroundColor: project.color }]}><Text style={s.projectMarkText}>{project.mark}</Text></View>
-      <View style={s.projectCopy}><Text style={s.projectTitle}>{project.title}</Text><Text style={s.projectDetail}>{project.detail}</Text></View>
+      <View style={s.projectCopy}><Text style={s.projectTitle}>{project.title}</Text><Text style={s.projectDetail}>{projectSnapshot.stage} · {projectSnapshot.progressPercent}%</Text></View>
       {activeProject === project.title ? <View style={s.continueTag}><Text style={s.continueTagText}>OPEN</Text></View> : <Text style={s.chevron}>›</Text>}
-    </Pressable>)}
+    </Pressable>; })}
     <Pressable onPress={() => setComposerOpen(true)} style={s.addProjectRow}><View style={s.addProjectPlus}><Text style={s.addProjectPlusText}>+</Text></View><View><Text style={s.addProjectTitle}>Start another project</Text><Text style={s.addProjectSub}>Choose a format and make it yours</Text></View></Pressable>
 
     <Modal animationType="slide" visible={composerOpen} transparent onRequestClose={() => setComposerOpen(false)}>
       <View style={s.modalShade}><View style={s.composerSheet}>
         <View style={s.sheetHandle} />
         <View style={s.composerHeader}><View><Text style={s.composerOverline}>A FRESH BEGINNING</Text><Text style={s.composerTitle}>What are you making?</Text></View><Pressable onPress={() => setComposerOpen(false)} style={s.closeButton}><Text style={s.closeButtonText}>×</Text></Pressable></View>
-        <TextInput value={projectName} onChangeText={setProjectName} placeholder="Give your project a name" placeholderTextColor="#9298B3" style={s.projectInput} returnKeyType="done" onSubmitEditing={createProject} />
+        <DictationInput value={projectName} onChangeText={setProjectName} placeholder="Give your project a name" placeholderTextColor="#9298B3" style={s.projectInput} returnKeyType="done" onSubmitEditing={createProject} accessibilityLabel="Project name" />
         <Text style={s.typePrompt}>CHOOSE A PROJECT TYPE</Text>
         <ScrollView style={s.typeScroller} showsVerticalScrollIndicator={false} contentContainerStyle={s.typeGrid}>
           {projectTypes.map((type) => <Pressable key={type.name} onPress={() => setSelectedType(type)} style={[s.typeCard, selectedType.name === type.name && s.typeCardSelected]}>
@@ -413,46 +444,77 @@ function Library({ projects, activeProject, onPage, onSelectProject, onProjectsC
   </>;
 }
 
-function Plan({ projects, activeProject, onSelectProject, onUpdateProject }: { projects: Project[]; activeProject: string; onSelectProject: (title: string) => void; onUpdateProject: (title: string, changes: Partial<Project>) => void }) {
+function Plan({ projects, activeProject, onSelectProject, onUpdateProject, onPage }: { projects: Project[]; activeProject: string; onSelectProject: (title: string) => void; onUpdateProject: (title: string, changes: Partial<Project>) => void; onPage: (page: Page) => void }) {
   const currentProject = projects.find((project) => project.title === activeProject) ?? projects[0];
-  const initialBlueprint = planBlueprints[currentProject?.type] ?? planBlueprints['Custom Project'];
+  const currentPlan = currentProject?.plan ?? defaultPlanFor(currentProject?.type ?? 'Custom Project');
   const [step, setStep] = useState(0);
-  const [idea, setIdea] = useState('');
-  const [plotThread, setPlotThread] = useState('');
-  const [people, setPeople] = useState('');
-  const [structure, setStructure] = useState(defaultStructureFor(initialBlueprint));
+  const [idea, setIdea] = useState(currentPlan.idea);
+  const [plotThread, setPlotThread] = useState(currentPlan.plotThread);
+  const [people, setPeople] = useState(currentPlan.people);
+  const [projectMenuOpen, setProjectMenuOpen] = useState(false);
+  const [structure, setStructure] = useState(currentPlan.structure);
   const [structurePage, setStructurePage] = useState(0);
-  const [plotNotes, setPlotNotes] = useState<Record<string, string>>({});
-  const [unitIdeas, setUnitIdeas] = useState<string[]>([]);
+  const [plotNotes, setPlotNotes] = useState<Record<string, string>>(currentPlan.plotNotes);
+  const [unitIdeas, setUnitIdeas] = useState<string[]>(currentPlan.unitIdeas);
+  const [storyMapPage, setStoryMapPage] = useState(0);
 
   const selectedType = projectTypes.find((type) => type.name === currentProject?.type) ?? projectTypes[projectTypes.length - 1];
   const blueprint = planBlueprints[selectedType.name];
   const pageGoal = currentProject?.pageGoal ?? blueprint.defaultPages;
   const unitGoal = currentProject?.unitGoal ?? blueprint.defaultUnits;
-  const unitCount = Math.min(Math.max(Number.parseInt(unitGoal, 10) || 0, 0), 24);
+  const unitCount = Math.max(Number.parseInt(unitGoal, 10) || 0, 0);
   const structurePageSize = 4;
   const structurePageCount = Math.max(1, Math.ceil(blueprint.structureItems.length / structurePageSize));
   const visibleStructureItems = blueprint.structureItems.slice(structurePage * structurePageSize, (structurePage + 1) * structurePageSize);
+  const structurePageStart = structurePage * structurePageSize + 1;
+  const structurePageEnd = Math.min((structurePage + 1) * structurePageSize, blueprint.structureItems.length);
+  const storyMapPromptPageSize = 3;
+  const storyMapPromptPageCount = Math.max(1, Math.ceil(blueprint.plotPrompts.length / storyMapPromptPageSize));
+  const storyMapUnitPageSize = 4;
+  const storyMapUnitPageCount = Math.max(1, Math.ceil(unitCount / storyMapUnitPageSize));
+  const peoplePageIndex = 2 + storyMapPromptPageCount;
+  const unitPagesStartIndex = peoplePageIndex + 1;
+  const storyMapPageCount = unitPagesStartIndex + storyMapUnitPageCount;
+  const activeStoryMapPage = Math.min(storyMapPage, storyMapPageCount - 1);
+  const activePromptPage = activeStoryMapPage - 2;
+  const activeUnitPage = activeStoryMapPage - unitPagesStartIndex;
+  const visiblePlotPrompts = blueprint.plotPrompts.slice(activePromptPage * storyMapPromptPageSize, (activePromptPage + 1) * storyMapPromptPageSize);
+  const visibleUnitStart = activeUnitPage * storyMapUnitPageSize;
+  const visibleUnitIndexes = Array.from({ length: Math.min(storyMapUnitPageSize, Math.max(0, unitCount - visibleUnitStart)) }, (_, index) => visibleUnitStart + index);
+  const storyMapPageLabel = activeStoryMapPage === 0 ? 'Big idea' : activeStoryMapPage === 1 ? 'Arc overview' : activeStoryMapPage < peoplePageIndex ? `${blueprint.plotLabel} · ${activePromptPage + 1} / ${storyMapPromptPageCount}` : activeStoryMapPage === peoplePageIndex ? blueprint.peopleLabel : `${blueprint.unitLabelPlural[0].toUpperCase() + blueprint.unitLabelPlural.slice(1)} · ${activeUnitPage + 1} / ${storyMapUnitPageCount}`;
+
+  const persistPlan = (changes: Partial<ProjectPlan>) => onUpdateProject(activeProject, { plan: { ...currentPlan, ...changes } });
 
   const chooseProject = (project: Project) => {
     if (project.title === activeProject) return;
-    const nextBlueprint = planBlueprints[project.type] ?? planBlueprints['Custom Project'];
+    const nextPlan = project.plan ?? defaultPlanFor(project.type);
     onSelectProject(project.title);
-    setIdea('');
-    setPlotThread('');
-    setPeople('');
-    setStructure(defaultStructureFor(nextBlueprint));
+    setIdea(nextPlan.idea);
+    setPlotThread(nextPlan.plotThread);
+    setPeople(nextPlan.people);
+    setStructure(nextPlan.structure);
     setStructurePage(0);
-    setPlotNotes({});
-    setUnitIdeas([]);
+    setPlotNotes(nextPlan.plotNotes);
+    setUnitIdeas(nextPlan.unitIdeas);
+    setStoryMapPage(0);
   };
 
-  const updatePlotNote = (label: string, value: string) => setPlotNotes((current) => ({ ...current, [label]: value }));
-  const updateUnitIdea = (index: number, value: string) => setUnitIdeas((current) => {
-    const next = [...current];
+  const updatePlotNote = (label: string, value: string) => {
+    const next = { ...plotNotes, [label]: value };
+    setPlotNotes(next);
+    persistPlan({ plotNotes: next });
+  };
+  const updateUnitIdea = (index: number, value: string) => {
+    const next = [...unitIdeas];
     next[index] = value;
-    return next;
-  });
+    setUnitIdeas(next);
+    persistPlan({ unitIdeas: next });
+  };
+  const toggleStructure = (label: string) => {
+    const next = { ...structure, [label]: !structure[label] };
+    setStructure(next);
+    persistPlan({ structure: next });
+  };
 
   const stepMeta = [
     { label: 'Scope', short: 'Size + pace' },
@@ -462,27 +524,21 @@ function Plan({ projects, activeProject, onSelectProject, onUpdateProject }: { p
 
   return <>
     <View style={s.planHero}>
+      <Pressable onPress={() => setProjectMenuOpen(true)} style={s.planHeroSwitcher}>
+        <View style={[s.planTopIcon, { backgroundColor: selectedType.color }]}><Text style={s.planTopIconText}>{selectedType.icon}</Text></View>
+        <View style={s.planTopSwitcherCopy}><Text style={s.planTopOverline}>WORKING ON</Text><Text numberOfLines={1} style={s.planTopTitle}>{currentProject?.title ?? 'Choose a project'}</Text></View>
+        <Text style={s.planTopChevron}>⌄</Text>
+      </Pressable>
       <Text style={s.planHeroOverline}>A KINDER WAY TO BEGIN</Text>
       <Text style={s.planHeroTitle}>Plan the shape{`\n`}of your work.</Text>
       <Text style={s.planHeroCopy}>Choose a format, then make the plan feel like yours.</Text>
       <Text style={s.planHeroOrb}>◒</Text>
     </View>
 
-    <Text style={s.planSwitcherLabel}>SWITCH PROJECT</Text>
-    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.planTypeRow}>
-      {projects.map((project) => {
-        const projectType = projectTypes.find((type) => type.name === project.type) ?? projectTypes[projectTypes.length - 1];
-        return <Pressable key={project.title} onPress={() => chooseProject(project)} style={[s.planProjectPill, activeProject === project.title && s.planTypePillActive]}>
-          <View style={[s.planTypeDot, { backgroundColor: projectType.color }]}><Text style={s.planTypeDotText}>{projectType.icon}</Text></View>
-          <View style={s.planProjectCopy}><Text numberOfLines={1} style={[s.planTypeText, activeProject === project.title && s.planTypeTextActive]}>{project.title}</Text><Text numberOfLines={1} style={s.planProjectType}>{project.type}</Text></View>
-        </Pressable>;
-      })}
-    </ScrollView>
-
     <View style={s.planSelectedCard}>
       <View style={[s.planSelectedIcon, { backgroundColor: selectedType.color }]}><Text style={s.planSelectedIconText}>{selectedType.icon}</Text></View>
       <View style={{ flex: 1 }}><Text style={s.planSelectedOverline}>PLANNING</Text><Text style={s.planSelectedTitle}>{selectedType.name}</Text><Text style={s.planSelectedSub}>{blueprint.unitLabelPlural} · {pageGoal || '—'} pages</Text></View>
-      <Text style={s.planSelectedArrow}>✦</Text>
+      <Pressable onPress={() => onPage('Journey')} style={s.planJourneyLink}><Text style={s.planJourneyLinkText}>Journey</Text><Text style={s.planSelectedArrow}>✦</Text></Pressable>
     </View>
 
     <View style={s.planSteps}>
@@ -506,42 +562,51 @@ function Plan({ projects, activeProject, onSelectProject, onUpdateProject }: { p
     {step === 1 && <View style={s.planStepCard}>
       <Text style={s.planSectionKicker}>SECTION 2 · BUILD THE CONTAINER</Text>
       <Text style={s.planSectionTitle}>What belongs in it?</Text>
-      <Text style={s.planSectionCopy}>{blueprint.structureIntro} Keep the suggested pieces, or tap any row to add and take away parts.</Text>
+      <Text style={s.planSectionCopy}>{blueprint.structureIntro} Every part is optional. Recommended pieces start selected, and you can tap any row to add or take away whatever does not fit.</Text>
+      <View style={s.structureLegend}><View style={s.structureLegendItem}><View style={[s.structureLegendDot, s.structureLegendDotRecommended]} /><Text style={s.structureLegendText}>Recommended</Text></View><View style={s.structureLegendItem}><View style={s.structureLegendDot} /><Text style={s.structureLegendText}>Optional</Text></View><Text style={s.structureLegendHint}>Tap to toggle</Text></View>
+      <View style={s.structureChecklistHeader}><View style={s.structureChecklistCopy}><Text style={s.structureChecklistTitle}>PARTS TO INCLUDE</Text><Text style={s.structureChecklistHint}>Showing {structurePageStart}–{structurePageEnd} of {blueprint.structureItems.length} parts</Text></View>{structurePageCount > 1 && <View style={s.structurePager}><Pressable onPress={() => setStructurePage(Math.max(0, structurePage - 1))} disabled={structurePage === 0} style={[s.structurePagerButton, structurePage === 0 && s.structurePagerButtonDisabled]} accessibilityLabel="Previous checklist page"><Text style={s.structurePagerButtonText}>‹</Text></Pressable><Text style={s.structurePagerCount}>{structurePage + 1} / {structurePageCount}</Text><Pressable onPress={() => setStructurePage(Math.min(structurePageCount - 1, structurePage + 1))} disabled={structurePage === structurePageCount - 1} style={[s.structurePagerButton, structurePage === structurePageCount - 1 && s.structurePagerButtonDisabled]} accessibilityLabel="Next checklist page"><Text style={s.structurePagerButtonText}>›</Text></Pressable></View>}</View>
       <View style={s.structureList}>
-        {visibleStructureItems.map((item) => <Pressable key={item.label} onPress={() => setStructure((current) => ({ ...current, [item.label]: !current[item.label] }))} style={[s.structureRow, structure[item.label] && s.structureRowActive]}>
+        {visibleStructureItems.map((item) => <Pressable key={item.label} onPress={() => toggleStructure(item.label)} style={[s.structureRow, structure[item.label] && s.structureRowActive]}>
           <View style={[s.structureCheck, structure[item.label] && s.structureCheckOn]}><Text style={s.structureCheckText}>{structure[item.label] ? '✓' : ''}</Text></View>
           <View style={s.structureCopy}><Text style={s.structureLabel}>{item.label}</Text><Text style={s.structureHelper}>{item.helper}</Text></View>
-          {!item.recommended && <Text style={s.optionalTag}>OPTIONAL</Text>}
+          <Text style={[s.partTag, item.recommended ? s.recommendedTag : s.optionalTag]}>{item.recommended ? 'RECOMMENDED' : 'OPTIONAL'}</Text>
         </Pressable>)}
       </View>
       <View style={s.structureFooterRow}>
         <Text style={[s.structureFooter, s.structureFooterCompact]}>{Object.values(structure).filter(Boolean).length} pieces in your current plan</Text>
-        {structurePageCount > 1 && <View style={s.structurePager}>
-          <Pressable onPress={() => setStructurePage(Math.max(0, structurePage - 1))} disabled={structurePage === 0} style={[s.structurePagerButton, structurePage === 0 && s.structurePagerButtonDisabled]}><Text style={s.structurePagerButtonText}>‹</Text></Pressable>
-          <Text style={s.structurePagerCount}>{structurePage + 1} / {structurePageCount}</Text>
-          <Pressable onPress={() => setStructurePage(Math.min(structurePageCount - 1, structurePage + 1))} disabled={structurePage === structurePageCount - 1} style={[s.structurePagerButton, structurePage === structurePageCount - 1 && s.structurePagerButtonDisabled]}><Text style={s.structurePagerButtonText}>›</Text></Pressable>
-        </View>}
       </View>
     </View>}
 
     {step === 2 && <View style={s.planStepCard}>
       <Text style={s.planSectionKicker}>SECTION 3 · MAKE THE STORY MAP</Text>
       <Text style={s.planSectionTitle}>Put the heart on the page.</Text>
-      <Text style={s.planSectionCopy}>Start loose. These notes are here to give you somewhere to return when the draft gets foggy.</Text>
+      <Text style={s.planSectionCopy}>Start loose. These notes are here to give you somewhere to return when the draft gets foggy. Tap 🎙 on any writing field to use your phone’s dictation.</Text>
 
-      <View style={s.planInputCard}><Text style={s.planInputLabel}>THE BIG IDEA</Text><Text style={s.planInputHint}>One clear sentence is enough for now.</Text><TextInput value={idea} onChangeText={setIdea} placeholder={blueprint.ideaPlaceholder} placeholderTextColor="#9A9DB7" multiline style={s.planTextArea} /></View>
+      <View style={s.storyMapPager}>
+        <Pressable onPress={() => setStoryMapPage(Math.max(0, activeStoryMapPage - 1))} disabled={activeStoryMapPage === 0} style={[s.storyMapPagerButton, activeStoryMapPage === 0 && s.storyMapPagerButtonDisabled]}><Text style={s.storyMapPagerButtonText}>‹</Text></Pressable>
+        <View style={s.storyMapPagerCopy}><Text style={s.storyMapPagerLabel}>{storyMapPageLabel}</Text><Text style={s.storyMapPagerCount}>PAGE {activeStoryMapPage + 1} OF {storyMapPageCount}</Text></View>
+        <Pressable onPress={() => setStoryMapPage(Math.min(storyMapPageCount - 1, activeStoryMapPage + 1))} disabled={activeStoryMapPage === storyMapPageCount - 1} style={[s.storyMapPagerButton, activeStoryMapPage === storyMapPageCount - 1 && s.storyMapPagerButtonDisabled]}><Text style={s.storyMapPagerButtonText}>›</Text></Pressable>
+      </View>
 
-      <View style={s.plotGuide}><Text style={s.plotGuideTitle}>{blueprint.plotLabel}</Text><Text style={s.plotGuideText}>{blueprint.plotNote}</Text></View>
-      <View style={s.planInputCard}><Text style={s.planInputLabel}>ONE-LINE THROUGHLINE</Text><Text style={s.planInputHint}>If you had to explain the movement in one breath.</Text><TextInput value={plotThread} onChangeText={setPlotThread} placeholder="It starts with… and ends with…" placeholderTextColor="#9A9DB7" multiline style={s.planTextAreaSmall} /></View>
+      {activeStoryMapPage === 0 && <View style={s.planInputCard}><Text style={s.planInputLabel}>THE BIG IDEA</Text><Text style={s.planInputHint}>One clear sentence is enough for now.</Text><DictationInput value={idea} onChangeText={(value) => { setIdea(value); persistPlan({ idea: value }); }} placeholder={blueprint.ideaPlaceholder} placeholderTextColor="#9A9DB7" multiline style={s.planTextArea} accessibilityLabel="Big idea" /></View>}
 
-      <Text style={s.planSubheading}>{blueprint.plotLabel}</Text>
-      {blueprint.plotPrompts.map((prompt) => <View key={prompt.label} style={s.plotPrompt}><Text style={s.plotPromptTitle}>{prompt.label}</Text><Text style={s.plotPromptHelper}>{prompt.helper}</Text><TextInput value={plotNotes[prompt.label] || ''} onChangeText={(value) => updatePlotNote(prompt.label, value)} placeholder="A few calm notes…" placeholderTextColor="#A0A3BB" multiline style={s.planTextAreaSmall} /></View>)}
+      {activeStoryMapPage === 1 && <>
+        <View style={s.plotGuide}><Text style={s.plotGuideTitle}>{blueprint.plotLabel}</Text><Text style={s.plotGuideText}>{blueprint.plotNote}</Text></View>
+        <View style={s.planInputCard}><Text style={s.planInputLabel}>ONE-LINE THROUGHLINE</Text><Text style={s.planInputHint}>If you had to explain the movement in one breath.</Text><DictationInput value={plotThread} onChangeText={(value) => { setPlotThread(value); persistPlan({ plotThread: value }); }} placeholder="It starts with… and ends with…" placeholderTextColor="#9A9DB7" multiline style={s.planTextAreaSmall} accessibilityLabel="One-line throughline" /></View>
+      </>}
 
-      <View style={s.planInputCard}><Text style={s.planInputLabel}>{blueprint.peopleLabel.toUpperCase()}</Text><Text style={s.planInputHint}>{blueprint.peopleHelper}</Text><TextInput value={people} onChangeText={setPeople} placeholder={blueprint.peoplePlaceholder} placeholderTextColor="#9A9DB7" multiline style={s.planTextArea} /></View>
+      {activeStoryMapPage >= 2 && activeStoryMapPage < peoplePageIndex && <>
+        <Text style={s.planSubheading}>{blueprint.plotLabel}</Text>
+        <Text style={s.storyMapPageHint}>A few focused prompts at a time. Move forward when this page feels clear enough.</Text>
+        {visiblePlotPrompts.map((prompt) => <View key={prompt.label} style={s.plotPrompt}><Text style={s.plotPromptTitle}>{prompt.label}</Text><Text style={s.plotPromptHelper}>{prompt.helper}</Text><DictationInput value={plotNotes[prompt.label] || ''} onChangeText={(value) => updatePlotNote(prompt.label, value)} placeholder="A few calm notes…" placeholderTextColor="#A0A3BB" multiline style={s.planTextAreaSmall} accessibilityLabel={prompt.label} /></View>)}
+      </>}
 
-      <View style={s.chapterHeader}><View><Text style={s.planSubheading}>{blueprint.unitLabelPlural[0].toUpperCase() + blueprint.unitLabelPlural.slice(1)} map</Text><Text style={s.chapterHeaderHint}>One note for each {blueprint.unitLabel} keeps the draft moving.</Text></View><View style={s.chapterCountBadge}><Text style={s.chapterCountText}>{unitCount || '—'}</Text></View></View>
-      {unitCount > 0 ? Array.from({ length: unitCount }, (_, index) => <View key={index} style={s.chapterRow}><View style={s.chapterIndex}><Text style={s.chapterIndexText}>{String(index + 1).padStart(2, '0')}</Text></View><TextInput value={unitIdeas[index] || ''} onChangeText={(value) => updateUnitIdea(index, value)} placeholder={`${blueprint.unitLabel[0].toUpperCase() + blueprint.unitLabel.slice(1)} ${index + 1}: what happens, is taught, or is felt?`} placeholderTextColor="#A0A3BB" multiline style={s.chapterTextInput} /></View>) : <View style={s.emptyChapter}><Text style={s.emptyChapterIcon}>⌁</Text><Text style={s.emptyChapterText}>Set a target number in Section 1 and your {blueprint.unitLabelPlural} map will appear here.</Text></View>}
-      {Number.parseInt(unitGoal, 10) > 24 && <Text style={s.chapterLimitNote}>Showing the first 24 {blueprint.unitLabelPlural} here so the plan stays easy to scan.</Text>}
+      {activeStoryMapPage === peoplePageIndex && <View style={s.planInputCard}><Text style={s.planInputLabel}>{blueprint.peopleLabel.toUpperCase()}</Text><Text style={s.planInputHint}>{blueprint.peopleHelper}</Text><DictationInput value={people} onChangeText={(value) => { setPeople(value); persistPlan({ people: value }); }} placeholder={blueprint.peoplePlaceholder} placeholderTextColor="#9A9DB7" multiline style={s.planTextArea} accessibilityLabel={blueprint.peopleLabel} /></View>}
+
+      {activeStoryMapPage >= unitPagesStartIndex && <>
+        <View style={s.chapterHeader}><View><Text style={s.planSubheading}>{blueprint.unitLabelPlural[0].toUpperCase() + blueprint.unitLabelPlural.slice(1)} map</Text><Text style={s.chapterHeaderHint}>One note for each {blueprint.unitLabel} keeps the draft moving.</Text></View><View style={s.chapterCountBadge}><Text style={s.chapterCountText}>{unitCount || '—'}</Text></View></View>
+        {unitCount > 0 ? visibleUnitIndexes.map((index) => <View key={index} style={s.chapterRow}><View style={s.chapterIndex}><Text style={s.chapterIndexText}>{String(index + 1).padStart(2, '0')}</Text></View><DictationInput grow value={unitIdeas[index] || ''} onChangeText={(value) => updateUnitIdea(index, value)} placeholder={`${blueprint.unitLabel[0].toUpperCase() + blueprint.unitLabel.slice(1)} ${index + 1}: what happens, is taught, or is felt?`} placeholderTextColor="#A0A3BB" multiline style={s.chapterTextInput} accessibilityLabel={`${blueprint.unitLabel} ${index + 1}`} /></View>) : <View style={s.emptyChapter}><Text style={s.emptyChapterIcon}>⌁</Text><Text style={s.emptyChapterText}>Set a target number in Section 1 and your {blueprint.unitLabelPlural} map will appear here.</Text></View>}
+      </>}
     </View>}
 
     <View style={s.planFooter}>
@@ -549,24 +614,334 @@ function Plan({ projects, activeProject, onSelectProject, onUpdateProject }: { p
       <Text style={s.planFooterText}>STEP {step + 1} OF 3</Text>
       <Pressable onPress={() => setStep(Math.min(2, step + 1))} disabled={step === 2} style={[s.planNavButton, s.planNavButtonPrimary, step === 2 && s.planNavButtonDisabled]}><Text style={[s.planNavButtonText, s.planNavButtonTextPrimary]}>{step === 2 ? 'Plan ready' : 'Next →'}</Text></Pressable>
     </View>
+
+    <Modal animationType="fade" transparent visible={projectMenuOpen} onRequestClose={() => setProjectMenuOpen(false)}>
+      <Pressable style={s.projectMenuShade} onPress={() => setProjectMenuOpen(false)}>
+        <View style={s.projectMenu}>
+          <Text style={s.projectMenuHeader}>SWITCH PROJECT</Text>
+          <Text style={s.projectMenuHint}>Choose a project to keep planning.</Text>
+          {projects.map((project) => {
+            const projectType = projectTypes.find((type) => type.name === project.type) ?? projectTypes[projectTypes.length - 1];
+            const isCurrent = activeProject === project.title;
+            return <Pressable key={project.title} onPress={() => { chooseProject(project); setProjectMenuOpen(false); }} style={[s.projectMenuRow, isCurrent && s.projectMenuRowActive]}>
+              <View style={[s.projectMenuIcon, { backgroundColor: projectType.color }]}><Text style={s.projectMenuIconText}>{projectType.icon}</Text></View>
+              <View style={s.projectMenuCopy}><Text numberOfLines={1} style={s.projectMenuProject}>{project.title}</Text><Text numberOfLines={1} style={s.projectMenuType}>{project.type}</Text></View>
+              <View style={[s.projectMenuCheck, isCurrent && s.projectMenuCheckActive]}><Text style={s.projectMenuCheckText}>{isCurrent ? '✓' : ''}</Text></View>
+            </Pressable>;
+          })}
+        </View>
+      </Pressable>
+    </Modal>
   </>;
 }
 
-function Write() {
-  const [words, setWords] = useState(842);
-  const [saved, setSaved] = useState(true);
-  return <><View style={s.writeTop}><View><Text style={s.overline}>THE MIDNIGHT ATLAS · CHAPTER 12</Text><Text style={s.writeTitle}>A door opens{`\n`}in the rain.</Text></View><Pressable onPress={() => setSaved(!saved)} style={[s.saveChip, saved && s.saveChipDone]}><Text style={[s.saveChipText, saved && s.saveChipTextDone]}>{saved ? '✓ SAVED' : 'SAVE'}</Text></Pressable></View>
-    <View style={s.manuscript}><Text style={s.manuscriptKicker}>CHAPTER TWELVE</Text><Text style={s.manuscriptText}>The road disappeared before the sea did. Mara kept walking anyway, following the small amber lamps where they swayed in the fog.</Text><Text style={s.manuscriptText}>At the end of the pier, a blue door stood open. A warm room glowed inside it, as if it had been waiting all this time.</Text><View style={s.cursorLine}><View style={s.cursor} /></View></View>
-    <View style={s.writePrompt}><View style={s.promptIcon}><Text style={s.promptIconText}>✦</Text></View><View style={{ flex: 1 }}><Text style={s.promptTitle}>Keep the thread</Text><Text style={s.promptText}>What does Mara notice first?</Text></View><Pressable onPress={() => setWords(words + 37)} style={s.addWords}><Text style={s.addWordsText}>+37</Text></Pressable></View>
-    <View style={s.writerFooter}><Text style={s.writerFooterText}>{words} words today</Text><View style={s.wordDots}>{[1, 2, 3, 4, 5].map((dot) => <View key={dot} style={[s.wordDot, dot < 5 && s.wordDotFilled]} />)}</View><Text style={s.writerFooterText}>Goal 1,000</Text></View>
+type WritePart = { key: string; title: string; helper: string; kind: 'structure' | 'unit'; unitIndex?: number };
+
+const compactNote = (value: string) => value.trim().replace(/\s+/g, ' ').length > 150 ? `${value.trim().replace(/\s+/g, ' ').slice(0, 147)}…` : value.trim().replace(/\s+/g, ' ');
+
+function getWriteParts(project: Project, blueprint: PlanBlueprint): WritePart[] {
+  const structureParts = blueprint.structureItems.filter((item) => project.plan.structure[item.label]).map((item) => ({ key: `structure:${item.label}`, title: item.label, helper: item.helper, kind: 'structure' as const }));
+  const unitCount = Math.max(Number.parseInt(project.unitGoal, 10) || 0, 0);
+  const unitParts = Array.from({ length: unitCount }, (_, index) => ({ key: `unit:${index}`, title: `${blueprint.unitLabel[0].toUpperCase() + blueprint.unitLabel.slice(1)} ${index + 1}`, helper: `Draft the part that belongs in this ${blueprint.unitLabel}.`, kind: 'unit' as const, unitIndex: index }));
+  return [...structureParts, ...unitParts];
+}
+
+type JourneyStatus = 'complete' | 'current' | 'future';
+type JourneyMilestone = { id: string; title: string; detail: string; icon: string; status: JourneyStatus };
+
+type JourneySnapshot = {
+  blueprint: PlanBlueprint;
+  parts: WritePart[];
+  draftedParts: number;
+  completedUnits: number;
+  unitCount: number;
+  selectedStructureCount: number;
+  wordCount: number;
+  targetWords: number;
+  ideaReady: boolean;
+  foundationReady: boolean;
+  outlineReady: boolean;
+  firstDraftStarted: boolean;
+  halfwayReady: boolean;
+  draftComplete: boolean;
+  manuscriptComplete: boolean;
+  currentMilestoneIndex: number;
+  progressPercent: number;
+  stage: string;
+  nextPart?: WritePart;
+};
+
+const countWords = (value: string) => value.trim() ? value.trim().split(/\s+/).length : 0;
+const formatCount = (value: number) => value.toLocaleString('en-US');
+
+function getJourneySnapshot(project: Project): JourneySnapshot {
+  const blueprint = planBlueprints[project.type] ?? planBlueprints['Custom Project'];
+  const plan = project.plan ?? defaultPlanFor(project.type);
+  const parts = getWriteParts({ ...project, plan }, blueprint);
+  const unitCount = Math.max(Number.parseInt(project.unitGoal, 10) || 0, 0);
+  const draftedParts = parts.filter((part) => Boolean(plan.drafts[part.key]?.trim())).length;
+  const completedUnits = parts.filter((part) => part.kind === 'unit' && Boolean(plan.drafts[part.key]?.trim())).length;
+  const selectedStructureCount = blueprint.structureItems.filter((item) => plan.structure[item.label]).length;
+  const wordCount = Object.values(plan.drafts).reduce((total, draft) => total + countWords(draft), 0);
+  const targetPages = Math.max(Number.parseInt(project.pageGoal, 10) || 0, 0);
+  const targetWords = targetPages * 250;
+  const ideaReady = Boolean(plan.idea.trim());
+  const foundationReady = targetPages > 0 && unitCount > 0 && selectedStructureCount > 0;
+  const outlineReady = foundationReady && Boolean(
+    plan.plotThread.trim() || plan.people.trim() || Object.values(plan.plotNotes).some((note) => note.trim()) || plan.unitIdeas.some((idea) => idea.trim()),
+  );
+  const firstDraftStarted = draftedParts > 0;
+  const halfwayReady = parts.length > 0 && draftedParts >= Math.ceil(parts.length / 2);
+  const draftComplete = parts.length > 0 && draftedParts === parts.length;
+  const manuscriptComplete = draftComplete && plan.writeIndex >= parts.length;
+  const completedStates = [ideaReady, foundationReady, outlineReady, firstDraftStarted, halfwayReady, draftComplete, manuscriptComplete, manuscriptComplete];
+  const currentMilestoneIndex = manuscriptComplete ? 7 : draftComplete ? 6 : halfwayReady ? 5 : firstDraftStarted ? 4 : outlineReady ? 3 : foundationReady ? 2 : ideaReady ? 1 : 0;
+  const progressPercent = Math.round((completedStates.filter(Boolean).length / completedStates.length) * 100);
+  const stage = manuscriptComplete ? 'Finished manuscript' : draftComplete ? 'Review & polish' : firstDraftStarted ? 'First draft' : outlineReady ? 'Ready to write' : foundationReady ? 'Book foundation' : ideaReady ? 'Book foundation' : 'Book idea';
+
+  return {
+    blueprint, parts, draftedParts, completedUnits, unitCount, selectedStructureCount, wordCount, targetWords,
+    ideaReady, foundationReady, outlineReady, firstDraftStarted, halfwayReady, draftComplete, manuscriptComplete,
+    currentMilestoneIndex, progressPercent, stage, nextPart: parts.find((part) => !plan.drafts[part.key]?.trim()) ?? parts[0],
+  };
+}
+
+function getJourneyMilestones(snapshot: JourneySnapshot): JourneyMilestone[] {
+  const completed = [
+    snapshot.ideaReady,
+    snapshot.foundationReady,
+    snapshot.outlineReady,
+    snapshot.firstDraftStarted,
+    snapshot.halfwayReady,
+    snapshot.draftComplete,
+    snapshot.manuscriptComplete,
+    snapshot.manuscriptComplete,
+  ];
+  const details = [
+    snapshot.ideaReady ? 'The promise of this book is written down.' : 'Give the work a clear promise to follow.',
+    snapshot.foundationReady ? `${snapshot.selectedStructureCount} planned pieces are ready to carry the work.` : 'Set the shape, scale, and pieces of the book.',
+    snapshot.outlineReady ? 'Your notes are giving the book a direction.' : 'Add a throughline, notes, or part ideas.',
+    snapshot.firstDraftStarted ? `${snapshot.draftedParts} ${snapshot.blueprint.unitLabelPlural} or parts have words in them.` : 'Open the manuscript and make the first part real.',
+    snapshot.halfwayReady ? 'The middle of the route is behind you.' : `Keep going until ${Math.ceil(snapshot.parts.length / 2) || 'the first'} parts have a draft.`,
+    snapshot.draftComplete ? 'Every selected part has a draft.' : `${snapshot.draftedParts} of ${snapshot.parts.length} parts are drafted.`,
+    snapshot.manuscriptComplete ? 'You reached the end of the writing path.' : 'Read through the whole draft and make the last pass.',
+    snapshot.manuscriptComplete ? 'All planned parts are written. The book is ready to carry forward.' : 'A finished book is waiting at the end of this path.',
+  ];
+  const icons = ['✦', '◈', '⌁', '✎', '◌', '✓', '✧', '★'];
+  const titles = ['Book idea', 'Book foundation', 'Outline', 'First chapter', 'Halfway point', 'Draft complete', 'Review & polish', 'Finished book'];
+  return titles.map((title, index) => ({
+    id: title.toLowerCase().replace(/[^a-z]+/g, '-'), title, detail: details[index], icon: icons[index],
+    status: completed[index] ? 'complete' : index === snapshot.currentMilestoneIndex ? 'current' : 'future',
+  }));
+}
+
+const formatLastEdited = (updatedAt?: number) => {
+  if (!updatedAt) return 'Not recorded';
+  const elapsed = Date.now() - updatedAt;
+  if (elapsed < 60_000) return 'Just now';
+  if (elapsed < 3_600_000) return `${Math.max(1, Math.round(elapsed / 60_000))}m ago`;
+  if (elapsed < 86_400_000) return `${Math.max(1, Math.round(elapsed / 3_600_000))}h ago`;
+  return new Date(updatedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+};
+
+function getWriteContext(part: WritePart, plan: ProjectPlan, blueprint: PlanBlueprint): { label: string; value: string }[] {
+  const notes: { label: string; value: string }[] = [];
+  if (plan.idea.trim()) notes.push({ label: 'Big idea', value: plan.idea });
+  if (part.kind === 'unit' && part.unitIndex !== undefined && plan.unitIdeas[part.unitIndex]?.trim()) notes.push({ label: `${blueprint.unitLabel[0].toUpperCase() + blueprint.unitLabel.slice(1)} note`, value: plan.unitIdeas[part.unitIndex] });
+  if (plan.plotThread.trim()) notes.push({ label: 'Throughline', value: plan.plotThread });
+  const lowerTitle = part.title.toLowerCase();
+  const relevantPrompts = blueprint.plotPrompts.filter((prompt) => {
+    const promptText = `${prompt.label} ${prompt.helper}`.toLowerCase();
+    return lowerTitle.split(/\W+/).some((word) => word.length > 3 && promptText.includes(word));
+  });
+  relevantPrompts.forEach((prompt) => {
+    if (plan.plotNotes[prompt.label]?.trim()) notes.push({ label: prompt.label, value: plan.plotNotes[prompt.label] });
+  });
+  if (plan.people.trim()) notes.push({ label: blueprint.peopleLabel, value: plan.people });
+  return notes.slice(0, 4).map((note) => ({ ...note, value: compactNote(note.value) }));
+}
+
+const cleanDictationText = (value: string) => value
+  .replace(/\b(new line|newline)\b/gi, '\n')
+  .replace(/\b(question mark)\b/gi, '?')
+  .replace(/\b(exclamation point|exclamation mark)\b/gi, '!')
+  .replace(/\b(full stop|period)\b/gi, '.')
+  .replace(/\b(comma)\b/gi, ',')
+  .replace(/\b(colon)\b/gi, ':')
+  .replace(/\b(semicolon)\b/gi, ';')
+  .replace(/[ \t]+/g, ' ')
+  .replace(/[ \t]*\n[ \t]*/g, '\n')
+  .replace(/\s+([,.;!?])/g, '$1')
+  .replace(/([,.;!?])(?=\S)/g, '$1 ')
+  .trim();
+
+const polishWriting = (value: string) => cleanDictationText(value)
+  .replace(/\b(\w+)(\s+\1\b)+/gi, '$1')
+  .replace(/(^|[.!?]\s+)([a-z])/g, (_, prefix, letter) => `${prefix}${letter.toUpperCase()}`);
+
+const grammarWriting = (value: string) => polishWriting(value)
+  .replace(/\bi\b/g, 'I')
+  .replace(/\b(im|i'm)\b/gi, "I'm")
+  .replace(/\b(dont|don't)\b/gi, "don't")
+  .replace(/\b(cant|can't)\b/gi, "can't")
+  .replace(/\b(wont|won't)\b/gi, "won't")
+  .replace(/\b(doesnt|doesn't)\b/gi, "doesn't")
+  .replace(/\b(isnt|isn't)\b/gi, "isn't")
+  .replace(/\b(shouldnt|shouldn't)\b/gi, "shouldn't")
+  .replace(/\s{2,}/g, ' ')
+  .replace(/([^.!?\n])$/gm, '$1.');
+
+function Write({ projects, activeProject, onSelectProject, onUpdateProject, onPage }: { projects: Project[]; activeProject: string; onSelectProject: (title: string) => void; onUpdateProject: (title: string, changes: Partial<Project>) => void; onPage: (page: Page) => void }) {
+  const currentProject = projects.find((project) => project.title === activeProject) ?? projects[0];
+  const blueprint = planBlueprints[currentProject.type] ?? planBlueprints['Custom Project'];
+  const plan = currentProject.plan ?? defaultPlanFor(currentProject.type);
+  const parts = getWriteParts(currentProject, blueprint);
+  const [projectMenuOpen, setProjectMenuOpen] = useState(false);
+  const [notesOpen, setNotesOpen] = useState(false);
+  const activeIndex = parts.length ? Math.min(plan.writeIndex, parts.length - 1) : 0;
+  const activePart = parts[activeIndex];
+  const completed = parts.length > 0 && plan.writeIndex >= parts.length;
+  const completedPartCount = parts.filter((part) => plan.drafts[part.key]?.trim()).length;
+  const completionPercent = parts.length ? Math.round((completedPartCount / parts.length) * 100) : 0;
+  const contextNotes = activePart ? getWriteContext(activePart, plan, blueprint) : [];
+
+  const chooseProject = (project: Project) => {
+    onSelectProject(project.title);
+    setNotesOpen(false);
+    setProjectMenuOpen(false);
+  };
+  const updateDraft = (value: string) => {
+    if (!activePart) return;
+    onUpdateProject(activeProject, { plan: { ...plan, drafts: { ...plan.drafts, [activePart.key]: value } } });
+  };
+  const goNext = () => {
+    if (!parts.length) return;
+    setNotesOpen(false);
+    onUpdateProject(activeProject, { plan: { ...plan, writeIndex: Math.min(parts.length, activeIndex + 1) } });
+  };
+  const goBack = () => {
+    if (!parts.length) return;
+    setNotesOpen(false);
+    onUpdateProject(activeProject, { plan: { ...plan, writeIndex: Math.max(0, activeIndex - 1) } });
+  };
+  const updateDraftWithTool = (transform: (value: string) => string) => {
+    if (!activePart) return;
+    updateDraft(transform(plan.drafts[activePart.key] || ''));
+  };
+  const updatePartNote = (value: string) => {
+    if (!activePart) return;
+    onUpdateProject(activeProject, { plan: { ...plan, partNotes: { ...plan.partNotes, [activePart.key]: value } } });
+  };
+
+  return <>
+    <View style={s.writeProjectBar}>
+      <Pressable onPress={() => setProjectMenuOpen(true)} style={s.writeProjectSwitcher} accessibilityLabel="Switch writing project">
+        <View style={[s.writeProjectIcon, { backgroundColor: currentProject.color }]}><Text style={s.writeProjectIconText}>{currentProject.mark}</Text></View>
+        <View style={s.writeProjectCopy}><Text style={s.writeProjectOverline}>WRITING</Text><Text numberOfLines={1} style={s.writeProjectTitle}>{currentProject.title}</Text></View>
+        <Text style={s.writeProjectChevron}>⌄</Text>
+      </Pressable><Pressable onPress={() => onPage('Journey')} style={s.writeJourneyLink}><Text style={s.writeJourneyLinkText}>Journey</Text><Text style={s.writeJourneyLinkArrow}>↗</Text></Pressable>
+    </View>
+
+    <View style={s.writeTop}><View><Text style={s.overline}>{currentProject.title.toUpperCase()}</Text><Text style={s.writeTitle}>{completed ? 'The manuscript is complete.' : 'Keep the thread.'}</Text></View><Text style={s.writeFormat}>{blueprint.unitLabelPlural}</Text></View>
+
+    {!parts.length && <View style={s.writeEmpty}><Text style={s.writeEmptyIcon}>✦</Text><Text style={s.writeEmptyTitle}>Your writing path is waiting.</Text><Text style={s.writeEmptyCopy}>Go to Plan → Structure and check the parts you want to write. Then they will appear here in order.</Text></View>}
+
+    {completed && <View style={s.writeComplete}><Text style={s.writeCompleteIcon}>✦</Text><Text style={s.writeCompleteTitle}>You made it all the way through.</Text><Text style={s.writeCompleteCopy}>Your checked structure and {blueprint.unitLabelPlural} are complete. You can revisit any part with the back button or switch projects above.</Text><Pressable onPress={goBack} style={s.writeSecondaryButton}><Text style={s.writeSecondaryButtonText}>Review last part</Text></Pressable></View>}
+
+    {activePart && !completed && <>
+      <View style={s.writePartHeader}><View style={s.writePartNumber}><Text style={s.writePartNumberText}>{String(activeIndex + 1).padStart(2, '0')}</Text></View><View style={s.writePartCopy}><Text style={s.writePartKicker}>{activePart.kind === 'unit' ? blueprint.unitLabel.toUpperCase() : 'STRUCTURE PART'}</Text><Text style={s.writePartTitle}>{activePart.title}</Text><Text style={s.writePartHelper}>{activePart.helper}</Text></View><View style={s.writeProgress}><View style={s.writeProgressTop}><Text style={s.writeProgressValue}>{completionPercent}%</Text><Text style={s.writeProgressLabel}>COMPLETE</Text></View><View style={s.writeProgressTrack}><View style={[s.writeProgressFill, { width: `${completionPercent}%` }]} /></View><Text style={s.writeProgressText}>{completed ? 'MANUSCRIPT READY' : `PART ${parts.length ? activeIndex + 1 : 0} / ${parts.length}`}</Text></View></View>
+      <View style={s.writeNotesBanner}><Pressable onPress={() => setNotesOpen(!notesOpen)} style={s.writeNotesTapArea} accessibilityLabel="Open notes for this part"><View style={s.writeNotesIcon}><Text style={s.writeNotesIconText}>✦</Text></View><View style={s.writeNotesCopy}><View style={s.writeNotesTitleRow}><Text style={s.writeNotesLabel}>PLAN NOTES TO KEEP CLOSE</Text><Text style={s.writeNotesAction}>{notesOpen ? 'CLOSE' : 'ADD NOTE'}</Text></View>{contextNotes.length ? contextNotes.map((note) => <View key={note.label} style={s.writeNoteRow}><Text style={s.writeNoteLabel}>{note.label}</Text><Text style={s.writeNoteText}>{note.value}</Text></View>) : <Text style={s.writeNotesEmpty}>No notes yet. Tap here to add a thought for this part.</Text>}</View></Pressable>{plan.partNotes[activePart.key]?.trim() && !notesOpen && <View style={s.writeSavedNote}><Text style={s.writeSavedNoteLabel}>YOUR NOTE</Text><Text style={s.writeSavedNoteText}>{compactNote(plan.partNotes[activePart.key])}</Text></View>}{notesOpen && <View style={s.writeQuickNote}><Text style={s.writeQuickNoteLabel}>A NOTE FOR THIS PART</Text><DictationInput value={plan.partNotes[activePart.key] || ''} onChangeText={updatePartNote} placeholder="Capture a thought to keep beside the draft…" placeholderTextColor="#A0A3BB" multiline style={s.writeQuickNoteInput} accessibilityLabel="Note for this part" /></View>}</View>
+      <View style={s.writeEditorCard}><View style={s.writeEditorTop}><Text style={s.writeEditorLabel}>WRITE THIS PART</Text><Text style={s.writeEditorHint}>🎙 Dictate with your phone</Text></View><DictationInput value={plan.drafts[activePart.key] || ''} onChangeText={updateDraft} placeholder={`Begin your ${activePart.title.toLowerCase()}…`} placeholderTextColor="#9A9DB7" multiline autoCorrect spellCheck style={s.writeEditorInput} accessibilityLabel={activePart.title} /><View style={s.writeTools}><Pressable onPress={() => updateDraftWithTool(polishWriting)} disabled={!plan.drafts[activePart.key]?.trim()} style={[s.writeToolButton, !plan.drafts[activePart.key]?.trim() && s.writeToolDisabled]} accessibilityLabel="Polish writing"><Text style={s.writeToolIcon}>✦</Text><Text style={s.writeToolText}>Polish</Text></Pressable><Pressable onPress={() => updateDraftWithTool(grammarWriting)} disabled={!plan.drafts[activePart.key]?.trim()} style={[s.writeToolButton, !plan.drafts[activePart.key]?.trim() && s.writeToolDisabled]} accessibilityLabel="Fix grammar"><Text style={s.writeToolIcon}>Aa</Text><Text style={s.writeToolText}>Grammar</Text></Pressable><Text style={s.writeToolHint}>Quick local cleanup</Text></View></View>
+      <View style={s.writeNavigation}><Pressable onPress={goBack} disabled={activeIndex === 0} style={[s.writeSecondaryButton, activeIndex === 0 && s.writeButtonDisabled]}><Text style={s.writeSecondaryButtonText}>← Previous</Text></Pressable><Pressable onPress={goNext} style={s.writeNextButton}><Text style={s.writeNextButtonText}>{activeIndex === parts.length - 1 ? 'Finish manuscript' : 'Next part →'}</Text></Pressable></View>
+    </>}
+
+    <Modal animationType="fade" transparent visible={projectMenuOpen} onRequestClose={() => setProjectMenuOpen(false)}>
+      <Pressable style={s.writeMenuShade} onPress={() => setProjectMenuOpen(false)}>
+        <View style={s.writeMenu}><Text style={s.writeMenuHeader}>SWITCH PROJECT</Text><Text style={s.writeMenuHint}>Choose a manuscript to write.</Text>{projects.map((project) => <Pressable key={project.title} onPress={() => chooseProject(project)} style={[s.writeMenuRow, project.title === activeProject && s.writeMenuRowActive]}><View style={[s.writeMenuIcon, { backgroundColor: project.color }]}><Text style={s.writeMenuIconText}>{project.mark}</Text></View><View style={s.writeMenuCopy}><Text numberOfLines={1} style={s.writeMenuProject}>{project.title}</Text><Text numberOfLines={1} style={s.writeMenuType}>{project.type}</Text></View><Text style={s.writeMenuCheck}>{project.title === activeProject ? '✓' : ''}</Text></Pressable>)}</View>
+      </Pressable>
+    </Modal>
   </>;
 }
 
-function Journey({ onPage }: { onPage: (page: Page) => void }) {
-  return <><View style={s.journeyHero}><Text style={s.planHeroOverline}>YOUR CREATIVE JOURNEY</Text><Text style={s.journeyTitle}>You’re making{`\n`}beautiful progress.</Text><View style={s.journeyRing}><Text style={s.journeyRingValue}>68%</Text><Text style={s.journeyRingLabel}>DRAFTED</Text></View></View>
-    <View style={s.nextCard}><View style={s.nextIcon}><Text style={s.nextIconText}>→</Text></View><View style={{ flex: 1 }}><Text style={s.nextOverline}>YOUR NEXT SMALL STEP</Text><Text style={s.nextTitle}>Write 158 words to meet today’s goal.</Text></View></View>
-    <View style={s.sectionBar}><Text style={s.sectionTitle}>The path so far</Text><Pressable onPress={() => onPage('Stats')}><Text style={s.link}>VIEW STATS</Text></Pressable></View>
-    {[['✦', 'First draft halfway there', 'TODAY', C.gold], ['✓', 'Seven-day writing rhythm', 'YESTERDAY', C.sage], ['⌁', 'Outline is taking shape', 'JUL 28', C.lavender]].map(([icon, title, date, color]) => <View key={String(title)} style={s.journeyRow}><View style={[s.journeyIcon, { backgroundColor: String(color) }]}><Text style={s.journeyIconText}>{icon}</Text></View><View style={{ flex: 1 }}><Text style={s.journeyRowTitle}>{title}</Text><Text style={s.journeyRowDate}>{date}</Text></View><Text style={s.journeyArrow}>›</Text></View>)}
+function Journey({ projects, activeProject, onSelectProject, onPage, onBack }: { projects: Project[]; activeProject: string; onSelectProject: (title: string) => void; onPage: (page: Page) => void; onBack: () => void }) {
+  const currentProject = projects.find((project) => project.title === activeProject) ?? projects[0];
+  const snapshot = getJourneySnapshot(currentProject);
+  const milestones = getJourneyMilestones(snapshot);
+  const [selectorOpen, setSelectorOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const pulse = useRef(new Animated.Value(0)).current;
+  const { width } = useWindowDimensions();
+  const mapWidth = Math.max(280, width - 40);
+  const rowHeight = 126;
+  const nodeWidth = 144;
+  const positions = [0.24, 0.76, 0.49, 0.23, 0.76, 0.49, 0.23, 0.76];
+  const points = milestones.map((_, index) => ({ x: mapWidth * positions[index], y: 28 + index * rowHeight }));
+  const mapHeight = milestones.length * rowHeight + 35;
+  const currentMilestone = milestones[snapshot.currentMilestoneIndex] ?? milestones[milestones.length - 1];
+  const nextPage: Page = snapshot.manuscriptComplete ? 'Write' : snapshot.ideaReady && snapshot.foundationReady && snapshot.outlineReady ? 'Write' : 'Plan';
+  const nextAction = snapshot.manuscriptComplete ? 'Review the manuscript' : !snapshot.ideaReady ? 'Start with your book idea' : !snapshot.foundationReady ? 'Complete Book Foundation' : !snapshot.outlineReady ? 'Continue Outline' : !snapshot.firstDraftStarted ? 'Write your first part' : snapshot.nextPart ? `Write ${snapshot.nextPart.title}` : 'Continue manuscript';
+
+  useEffect(() => {
+    const animation = Animated.loop(Animated.sequence([
+      Animated.timing(pulse, { toValue: 1, duration: 1100, useNativeDriver: true }),
+      Animated.timing(pulse, { toValue: 0, duration: 1100, useNativeDriver: true }),
+    ]));
+    animation.start();
+    return () => animation.stop();
+  }, [pulse]);
+
+  const chooseProject = (project: Project) => {
+    onSelectProject(project.title);
+    setSelectorOpen(false);
+  };
+
+  return <>
+    <View style={s.journeyHeader}>
+      <Pressable onPress={onBack} style={s.journeyBackButton} accessibilityLabel="Back to book library"><Text style={s.journeyBackIcon}>‹</Text></Pressable>
+      <View style={s.journeyHeaderCopy}><Text style={s.journeyOverline}>BOOKEZ / PROGRESS</Text><Text style={s.journeyHeaderTitle}>Your Book Journey</Text></View>
+      <Pressable onPress={() => setMenuOpen(true)} style={s.journeyOverflowButton} accessibilityLabel="Open book journey menu"><Text style={s.journeyOverflowText}>•••</Text></Pressable>
+    </View>
+
+    <Pressable onPress={() => setSelectorOpen(true)} style={s.journeyBookPicker} accessibilityLabel={`Switch selected book, ${currentProject.title}`}>
+      <View style={[s.journeyBookMark, { backgroundColor: currentProject.color }]}><Text style={s.journeyBookMarkText}>{currentProject.mark}</Text></View>
+      <View style={s.journeyBookPickerCopy}><Text style={s.journeyBookPickerLabel}>SELECTED BOOK</Text><Text numberOfLines={1} style={s.journeyBookPickerTitle}>{currentProject.title}</Text><Text style={s.journeyBookPickerMeta}>{snapshot.stage} · {snapshot.progressPercent}% complete</Text></View>
+      <Text style={s.journeyPickerChevron}>⌄</Text>
+    </Pressable>
+
+    <View style={s.journeySummaryCard}>
+      <View style={s.journeySummaryTop}><View><Text style={s.journeySummaryEyebrow}>YOUR JOURNEY</Text><Text style={s.journeySummaryStage}>{snapshot.stage}</Text></View><Text style={s.journeySummaryPercent}>{snapshot.progressPercent}%</Text></View>
+      <View style={s.journeyProgressTrack}><View style={[s.journeyProgressFill, { width: `${snapshot.progressPercent}%` }]} /></View>
+      <View style={s.journeyStatsRow}><View style={s.journeyStat}><Text style={s.journeyStatValue}>{formatCount(snapshot.wordCount)}</Text><Text style={s.journeyStatLabel}>WORDS WRITTEN</Text><Text style={s.journeyStatSub}>{snapshot.targetWords ? `of ${formatCount(snapshot.targetWords)} est. target` : 'Target not set'}</Text></View><View style={s.journeyStatDivider} /><View style={s.journeyStat}><Text style={s.journeyStatValue}>{snapshot.completedUnits} of {snapshot.unitCount}</Text><Text style={s.journeyStatLabel}>{snapshot.blueprint.unitLabelPlural.toUpperCase()}</Text><Text style={s.journeyStatSub}>with a draft</Text></View></View>
+      <View style={s.journeyNextRow}><View style={s.journeyNextDot}><Text style={s.journeyNextDotText}>{currentMilestone.icon}</Text></View><View style={s.journeyNextCopy}><Text style={s.journeyNextEyebrow}>NEXT MILESTONE</Text><Text style={s.journeyNextTitle}>{currentMilestone.title}</Text></View><Text style={s.journeyNextArrow}>→</Text></View>
+      <Pressable onPress={() => onPage(nextPage)} style={s.journeyContinueButton}><Text style={s.journeyContinueText}>Continue Journey</Text><Text style={s.journeyContinueAction}>{nextAction}</Text><Text style={s.journeyContinueArrow}>→</Text></Pressable>
+    </View>
+
+    <View style={s.journeyMapHeading}><View><Text style={s.journeyMapEyebrow}>THE LONG WAY AROUND</Text><Text style={s.journeyMapTitle}>One book, one steady path.</Text></View><Text style={s.journeyMapHint}>Scroll to travel</Text></View>
+    <View style={[s.journeyMap, { height: mapHeight }]}>
+      {points.slice(0, -1).map((point, index) => {
+        const nextPoint = points[index + 1];
+        const dx = nextPoint.x - point.x;
+        const dy = nextPoint.y - point.y;
+        const length = Math.sqrt(dx * dx + dy * dy);
+        const angle = Math.atan2(dy, dx) * (180 / Math.PI);
+        return <View key={`route-${index}`} style={[s.journeyRoute, index < snapshot.currentMilestoneIndex && s.journeyRouteComplete, { left: (point.x + nextPoint.x - length) / 2, top: (point.y + nextPoint.y) / 2, width: length, transform: [{ rotate: `${angle}deg` }] }]} />;
+      })}
+      {milestones.map((milestone, index) => {
+        const node = <Animated.View style={[s.journeyNode, milestone.status === 'complete' ? s.journeyNodeComplete : milestone.status === 'current' ? s.journeyNodeCurrent : s.journeyNodeFuture, milestone.status === 'current' && { transform: [{ scale: pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.06] }) }] }]}><Text style={s.journeyNodeIcon}>{milestone.icon}</Text></Animated.View>;
+        return <View key={milestone.id} style={[s.journeyMilestone, { left: points[index].x - nodeWidth / 2, top: index * rowHeight, width: nodeWidth }]}>
+          {node}
+          <View style={[s.journeyMilestoneCard, milestone.status === 'current' && s.journeyMilestoneCardCurrent, milestone.status === 'complete' && s.journeyMilestoneCardComplete]}><View style={s.journeyMilestoneTitleRow}><Text style={s.journeyMilestoneTitle}>{milestone.title}</Text><Text style={[s.journeyMilestoneState, milestone.status === 'complete' ? s.journeyStateComplete : milestone.status === 'current' ? s.journeyStateCurrent : s.journeyStateFuture]}>{milestone.status === 'complete' ? 'DONE' : milestone.status === 'current' ? 'NOW' : 'UP NEXT'}</Text></View><Text style={s.journeyMilestoneDetail}>{milestone.detail}</Text></View>
+        </View>;
+      })}
+    </View>
+
+    <Modal animationType="slide" visible={selectorOpen} transparent onRequestClose={() => setSelectorOpen(false)}>
+      <View style={s.journeyModalShade}><Pressable style={s.journeyModalDismiss} onPress={() => setSelectorOpen(false)} /><View style={s.journeySelectorSheet}><View style={s.sheetHandle} /><Text style={s.journeySheetEyebrow}>YOUR BOOKS</Text><Text style={s.journeySheetTitle}>Choose a journey</Text><Text style={s.journeySheetHint}>Each book keeps its own path and progress.</Text>{projects.map((project) => { const projectSnapshot = getJourneySnapshot(project); return <Pressable key={project.title} onPress={() => chooseProject(project)} style={[s.journeyBookRow, project.title === activeProject && s.journeyBookRowActive]}><View style={[s.journeyBookMark, { backgroundColor: project.color }]}><Text style={s.journeyBookMarkText}>{project.mark}</Text></View><View style={s.journeyBookRowCopy}><Text numberOfLines={1} style={s.journeyBookRowTitle}>{project.title}</Text><Text style={s.journeyBookRowMeta}>{projectSnapshot.stage} · {projectSnapshot.progressPercent}% complete</Text><Text style={s.journeyBookRowEdited}>Last edited · {formatLastEdited(project.updatedAt)}</Text></View>{project.title === activeProject && <Text style={s.journeyBookRowCheck}>✓</Text>}</Pressable>; })}</View></View>
+    </Modal>
+
+    <Modal animationType="fade" visible={menuOpen} transparent onRequestClose={() => setMenuOpen(false)}>
+      <Pressable style={s.journeyMenuShade} onPress={() => setMenuOpen(false)}><View style={s.journeyMenu}><Text style={s.journeySheetEyebrow}>THIS BOOK</Text><Text style={s.journeyMenuTitle}>{currentProject.title}</Text><Pressable onPress={() => { setMenuOpen(false); onPage('Plan'); }} style={s.journeyMenuRow}><Text style={s.journeyMenuIcon}>⌁</Text><Text style={s.journeyMenuLabel}>Open planning</Text><Text style={s.journeyMenuArrow}>›</Text></Pressable><Pressable onPress={() => { setMenuOpen(false); onPage('Write'); }} style={s.journeyMenuRow}><Text style={s.journeyMenuIcon}>✎</Text><Text style={s.journeyMenuLabel}>Open manuscript</Text><Text style={s.journeyMenuArrow}>›</Text></Pressable></View></Pressable>
+    </Modal>
   </>;
 }
 
@@ -590,23 +965,23 @@ function Stats() {
 }
 
 function Navigation({ page, onPage }: { page: Page; onPage: (page: Page) => void }) {
-  return <View style={s.navShell}>{(Object.keys(pageMeta) as Page[]).map((item) => <Pressable key={item} onPress={() => onPage(item)} style={s.navItem}><Text style={[s.navIcon, page === item && s.navIconActive]}>{pageMeta[item].icon}</Text><Text style={[s.navLabel, page === item && s.navLabelActive]}>{pageMeta[item].short}</Text></Pressable>)}</View>;
+  return <View style={s.navShell}>{bottomNavPages.map((item) => <Pressable key={item} onPress={() => onPage(item)} style={s.navItem}><Text style={[s.navIcon, page === item && s.navIconActive]}>{pageMeta[item].icon}</Text><Text style={[s.navLabel, page === item && s.navLabelActive]}>{pageMeta[item].short}</Text></Pressable>)}</View>;
 }
 
 export default function App() {
   const [page, setPage] = useState<Page>('Library');
   const [projects, setProjects] = useState<Project[]>([
-    { title: 'The Midnight Atlas', detail: 'Chapter 12 · 68%', color: C.periwinkle, mark: '✦', type: 'Fiction Book', pageGoal: '240', unitGoal: '24' },
-    { title: 'Letters to June', detail: 'Chapter 4 · 31%', color: C.coral, mark: '✉', type: 'Memoir & Biography', pageGoal: '260', unitGoal: '18' },
-    { title: 'Wildflower Notes', detail: 'Research · 12%', color: C.sage, mark: '✳', type: 'Journal or Diary', pageGoal: '120', unitGoal: '30' },
+    { title: 'The Midnight Atlas', color: C.periwinkle, mark: '✦', type: 'Fiction Book', pageGoal: '240', unitGoal: '24', plan: defaultPlanFor('Fiction Book') },
+    { title: 'Letters to June', color: C.coral, mark: '✉', type: 'Memoir & Biography', pageGoal: '260', unitGoal: '18', plan: defaultPlanFor('Memoir & Biography') },
+    { title: 'Wildflower Notes', color: C.sage, mark: '✳', type: 'Journal or Diary', pageGoal: '120', unitGoal: '30', plan: defaultPlanFor('Journal or Diary') },
   ]);
   const [activeProject, setActiveProject] = useState('The Midnight Atlas');
-  const updateProject = (title: string, changes: Partial<Project>) => setProjects((current) => current.map((project) => project.title === title ? { ...project, ...changes } : project));
+  const updateProject = (title: string, changes: Partial<Project>) => setProjects((current) => current.map((project) => project.title === title ? { ...project, ...changes, updatedAt: Date.now() } : project));
   const renderPage = () => {
     if (page === 'Library') return <Library projects={projects} activeProject={activeProject} onPage={setPage} onSelectProject={setActiveProject} onProjectsChange={setProjects} />;
-    if (page === 'Plan') return <Plan projects={projects} activeProject={activeProject} onSelectProject={setActiveProject} onUpdateProject={updateProject} />;
-    if (page === 'Write') return <Write />;
-    if (page === 'Journey') return <Journey onPage={setPage} />;
+    if (page === 'Plan') return <Plan projects={projects} activeProject={activeProject} onSelectProject={setActiveProject} onUpdateProject={updateProject} onPage={setPage} />;
+    if (page === 'Write') return <Write projects={projects} activeProject={activeProject} onSelectProject={setActiveProject} onUpdateProject={updateProject} onPage={setPage} />;
+    if (page === 'Journey') return <Journey projects={projects} activeProject={activeProject} onSelectProject={setActiveProject} onPage={setPage} onBack={() => setPage('Library')} />;
     if (page === 'Profile') return <Profile />;
     return <Stats />;
   };
@@ -614,18 +989,40 @@ export default function App() {
 }
 
 const s = StyleSheet.create({
-  planSwitcherLabel: { color: C.muted, fontSize: 8, letterSpacing: 0.9, fontWeight: '700', marginTop: 15, marginBottom: 1 }, planProjectPill: { height: 54, paddingHorizontal: 10, borderRadius: 16, flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.7)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.55)' }, planProjectCopy: { flex: 1, minWidth: 112, marginLeft: 7 }, planProjectType: { color: C.muted, fontSize: 8, marginLeft: 7, marginTop: 2 },
+  planHero: { marginHorizontal: -20, marginTop: -18, padding: 31, paddingTop: 51, paddingBottom: 29, overflow: 'hidden', backgroundColor: '#EDE8FF', borderBottomLeftRadius: 37, borderBottomRightRadius: 37 },
+  planHeroOverline: { color: C.muted, fontSize: 9, letterSpacing: 1.05, fontWeight: '700' }, planHeroTitle: { color: C.ink, fontWeight: '700', fontSize: 29, lineHeight: 33, letterSpacing: -0.7, marginTop: 8 }, planHeroCopy: { color: C.muted, fontSize: 12, lineHeight: 17, marginTop: 10, maxWidth: 260 }, planHeroOrb: { position: 'absolute', right: 18, bottom: -57, color: C.periwinkle, opacity: 0.34, fontSize: 204 },
+  planTypeRow: { gap: 8, paddingTop: 18, paddingBottom: 3, paddingRight: 20 }, planTypePill: { height: 44, paddingHorizontal: 10, borderRadius: 16, flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.7)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.55)' }, planTypePillActive: { backgroundColor: '#FFF', borderColor: C.periwinkle }, planTypeDot: { width: 25, height: 25, borderRadius: 9, alignItems: 'center', justifyContent: 'center' }, planTypeDotText: { color: '#FFF', fontSize: 12 }, planTypeText: { color: C.muted, fontSize: 10, fontWeight: '700', marginLeft: 7 }, planTypeTextActive: { color: C.ink },
+  planSelectedCard: { marginTop: 15, padding: 14, borderRadius: 20, backgroundColor: '#FFF', flexDirection: 'row', alignItems: 'center' }, planSelectedIcon: { width: 43, height: 43, borderRadius: 15, alignItems: 'center', justifyContent: 'center', marginRight: 12 }, planSelectedIconText: { color: '#FFF', fontSize: 18 }, planSelectedOverline: { color: C.periwinkle, fontSize: 8, letterSpacing: 1, fontWeight: '700' }, planSelectedTitle: { color: C.ink, fontSize: 15, fontWeight: '700', marginTop: 3 }, planSelectedSub: { color: C.muted, fontSize: 10, marginTop: 3 }, planJourneyLink: { minHeight: 35, paddingHorizontal: 9, borderRadius: 12, backgroundColor: '#F4F2FF', flexDirection: 'row', alignItems: 'center', gap: 5 }, planJourneyLinkText: { color: C.periwinkle, fontSize: 9, fontWeight: '700' }, planSelectedArrow: { color: C.gold, fontSize: 15 },
+  planSteps: { marginTop: 20, padding: 5, borderRadius: 19, backgroundColor: 'rgba(255,255,255,0.7)', flexDirection: 'row', gap: 4 }, planStep: { flex: 1, minHeight: 54, paddingHorizontal: 5, borderRadius: 15, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }, planStepActive: { backgroundColor: '#FFF' }, planStepNumber: { width: 22, height: 22, borderRadius: 11, backgroundColor: '#E7E7F2', alignItems: 'center', justifyContent: 'center', marginRight: 6 }, planStepNumberActive: { backgroundColor: C.periwinkle }, planStepNumberText: { color: C.muted, fontSize: 10, fontWeight: '700' }, planStepNumberTextActive: { color: '#FFF' }, planStepLabel: { color: C.muted, fontSize: 10, fontWeight: '700' }, planStepLabelActive: { color: C.ink }, planStepShort: { color: '#9B9FB8', fontSize: 8, marginTop: 2 },
+  planStepCard: { marginTop: 16, padding: 17, borderRadius: 23, backgroundColor: 'rgba(255,255,255,0.82)' }, planSectionKicker: { color: C.periwinkle, fontSize: 8, letterSpacing: 1, fontWeight: '700' }, planSectionTitle: { color: C.ink, fontSize: 23, lineHeight: 28, letterSpacing: -0.5, fontWeight: '700', marginTop: 6 }, planSectionCopy: { color: C.muted, fontSize: 11, lineHeight: 17, marginTop: 7 }, metricRow: { flexDirection: 'row', gap: 10, marginTop: 17 }, metricCard: { flex: 1, padding: 13, borderRadius: 17, backgroundColor: '#F5F2FF', borderWidth: 1, borderColor: '#ECE9FF' }, metricLabel: { color: C.muted, fontSize: 8, letterSpacing: 0.7, fontWeight: '700' }, metricInput: { color: C.ink, fontSize: 26, fontWeight: '700', paddingVertical: 5, paddingHorizontal: 0 }, metricHint: { color: C.muted, fontSize: 9, lineHeight: 13 }, planTip: { marginTop: 14, padding: 12, borderRadius: 15, backgroundColor: '#FFF6DB', flexDirection: 'row', alignItems: 'flex-start' }, planTipIcon: { color: '#C9901B', fontSize: 14, marginRight: 8 }, planTipText: { flex: 1, color: '#8C6B29', fontSize: 10, lineHeight: 15 },
+  structureList: { marginTop: 16, gap: 8 }, structureRow: { padding: 11, borderRadius: 16, flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: '#E7E7F0', backgroundColor: '#FFF' }, structureRowActive: { borderColor: '#D8D1FA', backgroundColor: '#F7F5FF' }, structureCheck: { width: 23, height: 23, borderRadius: 8, borderWidth: 1.5, borderColor: '#CBCDDD', alignItems: 'center', justifyContent: 'center' }, structureCheckOn: { backgroundColor: C.periwinkle, borderColor: C.periwinkle }, structureCheckText: { color: '#FFF', fontSize: 13, fontWeight: '700' }, structureCopy: { flex: 1, marginLeft: 10, marginRight: 5 }, structureLabel: { color: C.ink, fontSize: 12, fontWeight: '700' }, structureHelper: { color: C.muted, fontSize: 9, lineHeight: 13, marginTop: 3 }, structureFooter: { color: C.muted, fontSize: 10, marginTop: 13, textAlign: 'right' },
+  planInputCard: { marginTop: 16, padding: 13, borderRadius: 17, backgroundColor: '#F8F7FF', borderWidth: 1, borderColor: '#ECE9FF' }, planInputLabel: { color: C.periwinkle, fontSize: 8, letterSpacing: 0.9, fontWeight: '700' }, planInputHint: { color: C.muted, fontSize: 9, lineHeight: 13, marginTop: 4 }, planTextArea: { minHeight: 79, padding: 0, paddingTop: 10, color: C.ink, fontSize: 12, lineHeight: 18, textAlignVertical: 'top' }, planTextAreaSmall: { minHeight: 62, padding: 0, paddingTop: 9, color: C.ink, fontSize: 12, lineHeight: 18, textAlignVertical: 'top' }, plotGuide: { marginTop: 16, padding: 14, borderRadius: 18, backgroundColor: '#EEF8FF', borderWidth: 1, borderColor: '#DFF1FB' }, plotGuideTitle: { color: '#4B7B9D', fontSize: 11, fontWeight: '700' }, plotGuideText: { color: '#5D7890', fontSize: 10, lineHeight: 15, marginTop: 5 }, plotPrompt: { marginTop: 12, padding: 13, borderRadius: 17, backgroundColor: '#FFF', borderWidth: 1, borderColor: '#E7E7F0' }, plotPromptTitle: { color: C.ink, fontSize: 12, fontWeight: '700' }, plotPromptHelper: { color: C.muted, fontSize: 9, lineHeight: 13, marginTop: 3 }, planSubheading: { color: C.ink, fontSize: 15, fontWeight: '700', marginTop: 21 },
+  chapterHeader: { marginTop: 21, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end' }, chapterHeaderHint: { color: C.muted, fontSize: 9, lineHeight: 13, marginTop: 4 }, chapterCountBadge: { minWidth: 35, height: 30, borderRadius: 11, backgroundColor: '#FFF2C7', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 8 }, chapterCountText: { color: '#A97819', fontSize: 12, fontWeight: '700' }, chapterRow: { marginTop: 9, padding: 9, borderRadius: 15, backgroundColor: '#FFF', borderWidth: 1, borderColor: '#E7E7F0', flexDirection: 'row', alignItems: 'flex-start' }, chapterIndex: { width: 29, height: 29, borderRadius: 10, backgroundColor: '#EEEDFF', alignItems: 'center', justifyContent: 'center', marginRight: 9, marginTop: 2 }, chapterIndexText: { color: C.periwinkle, fontSize: 9, fontWeight: '700' }, chapterTextInput: { flex: 1, minHeight: 47, padding: 0, color: C.ink, fontSize: 11, lineHeight: 16, textAlignVertical: 'top' }, emptyChapter: { marginTop: 12, padding: 15, borderRadius: 17, backgroundColor: '#F5F2FF', flexDirection: 'row', alignItems: 'center' }, emptyChapterIcon: { color: C.periwinkle, fontSize: 20, marginRight: 9 }, emptyChapterText: { flex: 1, color: C.muted, fontSize: 10, lineHeight: 15 },
+  planFooter: { marginTop: 16, marginBottom: 5, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, planFooterText: { color: C.muted, fontSize: 8, letterSpacing: 0.8, fontWeight: '700' }, planNavButton: { minWidth: 79, height: 39, paddingHorizontal: 12, borderRadius: 13, borderWidth: 1, borderColor: '#D9DAE8', backgroundColor: 'rgba(255,255,255,0.72)', alignItems: 'center', justifyContent: 'center' }, planNavButtonPrimary: { borderColor: C.periwinkle, backgroundColor: C.periwinkle }, planNavButtonDisabled: { opacity: 0.4 }, planNavButtonText: { color: C.muted, fontSize: 10, fontWeight: '700' }, planNavButtonTextPrimary: { color: '#FFF' },
+  dictationField: { position: 'relative' }, dictationFieldGrow: { flex: 1, minWidth: 0 }, dictationTextInput: { paddingRight: 36 }, dictationButton: { position: 'absolute', right: 4, bottom: 7, width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: '#EEEDFF', borderWidth: 1, borderColor: '#DDD8FA' }, dictationIcon: { fontSize: 14, lineHeight: 16 },
+  planHeroSwitcher: { position: 'absolute', top: 15, right: 20, width: 214, minHeight: 40, paddingHorizontal: 7, paddingVertical: 5, borderRadius: 14, flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.44)', borderWidth: 1, borderColor: 'rgba(139,138,232,0.2)' }, planTopBar: { marginTop: -6, marginBottom: 10, alignItems: 'flex-end' }, planTopSwitcher: { minWidth: 220, maxWidth: 292, minHeight: 48, paddingHorizontal: 9, paddingVertical: 7, borderRadius: 16, flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.86)', borderWidth: 1, borderColor: '#E0DDF8', shadowColor: '#706C98', shadowOpacity: 0.08, shadowRadius: 8, shadowOffset: { width: 0, height: 4 }, elevation: 2 }, planTopIcon: { width: 32, height: 32, borderRadius: 11, alignItems: 'center', justifyContent: 'center' }, planTopIconText: { color: '#FFF', fontSize: 14 }, planTopSwitcherCopy: { flex: 1, marginLeft: 9 }, planTopOverline: { color: C.periwinkle, fontSize: 7, letterSpacing: 0.85, fontWeight: '700' }, planTopTitle: { color: C.ink, fontSize: 12, fontWeight: '700', marginTop: 2 }, planTopChevron: { color: C.periwinkle, fontSize: 20, lineHeight: 20, marginLeft: 8 }, projectMenuShade: { flex: 1, backgroundColor: 'rgba(29,33,69,0.22)', paddingTop: 63, paddingHorizontal: 20, alignItems: 'flex-end' }, projectMenu: { width: 292, padding: 12, borderRadius: 22, backgroundColor: '#FBFAFF', shadowColor: '#4E4A7F', shadowOpacity: 0.22, shadowRadius: 20, shadowOffset: { width: 0, height: 9 }, elevation: 8 }, projectMenuHeader: { color: C.periwinkle, fontSize: 8, letterSpacing: 1, fontWeight: '700', marginHorizontal: 5, marginTop: 2 }, projectMenuHint: { color: C.muted, fontSize: 10, marginHorizontal: 5, marginTop: 4, marginBottom: 9 }, projectMenuRow: { minHeight: 56, paddingHorizontal: 9, borderRadius: 15, flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF', borderWidth: 1, borderColor: '#ECEBF4', marginTop: 7 }, projectMenuRowActive: { backgroundColor: '#F3F1FF', borderColor: '#D9D2FA' }, projectMenuIcon: { width: 32, height: 32, borderRadius: 11, alignItems: 'center', justifyContent: 'center' }, projectMenuIconText: { color: '#FFF', fontSize: 14 }, projectMenuCopy: { flex: 1, marginLeft: 9 }, projectMenuProject: { color: C.ink, fontSize: 12, fontWeight: '700' }, projectMenuType: { color: C.muted, fontSize: 9, marginTop: 3 }, projectMenuCheck: { width: 21, height: 21, borderRadius: 10, borderWidth: 1.5, borderColor: '#D4D5E3', alignItems: 'center', justifyContent: 'center', marginLeft: 7 }, projectMenuCheckActive: { backgroundColor: C.periwinkle, borderColor: C.periwinkle }, projectMenuCheckText: { color: '#FFF', fontSize: 11, fontWeight: '700' },
   page: { flex: 1, backgroundColor: C.paper, overflow: 'hidden' }, safe: { flex: 1 }, content: { paddingHorizontal: 20, paddingTop: 18, paddingBottom: 112 },
   orb: { position: 'absolute', borderRadius: 999, opacity: 0.46 }, orbOne: { width: 270, height: 270, backgroundColor: C.lavender, top: -110, right: -100 }, orbTwo: { width: 230, height: 230, backgroundColor: C.sky, top: 310, left: -155 }, orbThree: { width: 190, height: 190, backgroundColor: C.peach, bottom: 20, right: -110 },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }, overline: { color: C.muted, fontSize: 9, letterSpacing: 1.15, fontWeight: '700' }, pageTitle: { color: C.ink, fontSize: 31, letterSpacing: -0.8, fontWeight: '700', marginTop: 4 }, headerActions: { flexDirection: 'row', alignItems: 'center', gap: 9 }, tinyButton: { width: 39, height: 39, backgroundColor: 'rgba(255,255,255,0.7)', borderRadius: 20, alignItems: 'center', justifyContent: 'center' }, tinyButtonText: { color: C.periwinkle, fontSize: 18 }, avatar: { width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFF8F3', shadowColor: '#666187', shadowOpacity: 0.14, shadowRadius: 9, shadowOffset: { width: 0, height: 4 }, elevation: 3 }, avatarText: { color: C.coral, fontWeight: '700', fontSize: 16 }, avatarDot: { width: 10, height: 10, borderRadius: 5, position: 'absolute', right: 0, bottom: 2, borderWidth: 2, borderColor: '#FFF8F3', backgroundColor: C.sage },
-  intro: { fontSize: 15, lineHeight: 21, color: C.muted, marginBottom: 21, maxWidth: 310 }, focusCard: { height: 206, borderRadius: 28, padding: 21, overflow: 'hidden', shadowColor: '#5D598A', shadowOpacity: 0.21, shadowRadius: 19, shadowOffset: { width: 0, height: 10 }, elevation: 7 }, focusEyebrow: { color: '#F7F9FF', fontSize: 9, letterSpacing: 1.05, fontWeight: '700' }, focusTitle: { color: '#FFF', fontSize: 26, fontWeight: '700', letterSpacing: -0.5, marginTop: 10 }, focusCopy: { color: '#F5F4FF', fontSize: 12, marginTop: 5 }, lightAction: { position: 'absolute', left: 21, bottom: 17, borderRadius: 15, paddingHorizontal: 13, paddingVertical: 9, flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: 'rgba(255,255,255,0.22)' }, lightActionText: { fontSize: 11, color: '#FFF', fontWeight: '700' }, lightArrow: { color: '#FFF', fontSize: 16 }, focusShape: { position: 'absolute', right: -15, bottom: -58, fontSize: 195, color: '#FFF1DF', opacity: 0.55, transform: [{ rotate: '-12deg' }] },
+  intro: { fontSize: 15, lineHeight: 21, color: C.muted, marginBottom: 21, maxWidth: 310 }, focusCard: { height: 206, borderRadius: 28, padding: 21, overflow: 'hidden', shadowColor: '#5D598A', shadowOpacity: 0.21, shadowRadius: 19, shadowOffset: { width: 0, height: 10 }, elevation: 7 }, focusEyebrow: { color: '#F7F9FF', fontSize: 9, letterSpacing: 1.05, fontWeight: '700' }, focusTitle: { color: '#FFF', fontSize: 26, fontWeight: '700', letterSpacing: -0.5, marginTop: 10 }, focusCopy: { color: '#F5F4FF', fontSize: 12, marginTop: 5, maxWidth: 245 }, focusActions: { position: 'absolute', left: 21, right: 21, bottom: 17, flexDirection: 'row', alignItems: 'center', gap: 8 }, lightAction: { flex: 1, borderRadius: 15, paddingHorizontal: 13, paddingVertical: 9, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: 'rgba(255,255,255,0.22)' }, lightActionText: { fontSize: 11, color: '#FFF', fontWeight: '700' }, lightArrow: { color: '#FFF', fontSize: 16 }, focusJourneyAction: { paddingHorizontal: 11, paddingVertical: 9, borderRadius: 15, borderWidth: 1, borderColor: 'rgba(255,255,255,0.4)' }, focusJourneyActionText: { color: '#FFF', fontSize: 10, fontWeight: '700' }, focusShape: { position: 'absolute', right: -15, bottom: -58, fontSize: 195, color: '#FFF1DF', opacity: 0.55, transform: [{ rotate: '-12deg' }] },
   sectionBar: { marginTop: 28, marginBottom: 13, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }, sectionTitle: { fontSize: 18, fontWeight: '700', letterSpacing: -0.3, color: C.ink }, link: { color: C.periwinkle, fontSize: 9, fontWeight: '700', letterSpacing: 0.8 }, newProjectButton: { paddingVertical: 8, paddingHorizontal: 10, borderRadius: 11, backgroundColor: '#EEEDFF' }, newProjectText: { color: C.periwinkle, fontSize: 9, fontWeight: '700', letterSpacing: 0.65 }, projectRow: { minHeight: 74, marginBottom: 9, padding: 12, borderRadius: 19, flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.68)' }, projectRowActive: { backgroundColor: '#FFF', shadowColor: '#68638D', shadowOpacity: 0.11, shadowRadius: 11, shadowOffset: { width: 0, height: 5 }, elevation: 2 }, projectMark: { width: 44, height: 44, borderRadius: 15, alignItems: 'center', justifyContent: 'center' }, projectMarkText: { color: '#FFF', fontSize: 18 }, projectCopy: { flex: 1, marginLeft: 12 }, projectTitle: { color: C.ink, fontWeight: '700', fontSize: 14 }, projectDetail: { color: C.muted, marginTop: 4, fontSize: 10, letterSpacing: 0.25 }, continueTag: { paddingHorizontal: 8, paddingVertical: 6, borderRadius: 9, backgroundColor: '#EEEDFF' }, continueTagText: { fontSize: 8, letterSpacing: 0.6, color: C.periwinkle, fontWeight: '700' }, chevron: { color: C.periwinkle, fontSize: 25 }, addProjectRow: { marginTop: 4, borderRadius: 19, borderWidth: 1.5, borderStyle: 'dashed', borderColor: '#C8C8E8', minHeight: 72, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.32)' }, addProjectPlus: { width: 38, height: 38, borderRadius: 14, backgroundColor: '#EEEDFF', alignItems: 'center', justifyContent: 'center' }, addProjectPlusText: { color: C.periwinkle, fontSize: 24, fontWeight: '400' }, addProjectTitle: { color: C.ink, fontSize: 13, fontWeight: '700', marginLeft: 12 }, addProjectSub: { color: C.muted, fontSize: 10, marginLeft: 12, marginTop: 4 },
   modalShade: { flex: 1, backgroundColor: 'rgba(29, 33, 69, 0.35)', justifyContent: 'flex-end' }, composerSheet: { height: '88%', paddingHorizontal: 20, paddingTop: 12, paddingBottom: 26, backgroundColor: '#FAFAFF', borderTopLeftRadius: 32, borderTopRightRadius: 32 }, sheetHandle: { width: 38, height: 4, borderRadius: 4, backgroundColor: '#D9D9E7', alignSelf: 'center' }, composerHeader: { marginTop: 17, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }, composerOverline: { color: C.periwinkle, letterSpacing: 1, fontSize: 9, fontWeight: '700' }, composerTitle: { color: C.ink, fontSize: 23, letterSpacing: -0.5, fontWeight: '700', marginTop: 5 }, closeButton: { height: 34, width: 34, borderRadius: 17, backgroundColor: '#F0F0F9', alignItems: 'center', justifyContent: 'center' }, closeButtonText: { color: C.muted, fontSize: 23, lineHeight: 24 }, projectInput: { marginTop: 17, minHeight: 50, paddingHorizontal: 15, backgroundColor: '#FFF', borderRadius: 15, color: C.ink, fontSize: 14, borderWidth: 1, borderColor: '#E5E5F0' }, typePrompt: { color: C.muted, fontSize: 9, letterSpacing: 0.9, fontWeight: '700', marginTop: 20, marginBottom: 10 }, typeScroller: { flex: 1 }, typeGrid: { paddingBottom: 14, gap: 8 }, typeCard: { padding: 10, minHeight: 63, borderRadius: 17, flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: '#EBEBF2', backgroundColor: '#FFF' }, typeCardSelected: { borderColor: C.periwinkle, backgroundColor: '#F4F2FF' }, typeIcon: { width: 35, height: 35, borderRadius: 12, alignItems: 'center', justifyContent: 'center' }, typeIconText: { color: '#FFF', fontSize: 16 }, typeCopy: { flex: 1, marginLeft: 10 }, typeName: { color: C.ink, fontSize: 12, fontWeight: '700' }, typeExample: { color: C.muted, fontSize: 9, marginTop: 3 }, typeCheck: { width: 20, height: 20, borderRadius: 10, borderWidth: 1.5, borderColor: '#D2D4E2', alignItems: 'center', justifyContent: 'center' }, typeCheckSelected: { backgroundColor: C.periwinkle, borderColor: C.periwinkle }, typeCheckText: { color: '#FFF', fontSize: 11, fontWeight: '700' }, createProjectButton: { marginTop: 11, backgroundColor: C.periwinkle, height: 53, borderRadius: 17, paddingHorizontal: 18, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', shadowColor: '#7470C9', shadowOpacity: 0.28, shadowRadius: 12, shadowOffset: { width: 0, height: 6 }, elevation: 5 }, createProjectButtonText: { color: '#FFF', fontSize: 14, fontWeight: '700' }, createProjectArrow: { color: '#FFF', fontSize: 21 },
-  planHero: { marginHorizontal: -20, marginTop: -18, padding: 31, paddingTop: 51, paddingBottom: 29, overflow: 'hidden', backgroundColor: '#EDE8FF', borderBottomLeftRadius: 37, borderBottomRightRadius: 37 }, planHeroOverline: { color: C.muted, fontSize: 9, letterSpacing: 1.05, fontWeight: '700' }, planHeroTitle: { color: C.ink, fontWeight: '700', fontSize: 29, lineHeight: 33, letterSpacing: -0.7, marginTop: 8 }, planHeroCopy: { color: C.muted, fontSize: 12, lineHeight: 17, marginTop: 10, maxWidth: 260 }, planHeroOrb: { position: 'absolute', right: 18, bottom: -57, color: C.periwinkle, opacity: 0.34, fontSize: 204 }, planTypeRow: { gap: 8, paddingTop: 18, paddingBottom: 3, paddingRight: 20 }, planTypePill: { height: 44, paddingHorizontal: 10, borderRadius: 16, flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.7)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.55)' }, planTypePillActive: { backgroundColor: '#FFF', borderColor: C.periwinkle, shadowColor: '#7772AF', shadowOpacity: 0.12, shadowRadius: 8, shadowOffset: { width: 0, height: 4 }, elevation: 2 }, planTypeDot: { width: 25, height: 25, borderRadius: 9, alignItems: 'center', justifyContent: 'center' }, planTypeDotText: { color: '#FFF', fontSize: 12 }, planTypeText: { color: C.muted, fontSize: 10, fontWeight: '700', marginLeft: 7 }, planTypeTextActive: { color: C.ink }, planSelectedCard: { marginTop: 15, padding: 14, borderRadius: 20, backgroundColor: '#FFF', flexDirection: 'row', alignItems: 'center', shadowColor: '#706C98', shadowOpacity: 0.11, shadowRadius: 12, shadowOffset: { width: 0, height: 6 }, elevation: 2 }, planSelectedIcon: { width: 43, height: 43, borderRadius: 15, alignItems: 'center', justifyContent: 'center', marginRight: 12 }, planSelectedIconText: { color: '#FFF', fontSize: 18 }, planSelectedOverline: { color: C.periwinkle, fontSize: 8, letterSpacing: 1, fontWeight: '700' }, planSelectedTitle: { color: C.ink, fontSize: 15, fontWeight: '700', marginTop: 3 }, planSelectedSub: { color: C.muted, fontSize: 10, marginTop: 3 }, planSelectedArrow: { color: C.gold, fontSize: 18 }, planSteps: { marginTop: 20, padding: 5, borderRadius: 19, backgroundColor: 'rgba(255,255,255,0.7)', flexDirection: 'row', gap: 4 }, planStep: { flex: 1, minHeight: 54, paddingHorizontal: 5, borderRadius: 15, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }, planStepActive: { backgroundColor: '#FFF' }, planStepNumber: { width: 22, height: 22, borderRadius: 11, backgroundColor: '#E7E7F2', alignItems: 'center', justifyContent: 'center', marginRight: 6 }, planStepNumberActive: { backgroundColor: C.periwinkle }, planStepNumberText: { color: C.muted, fontSize: 10, fontWeight: '700' }, planStepNumberTextActive: { color: '#FFF' }, planStepLabel: { color: C.muted, fontSize: 10, fontWeight: '700' }, planStepLabelActive: { color: C.ink }, planStepShort: { color: '#9B9FB8', fontSize: 8, marginTop: 2 }, planStepCard: { marginTop: 16, padding: 17, borderRadius: 23, backgroundColor: 'rgba(255,255,255,0.82)', shadowColor: '#706C98', shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 5 }, elevation: 2 }, planSectionKicker: { color: C.periwinkle, fontSize: 8, letterSpacing: 1, fontWeight: '700' }, planSectionTitle: { color: C.ink, fontSize: 23, lineHeight: 28, letterSpacing: -0.5, fontWeight: '700', marginTop: 6 }, planSectionCopy: { color: C.muted, fontSize: 11, lineHeight: 17, marginTop: 7 }, metricRow: { flexDirection: 'row', gap: 10, marginTop: 17 }, metricCard: { flex: 1, padding: 13, borderRadius: 17, backgroundColor: '#F5F2FF', borderWidth: 1, borderColor: '#ECE9FF' }, metricLabel: { color: C.muted, fontSize: 8, letterSpacing: 0.7, fontWeight: '700' }, metricInput: { color: C.ink, fontSize: 26, fontWeight: '700', paddingVertical: 5, paddingHorizontal: 0 }, metricHint: { color: C.muted, fontSize: 9, lineHeight: 13 }, planTip: { marginTop: 14, padding: 12, borderRadius: 15, backgroundColor: '#FFF6DB', flexDirection: 'row', alignItems: 'flex-start' }, planTipIcon: { color: '#C9901B', fontSize: 14, marginRight: 8 }, planTipText: { flex: 1, color: '#8C6B29', fontSize: 10, lineHeight: 15 }, structureList: { marginTop: 16, gap: 8 }, structureRow: { padding: 11, borderRadius: 16, flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: '#E7E7F0', backgroundColor: '#FFF' }, structureRowActive: { borderColor: '#D8D1FA', backgroundColor: '#F7F5FF' }, structureCheck: { width: 23, height: 23, borderRadius: 8, borderWidth: 1.5, borderColor: '#CBCDDD', alignItems: 'center', justifyContent: 'center' }, structureCheckOn: { backgroundColor: C.periwinkle, borderColor: C.periwinkle }, structureCheckText: { color: '#FFF', fontSize: 13, fontWeight: '700' }, structureCopy: { flex: 1, marginLeft: 10, marginRight: 5 }, structureLabel: { color: C.ink, fontSize: 12, fontWeight: '700' }, structureHelper: { color: C.muted, fontSize: 9, lineHeight: 13, marginTop: 3 }, optionalTag: { color: C.muted, fontSize: 7, letterSpacing: 0.5, fontWeight: '700' }, structureFooter: { color: C.muted, fontSize: 10, marginTop: 13, textAlign: 'right' }, planInputCard: { marginTop: 16, padding: 13, borderRadius: 17, backgroundColor: '#F8F7FF', borderWidth: 1, borderColor: '#ECE9FF' }, planInputLabel: { color: C.periwinkle, fontSize: 8, letterSpacing: 0.9, fontWeight: '700' }, planInputHint: { color: C.muted, fontSize: 9, lineHeight: 13, marginTop: 4 }, planTextArea: { minHeight: 79, padding: 0, paddingTop: 10, color: C.ink, fontSize: 12, lineHeight: 18, textAlignVertical: 'top' }, planTextAreaSmall: { minHeight: 62, padding: 0, paddingTop: 9, color: C.ink, fontSize: 12, lineHeight: 18, textAlignVertical: 'top' }, plotGuide: { marginTop: 16, padding: 14, borderRadius: 18, backgroundColor: '#EEF8FF', borderWidth: 1, borderColor: '#DFF1FB' }, plotGuideTitle: { color: '#4B7B9D', fontSize: 11, fontWeight: '700' }, plotGuideText: { color: '#5D7890', fontSize: 10, lineHeight: 15, marginTop: 5 }, planSubheading: { color: C.ink, fontSize: 15, fontWeight: '700', marginTop: 21 }, plotPrompt: { marginTop: 12, padding: 13, borderRadius: 17, backgroundColor: '#FFF', borderWidth: 1, borderColor: '#E7E7F0' }, plotPromptTitle: { color: C.ink, fontSize: 12, fontWeight: '700' }, plotPromptHelper: { color: C.muted, fontSize: 9, lineHeight: 13, marginTop: 3 }, chapterHeader: { marginTop: 21, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end' }, chapterHeaderHint: { color: C.muted, fontSize: 9, lineHeight: 13, marginTop: 4 }, chapterCountBadge: { minWidth: 35, height: 30, borderRadius: 11, backgroundColor: '#FFF2C7', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 8 }, chapterCountText: { color: '#A97819', fontSize: 12, fontWeight: '700' }, chapterRow: { marginTop: 9, padding: 9, borderRadius: 15, backgroundColor: '#FFF', borderWidth: 1, borderColor: '#E7E7F0', flexDirection: 'row', alignItems: 'flex-start' }, chapterIndex: { width: 29, height: 29, borderRadius: 10, backgroundColor: '#EEEDFF', alignItems: 'center', justifyContent: 'center', marginRight: 9, marginTop: 2 }, chapterIndexText: { color: C.periwinkle, fontSize: 9, fontWeight: '700' }, chapterTextInput: { flex: 1, minHeight: 47, padding: 0, color: C.ink, fontSize: 11, lineHeight: 16, textAlignVertical: 'top' }, emptyChapter: { marginTop: 12, padding: 15, borderRadius: 17, backgroundColor: '#F5F2FF', flexDirection: 'row', alignItems: 'center' }, emptyChapterIcon: { color: C.periwinkle, fontSize: 20, marginRight: 9 }, emptyChapterText: { flex: 1, color: C.muted, fontSize: 10, lineHeight: 15 }, chapterLimitNote: { color: C.muted, fontSize: 9, lineHeight: 14, marginTop: 9 }, planFooter: { marginTop: 16, marginBottom: 5, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, planFooterText: { color: C.muted, fontSize: 8, letterSpacing: 0.8, fontWeight: '700' }, planNavButton: { minWidth: 79, height: 39, paddingHorizontal: 12, borderRadius: 13, borderWidth: 1, borderColor: '#D9DAE8', backgroundColor: 'rgba(255,255,255,0.72)', alignItems: 'center', justifyContent: 'center' }, planNavButtonPrimary: { borderColor: C.periwinkle, backgroundColor: C.periwinkle }, planNavButtonDisabled: { opacity: 0.4 }, planNavButtonText: { color: C.muted, fontSize: 10, fontWeight: '700' }, planNavButtonTextPrimary: { color: '#FFF' },
+  structureLegend: { marginTop: 12, flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 10 }, structureLegendItem: { flexDirection: 'row', alignItems: 'center', gap: 5 }, structureLegendDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#D9DAE8' }, structureLegendDotRecommended: { backgroundColor: C.periwinkle }, structureLegendText: { color: C.muted, fontSize: 8, fontWeight: '700' }, structureLegendHint: { color: '#A4A7BE', fontSize: 8, marginLeft: 3 }, structureChecklistHeader: { marginTop: 16, padding: 11, borderRadius: 15, backgroundColor: '#F4F2FF', borderWidth: 1, borderColor: '#E4E1F4', flexDirection: 'row', alignItems: 'center' }, structureChecklistCopy: { flex: 1 }, structureChecklistTitle: { color: C.ink, fontSize: 9, letterSpacing: 0.8, fontWeight: '700' }, structureChecklistHint: { color: C.muted, fontSize: 9, marginTop: 4 }, partTag: { paddingHorizontal: 5, paddingVertical: 3, borderRadius: 5, fontSize: 6, letterSpacing: 0.35, fontWeight: '700' }, recommendedTag: { color: C.periwinkle, backgroundColor: '#EEEDFF' }, optionalTag: { color: C.muted, backgroundColor: '#F1F1F6' },
   structureFooterRow: { marginTop: 13, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, structureFooterCompact: { color: C.muted, fontSize: 10 }, structurePager: { flexDirection: 'row', alignItems: 'center', gap: 7 }, structurePagerButton: { width: 27, height: 27, borderRadius: 10, backgroundColor: '#EEEDFF', alignItems: 'center', justifyContent: 'center' }, structurePagerButtonDisabled: { opacity: 0.35 }, structurePagerButtonText: { color: C.periwinkle, fontSize: 19, lineHeight: 21 }, structurePagerCount: { color: C.muted, fontSize: 9, fontWeight: '700', minWidth: 27, textAlign: 'center' },
-  writeTop: { marginTop: 9, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }, writeTitle: { color: C.ink, fontSize: 29, lineHeight: 34, letterSpacing: -0.7, fontWeight: '700', marginTop: 6 }, saveChip: { marginTop: 8, paddingVertical: 8, paddingHorizontal: 10, borderWidth: 1, borderColor: '#D5D7E5', borderRadius: 12 }, saveChipDone: { backgroundColor: '#EFFAEF', borderColor: '#D5EFD7' }, saveChipText: { color: C.muted, fontSize: 9, letterSpacing: 0.5, fontWeight: '700' }, saveChipTextDone: { color: '#5B9C67' }, manuscript: { marginTop: 27, backgroundColor: '#FFFDF9', borderRadius: 25, padding: 22, minHeight: 305, shadowColor: '#807A96', shadowOpacity: 0.12, shadowRadius: 14, shadowOffset: { width: 0, height: 7 }, elevation: 3 }, manuscriptKicker: { color: C.coral, fontSize: 9, letterSpacing: 1.3, fontWeight: '700', marginBottom: 19 }, manuscriptText: { color: '#353B5B', fontSize: 16, lineHeight: 25, letterSpacing: 0.05, marginBottom: 17 }, cursorLine: { height: 25 }, cursor: { height: 21, width: 2, backgroundColor: C.periwinkle }, writePrompt: { marginTop: 17, padding: 14, flexDirection: 'row', alignItems: 'center', backgroundColor: '#F1EEFF', borderRadius: 19 }, promptIcon: { height: 38, width: 38, borderRadius: 19, backgroundColor: '#DCD5FB', alignItems: 'center', justifyContent: 'center' }, promptIconText: { color: C.periwinkle }, promptTitle: { color: C.ink, fontSize: 12, fontWeight: '700', marginLeft: 11 }, promptText: { color: C.muted, fontSize: 10, marginLeft: 11, marginTop: 4 }, addWords: { padding: 7, backgroundColor: '#FFF', borderRadius: 10 }, addWordsText: { color: C.periwinkle, fontSize: 10, fontWeight: '700' }, writerFooter: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 17, paddingHorizontal: 4 }, writerFooterText: { color: C.muted, fontSize: 10 }, wordDots: { flexDirection: 'row', gap: 4 }, wordDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: '#D9DBE7' }, wordDotFilled: { backgroundColor: C.coral },
+  storyMapPager: { marginTop: 16, padding: 9, borderRadius: 16, backgroundColor: '#F4F2FF', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, storyMapPagerButton: { width: 30, height: 30, borderRadius: 10, backgroundColor: '#FFF', alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: '#E4E1F4' }, storyMapPagerButtonDisabled: { opacity: 0.35 }, storyMapPagerButtonText: { color: C.periwinkle, fontSize: 20, lineHeight: 22 }, storyMapPagerCopy: { flex: 1, alignItems: 'center' }, storyMapPagerLabel: { color: C.ink, fontSize: 11, fontWeight: '700' }, storyMapPagerCount: { color: C.muted, fontSize: 8, letterSpacing: 0.7, fontWeight: '700', marginTop: 3 }, storyMapPageHint: { color: C.muted, fontSize: 10, lineHeight: 15, marginTop: 6, marginBottom: 2 },
+  writeProjectBar: { marginTop: 3, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-start', gap: 7 }, writeProjectSwitcher: { maxWidth: 235, minHeight: 50, flexShrink: 1, paddingHorizontal: 9, paddingVertical: 7, borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.86)', borderWidth: 1, borderColor: '#E0DDF8', flexDirection: 'row', alignItems: 'center' }, writeProjectIcon: { width: 34, height: 34, borderRadius: 12, alignItems: 'center', justifyContent: 'center' }, writeProjectIconText: { color: '#FFF', fontSize: 15 }, writeProjectCopy: { flex: 1, marginLeft: 9 }, writeProjectOverline: { color: C.periwinkle, fontSize: 7, letterSpacing: 0.8, fontWeight: '700' }, writeProjectTitle: { color: C.ink, fontSize: 12, fontWeight: '700', marginTop: 2 }, writeProjectChevron: { color: C.periwinkle, fontSize: 19, lineHeight: 20, marginLeft: 8 }, writeJourneyLink: { minHeight: 37, paddingHorizontal: 9, borderRadius: 13, backgroundColor: '#F4F2FF', flexDirection: 'row', alignItems: 'center', gap: 4 }, writeJourneyLinkText: { color: C.periwinkle, fontSize: 9, fontWeight: '700' }, writeJourneyLinkArrow: { color: C.periwinkle, fontSize: 13 }, writeProgress: { width: 95, flexShrink: 0, marginLeft: 8, paddingVertical: 7, paddingHorizontal: 8, borderRadius: 13, backgroundColor: '#EEEDFF', borderWidth: 1, borderColor: '#E1DDFB' }, writeProgressTop: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between' }, writeProgressValue: { color: C.ink, fontSize: 14, fontWeight: '700' }, writeProgressLabel: { color: C.periwinkle, fontSize: 7, letterSpacing: 0.5, fontWeight: '700' }, writeProgressTrack: { height: 4, marginTop: 5, borderRadius: 3, backgroundColor: '#DCD8F4', overflow: 'hidden' }, writeProgressFill: { height: 4, borderRadius: 3, backgroundColor: C.periwinkle }, writeProgressText: { color: C.muted, fontSize: 7, letterSpacing: 0.35, fontWeight: '700', marginTop: 5 }, writeFormat: { color: C.muted, fontSize: 9, marginTop: 10 },
+  writePartHeader: { marginTop: 18, padding: 14, borderRadius: 21, backgroundColor: '#FFF', flexDirection: 'row', alignItems: 'center', shadowColor: '#706C98', shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 5 }, elevation: 2 }, writePartNumber: { width: 44, height: 44, borderRadius: 15, backgroundColor: C.periwinkle, alignItems: 'center', justifyContent: 'center', marginRight: 12 }, writePartNumberText: { color: '#FFF', fontSize: 13, fontWeight: '700' }, writePartCopy: { flex: 1 }, writePartKicker: { color: C.periwinkle, fontSize: 8, letterSpacing: 0.9, fontWeight: '700' }, writePartTitle: { color: C.ink, fontSize: 19, fontWeight: '700', marginTop: 4 }, writePartHelper: { color: C.muted, fontSize: 10, lineHeight: 14, marginTop: 4 },
+  writeNotesBanner: { marginTop: 13, padding: 13, borderRadius: 19, backgroundColor: '#FFF9E9', borderWidth: 1, borderColor: '#F5E5B7', shadowColor: '#B4914D', shadowOpacity: 0.08, shadowRadius: 9, shadowOffset: { width: 0, height: 4 }, elevation: 1 }, writeNotesTapArea: { flexDirection: 'row', alignItems: 'flex-start' }, writeNotesIcon: { width: 30, height: 30, borderRadius: 11, backgroundColor: '#F5C75C', alignItems: 'center', justifyContent: 'center', marginRight: 10 }, writeNotesIconText: { color: '#FFF', fontSize: 13 }, writeNotesCopy: { flex: 1 }, writeNotesTitleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, writeNotesLabel: { color: '#A97819', fontSize: 8, letterSpacing: 0.75, fontWeight: '700' }, writeNotesAction: { color: '#A97819', fontSize: 7, letterSpacing: 0.65, fontWeight: '700' }, writeNoteRow: { marginTop: 6 }, writeNoteLabel: { color: '#9A7628', fontSize: 8, fontWeight: '700' }, writeNoteText: { color: '#7E682F', fontSize: 10, lineHeight: 14, marginTop: 2 }, writeNotesEmpty: { color: '#8C6B29', fontSize: 10, lineHeight: 15, marginTop: 5 }, writeSavedNote: { marginTop: 10, marginLeft: 40, paddingTop: 9, borderTopWidth: 1, borderTopColor: '#F1DEAA' }, writeSavedNoteLabel: { color: '#A97819', fontSize: 7, letterSpacing: 0.7, fontWeight: '700' }, writeSavedNoteText: { color: '#7E682F', fontSize: 10, lineHeight: 14, marginTop: 3 }, writeQuickNote: { marginTop: 11, marginLeft: 40, paddingTop: 10, borderTopWidth: 1, borderTopColor: '#F1DEAA' }, writeQuickNoteLabel: { color: '#A97819', fontSize: 7, letterSpacing: 0.7, fontWeight: '700' }, writeQuickNoteInput: { minHeight: 65, padding: 0, paddingTop: 8, color: '#6D5D34', fontSize: 11, lineHeight: 16, textAlignVertical: 'top' },
+  writeEditorCard: { marginTop: 15, padding: 15, borderRadius: 21, backgroundColor: '#FFFDF9', shadowColor: '#807A96', shadowOpacity: 0.12, shadowRadius: 14, shadowOffset: { width: 0, height: 7 }, elevation: 3 }, writeEditorTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }, writeEditorLabel: { color: C.coral, fontSize: 8, letterSpacing: 1.1, fontWeight: '700' }, writeEditorHint: { color: C.muted, fontSize: 8 }, writeEditorInput: { minHeight: 270, padding: 0, paddingTop: 14, color: '#353B5B', fontSize: 16, lineHeight: 25, textAlignVertical: 'top' }, writeTools: { marginTop: 11, paddingTop: 10, borderTopWidth: 1, borderTopColor: '#EEEAF2', flexDirection: 'row', alignItems: 'center', gap: 7 }, writeToolButton: { minHeight: 32, paddingHorizontal: 9, borderRadius: 10, backgroundColor: '#F1EEFF', flexDirection: 'row', alignItems: 'center', gap: 5 }, writeToolDisabled: { opacity: 0.4 }, writeToolIcon: { color: C.periwinkle, fontSize: 11, fontWeight: '700' }, writeToolText: { color: C.ink, fontSize: 9, fontWeight: '700' }, writeToolHint: { color: '#A1A4BB', fontSize: 8, marginLeft: 'auto' }, writeNavigation: { marginTop: 15, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 10 }, writeNextButton: { flex: 1, minHeight: 47, paddingHorizontal: 15, borderRadius: 15, backgroundColor: C.periwinkle, alignItems: 'center', justifyContent: 'center' }, writeNextButtonText: { color: '#FFF', fontSize: 11, fontWeight: '700' }, writeSecondaryButton: { minHeight: 43, paddingHorizontal: 13, borderRadius: 14, borderWidth: 1, borderColor: '#D9DAE8', backgroundColor: 'rgba(255,255,255,0.8)', alignItems: 'center', justifyContent: 'center' }, writeSecondaryButtonText: { color: C.muted, fontSize: 10, fontWeight: '700' }, writeButtonDisabled: { opacity: 0.35 },
+  writeEmpty: { marginTop: 20, padding: 24, borderRadius: 23, backgroundColor: '#FFF', alignItems: 'center' }, writeEmptyIcon: { color: C.periwinkle, fontSize: 25 }, writeEmptyTitle: { color: C.ink, fontSize: 18, fontWeight: '700', marginTop: 10 }, writeEmptyCopy: { color: C.muted, fontSize: 11, lineHeight: 17, textAlign: 'center', marginTop: 7 }, writeComplete: { marginTop: 20, padding: 25, borderRadius: 23, backgroundColor: '#EEF9EF', alignItems: 'center', borderWidth: 1, borderColor: '#D7EED9' }, writeCompleteIcon: { color: '#69A772', fontSize: 28 }, writeCompleteTitle: { color: C.ink, fontSize: 19, fontWeight: '700', textAlign: 'center', marginTop: 9 }, writeCompleteCopy: { color: '#66836B', fontSize: 11, lineHeight: 17, textAlign: 'center', marginTop: 7 },
+  writeMenuShade: { flex: 1, backgroundColor: 'rgba(29,33,69,0.22)', paddingTop: 57, paddingHorizontal: 20, alignItems: 'flex-start' }, writeMenu: { width: 292, padding: 12, borderRadius: 22, backgroundColor: '#FBFAFF', shadowColor: '#4E4A7F', shadowOpacity: 0.22, shadowRadius: 20, shadowOffset: { width: 0, height: 9 }, elevation: 8 }, writeMenuHeader: { color: C.periwinkle, fontSize: 8, letterSpacing: 1, fontWeight: '700', marginHorizontal: 5, marginTop: 2 }, writeMenuHint: { color: C.muted, fontSize: 10, marginHorizontal: 5, marginTop: 4, marginBottom: 9 }, writeMenuRow: { minHeight: 56, paddingHorizontal: 9, borderRadius: 15, flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF', borderWidth: 1, borderColor: '#ECEBF4', marginTop: 7 }, writeMenuRowActive: { backgroundColor: '#F3F1FF', borderColor: '#D9D2FA' }, writeMenuIcon: { width: 32, height: 32, borderRadius: 11, alignItems: 'center', justifyContent: 'center' }, writeMenuIconText: { color: '#FFF', fontSize: 14 }, writeMenuCopy: { flex: 1, marginLeft: 9 }, writeMenuProject: { color: C.ink, fontSize: 12, fontWeight: '700' }, writeMenuType: { color: C.muted, fontSize: 9, marginTop: 3 }, writeMenuCheck: { color: C.periwinkle, fontSize: 16, fontWeight: '700', marginLeft: 7 },
+  writeTop: { marginTop: 16, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }, writeTitle: { color: C.ink, fontSize: 29, lineHeight: 34, letterSpacing: -0.7, fontWeight: '700', marginTop: 6 }, saveChip: { marginTop: 8, paddingVertical: 8, paddingHorizontal: 10, borderWidth: 1, borderColor: '#D5D7E5', borderRadius: 12 }, saveChipDone: { backgroundColor: '#EFFAEF', borderColor: '#D5EFD7' }, saveChipText: { color: C.muted, fontSize: 9, letterSpacing: 0.5, fontWeight: '700' }, saveChipTextDone: { color: '#5B9C67' },
+  journeyHeader: { marginTop: -4, flexDirection: 'row', alignItems: 'center', minHeight: 54 }, journeyBackButton: { width: 39, height: 39, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.72)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.8)' }, journeyBackIcon: { color: C.ink, fontSize: 28, lineHeight: 29, marginTop: -2 }, journeyHeaderCopy: { flex: 1, marginLeft: 12 }, journeyOverline: { color: C.muted, fontSize: 8, letterSpacing: 1, fontWeight: '700' }, journeyHeaderTitle: { color: C.ink, fontSize: 23, fontWeight: '700', letterSpacing: -0.4, marginTop: 4 }, journeyOverflowButton: { width: 39, height: 39, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.72)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.8)' }, journeyOverflowText: { color: C.muted, fontSize: 15, letterSpacing: 1, marginTop: -7 }, journeyBookPicker: { marginTop: 13, padding: 10, borderRadius: 18, flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.78)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.86)' }, journeyBookMark: { width: 39, height: 39, borderRadius: 13, alignItems: 'center', justifyContent: 'center' }, journeyBookMarkText: { color: '#FFF', fontSize: 17 }, journeyBookPickerCopy: { flex: 1, marginLeft: 10 }, journeyBookPickerLabel: { color: C.periwinkle, fontSize: 7, letterSpacing: 0.9, fontWeight: '700' }, journeyBookPickerTitle: { color: C.ink, fontSize: 14, fontWeight: '700', marginTop: 3 }, journeyBookPickerMeta: { color: C.muted, fontSize: 9, marginTop: 3 }, journeyPickerChevron: { color: C.periwinkle, fontSize: 20, lineHeight: 21, marginHorizontal: 6 },
+  journeySummaryCard: { marginTop: 14, padding: 16, borderRadius: 23, backgroundColor: '#FFF', shadowColor: '#66638D', shadowOpacity: 0.13, shadowRadius: 17, shadowOffset: { width: 0, height: 8 }, elevation: 4 }, journeySummaryTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }, journeySummaryEyebrow: { color: C.periwinkle, fontSize: 8, letterSpacing: 1, fontWeight: '700' }, journeySummaryStage: { color: C.ink, fontSize: 19, fontWeight: '700', marginTop: 5 }, journeySummaryPercent: { color: C.periwinkle, fontSize: 25, fontWeight: '700', letterSpacing: -0.5 }, journeyProgressTrack: { height: 8, marginTop: 13, borderRadius: 4, backgroundColor: '#E8E6F4', overflow: 'hidden' }, journeyProgressFill: { height: 8, borderRadius: 4, backgroundColor: C.periwinkle }, journeyStatsRow: { marginTop: 16, flexDirection: 'row', alignItems: 'center' }, journeyStat: { flex: 1 }, journeyStatDivider: { width: 1, height: 37, backgroundColor: '#E7E6EF', marginHorizontal: 14 }, journeyStatValue: { color: C.ink, fontSize: 15, fontWeight: '700' }, journeyStatLabel: { color: C.muted, fontSize: 7, letterSpacing: 0.65, fontWeight: '700', marginTop: 5 }, journeyStatSub: { color: '#9A9CB1', fontSize: 8, marginTop: 3 }, journeyNextRow: { marginTop: 16, paddingTop: 13, borderTopWidth: 1, borderTopColor: '#EFEFF4', flexDirection: 'row', alignItems: 'center' }, journeyNextDot: { width: 31, height: 31, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFF1C9' }, journeyNextDotText: { color: '#B4871A', fontSize: 14 }, journeyNextCopy: { flex: 1, marginLeft: 9 }, journeyNextEyebrow: { color: '#A97819', fontSize: 7, letterSpacing: 0.7, fontWeight: '700' }, journeyNextTitle: { color: C.ink, fontSize: 12, fontWeight: '700', marginTop: 3 }, journeyNextArrow: { color: C.periwinkle, fontSize: 19 }, journeyContinueButton: { marginTop: 14, minHeight: 50, paddingHorizontal: 14, borderRadius: 16, backgroundColor: C.periwinkle, flexDirection: 'row', alignItems: 'center', shadowColor: '#7772CF', shadowOpacity: 0.25, shadowRadius: 11, shadowOffset: { width: 0, height: 6 }, elevation: 4 }, journeyContinueText: { color: '#FFF', fontSize: 12, fontWeight: '700' }, journeyContinueAction: { flex: 1, color: '#EDEBFF', fontSize: 9, textAlign: 'right', marginRight: 9 }, journeyContinueArrow: { color: '#FFF', fontSize: 18 },
+  journeyMapHeading: { marginTop: 27, marginBottom: 4, flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between' }, journeyMapEyebrow: { color: C.muted, fontSize: 8, letterSpacing: 0.9, fontWeight: '700' }, journeyMapTitle: { color: C.ink, fontSize: 17, fontWeight: '700', marginTop: 5 }, journeyMapHint: { color: '#9A9CB1', fontSize: 8, marginBottom: 2 }, journeyMap: { position: 'relative', marginTop: 9 }, journeyRoute: { position: 'absolute', height: 3, borderRadius: 3, backgroundColor: '#D7D4EA', shadowColor: '#FFF', shadowOpacity: 0.8, shadowRadius: 2, shadowOffset: { width: 0, height: 1 } }, journeyRouteComplete: { backgroundColor: C.periwinkle }, journeyMilestone: { position: 'absolute', alignItems: 'center' }, journeyNode: { width: 55, height: 55, borderRadius: 28, alignItems: 'center', justifyContent: 'center', borderWidth: 4, shadowColor: '#68638D', shadowOpacity: 0.18, shadowRadius: 11, shadowOffset: { width: 0, height: 5 }, elevation: 4 }, journeyNodeComplete: { backgroundColor: C.periwinkle, borderColor: '#DDD9FF' }, journeyNodeCurrent: { backgroundColor: C.coral, borderColor: '#FFE0D4' }, journeyNodeFuture: { backgroundColor: '#F5F4FA', borderColor: '#D9D8E6', shadowOpacity: 0.06 }, journeyNodeIcon: { color: '#FFF', fontSize: 21, fontWeight: '700' }, journeyMilestoneCard: { width: 142, marginTop: 8, padding: 10, borderRadius: 15, backgroundColor: 'rgba(255,255,255,0.88)', borderWidth: 1, borderColor: 'rgba(231,230,242,0.95)', shadowColor: '#777391', shadowOpacity: 0.08, shadowRadius: 9, shadowOffset: { width: 0, height: 4 }, elevation: 2 }, journeyMilestoneCardCurrent: { backgroundColor: '#FFF7F0', borderColor: '#F4D5C7' }, journeyMilestoneCardComplete: { borderColor: '#DDD9FA' }, journeyMilestoneTitleRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 5 }, journeyMilestoneTitle: { flex: 1, color: C.ink, fontSize: 11, fontWeight: '700', lineHeight: 14 }, journeyMilestoneState: { fontSize: 6, letterSpacing: 0.45, fontWeight: '700', marginTop: 1 }, journeyStateComplete: { color: '#6A71B5' }, journeyStateCurrent: { color: C.coral }, journeyStateFuture: { color: '#A7A8BB' }, journeyMilestoneDetail: { color: C.muted, fontSize: 8, lineHeight: 12, marginTop: 5 },
+  journeyModalShade: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(32,41,84,0.22)' }, journeyModalDismiss: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 }, journeySelectorSheet: { padding: 20, paddingBottom: 26, borderTopLeftRadius: 29, borderTopRightRadius: 29, backgroundColor: '#FBFAFF', shadowColor: '#39365B', shadowOpacity: 0.2, shadowRadius: 20, shadowOffset: { width: 0, height: -5 }, elevation: 10 }, journeySheetEyebrow: { color: C.periwinkle, fontSize: 8, letterSpacing: 1, fontWeight: '700' }, journeySheetTitle: { color: C.ink, fontSize: 23, fontWeight: '700', letterSpacing: -0.4, marginTop: 5 }, journeySheetHint: { color: C.muted, fontSize: 10, marginTop: 5, marginBottom: 9 }, journeyBookRow: { minHeight: 67, marginTop: 8, padding: 9, borderRadius: 17, flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF', borderWidth: 1, borderColor: '#EBEAF2' }, journeyBookRowActive: { backgroundColor: '#F3F1FF', borderColor: '#D8D1FA' }, journeyBookRowCopy: { flex: 1, marginLeft: 10 }, journeyBookRowTitle: { color: C.ink, fontSize: 12, fontWeight: '700' }, journeyBookRowMeta: { color: C.muted, fontSize: 9, marginTop: 3 }, journeyBookRowEdited: { color: '#9A9CB1', fontSize: 8, marginTop: 4 }, journeyBookRowCheck: { color: C.periwinkle, fontSize: 17, fontWeight: '700', marginLeft: 7 }, journeyMenuShade: { flex: 1, alignItems: 'flex-end', backgroundColor: 'rgba(32,41,84,0.18)', paddingTop: 58, paddingHorizontal: 20 }, journeyMenu: { width: 218, padding: 13, borderRadius: 20, backgroundColor: '#FBFAFF', shadowColor: '#39365B', shadowOpacity: 0.2, shadowRadius: 17, shadowOffset: { width: 0, height: 7 }, elevation: 8 }, journeyMenuTitle: { color: C.ink, fontSize: 13, fontWeight: '700', marginTop: 4, marginBottom: 7 }, journeyMenuRow: { minHeight: 38, paddingHorizontal: 5, flexDirection: 'row', alignItems: 'center', borderTopWidth: 1, borderTopColor: '#ECEBF3' }, journeyMenuIcon: { color: C.periwinkle, fontSize: 14, width: 22 }, journeyMenuLabel: { flex: 1, color: C.ink, fontSize: 10, fontWeight: '600' }, journeyMenuArrow: { color: C.muted, fontSize: 18 },
   journeyHero: { paddingTop: 13, alignItems: 'center' }, journeyTitle: { color: C.ink, textAlign: 'center', fontSize: 27, fontWeight: '700', lineHeight: 32, letterSpacing: -0.7, marginTop: 8 }, journeyRing: { height: 153, width: 153, borderRadius: 77, marginTop: 23, borderWidth: 15, borderColor: C.periwinkle, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.65)', shadowColor: '#7772AF', shadowOpacity: 0.15, shadowRadius: 16, shadowOffset: { width: 0, height: 8 }, elevation: 5 }, journeyRingValue: { color: C.ink, fontSize: 32, fontWeight: '700' }, journeyRingLabel: { color: C.muted, fontSize: 8, letterSpacing: 0.8, marginTop: 2, fontWeight: '700' }, nextCard: { marginTop: 25, borderRadius: 21, backgroundColor: '#FFF4E9', padding: 15, flexDirection: 'row', alignItems: 'center' }, nextIcon: { width: 40, height: 40, borderRadius: 20, backgroundColor: C.peach, alignItems: 'center', justifyContent: 'center' }, nextIconText: { color: '#A35B4D', fontSize: 19 }, nextOverline: { color: '#B36B61', fontSize: 8, letterSpacing: 0.75, fontWeight: '700', marginLeft: 11 }, nextTitle: { color: C.ink, fontSize: 12, lineHeight: 17, fontWeight: '700', marginLeft: 11, marginTop: 4 }, journeyRow: { minHeight: 67, flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: 'rgba(111,111,153,0.1)' }, journeyIcon: { width: 38, height: 38, borderRadius: 14, justifyContent: 'center', alignItems: 'center' }, journeyIconText: { color: '#FFF', fontSize: 16 }, journeyRowTitle: { color: C.ink, fontSize: 13, fontWeight: '700', marginLeft: 11 }, journeyRowDate: { color: C.muted, fontSize: 9, letterSpacing: 0.5, marginTop: 4, marginLeft: 11 }, journeyArrow: { color: C.periwinkle, fontSize: 21 },
   profileTop: { alignItems: 'center', paddingTop: 17 }, profileAvatar: { width: 84, height: 84, borderRadius: 42, backgroundColor: '#FFF7F1', alignItems: 'center', justifyContent: 'center', shadowColor: '#65608A', shadowOpacity: 0.16, shadowRadius: 14, shadowOffset: { width: 0, height: 6 }, elevation: 4 }, profileAvatarText: { fontSize: 33, color: C.coral, fontWeight: '700' }, profileHalo: { position: 'absolute', width: 96, height: 96, borderRadius: 48, borderWidth: 2, borderColor: '#FFF', opacity: 0.8 }, profileName: { color: C.ink, fontSize: 23, fontWeight: '700', marginTop: 16 }, profileEmail: { color: C.muted, fontSize: 12, marginTop: 5 }, pathfinder: { paddingHorizontal: 11, paddingVertical: 7, backgroundColor: '#FFF3CB', borderRadius: 13, marginTop: 13 }, pathfinderText: { color: '#A97819', fontSize: 9, letterSpacing: 0.7, fontWeight: '700' }, preferenceTitle: { marginTop: 28, marginBottom: 10, color: C.ink, fontSize: 17, fontWeight: '700' }, preferences: { backgroundColor: 'rgba(255,255,255,0.75)', borderRadius: 20, paddingHorizontal: 15 }, prefRow: { minHeight: 70, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }, prefTitle: { color: C.ink, fontSize: 13, fontWeight: '700' }, prefSub: { color: C.muted, fontSize: 10, marginTop: 4 }, prefLine: { height: 1, backgroundColor: '#EBEBF1' }, settingsRow: { paddingVertical: 15, flexDirection: 'row', justifyContent: 'space-between', borderBottomWidth: 1, borderBottomColor: 'rgba(111,111,153,0.1)' }, settingsText: { color: C.ink, fontSize: 13, fontWeight: '600' },
   statsHero: { paddingTop: 13 }, statsTitle: { fontSize: 29, lineHeight: 33, letterSpacing: -0.7, color: C.ink, fontWeight: '700', marginTop: 8 }, rangeRow: { flexDirection: 'row', gap: 8, marginTop: 21 }, pill: { paddingVertical: 8, paddingHorizontal: 13, backgroundColor: 'rgba(255,255,255,0.65)', borderRadius: 13 }, pillSelected: { backgroundColor: C.periwinkle }, pillText: { color: C.muted, fontSize: 10, fontWeight: '700' }, pillTextSelected: { color: '#FFF' }, statsNumbers: { marginTop: 24, padding: 18, backgroundColor: '#FFF', borderRadius: 23, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', shadowColor: '#706C98', shadowOpacity: 0.1, shadowRadius: 13, shadowOffset: { width: 0, height: 6 }, elevation: 2 }, bigNumber: { color: C.ink, fontSize: 29, fontWeight: '700', letterSpacing: -0.6 }, bigNumberLabel: { color: C.muted, fontSize: 8, letterSpacing: 0.7, fontWeight: '700', marginTop: 5 }, statHighlight: { padding: 10, backgroundColor: '#EEF9EF', borderRadius: 14 }, statHighlightTop: { color: '#62A16D', fontSize: 13, fontWeight: '700', textAlign: 'center' }, statHighlightBottom: { color: '#6F9173', fontSize: 8, marginTop: 3 }, chartCard: { marginTop: 17, backgroundColor: '#F4F2FF', borderRadius: 22, padding: 17 }, chartHeader: { flexDirection: 'row', justifyContent: 'space-between' }, chartTitle: { color: C.ink, fontSize: 13, fontWeight: '700' }, chartTotal: { color: C.periwinkle, fontWeight: '700', fontSize: 13 }, chart: { height: 125, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', marginTop: 14 }, barCol: { alignItems: 'center', justifyContent: 'flex-end', width: 25, height: '100%' }, bar: { width: 15, borderRadius: 8, backgroundColor: '#CFC8F6' }, barActive: { backgroundColor: C.coral }, barLabel: { color: C.muted, fontSize: 9, marginTop: 8 }, winGrid: { flexDirection: 'row', gap: 10 }, winCard: { flex: 1, padding: 15, borderRadius: 20, minHeight: 123 }, winIcon: { fontSize: 19, color: C.periwinkle }, winValue: { color: C.ink, fontWeight: '700', fontSize: 21, marginTop: 15 }, winLabel: { color: C.muted, fontSize: 8, letterSpacing: 0.55, fontWeight: '700', marginTop: 5 },
-  navShell: { position: 'absolute', left: 13, right: 13, bottom: 12, height: 67, paddingHorizontal: 4, backgroundColor: 'rgba(255,255,255,0.94)', borderRadius: 24, flexDirection: 'row', justifyContent: 'space-around', alignItems: 'center', shadowColor: '#5F5C8B', shadowOpacity: 0.16, shadowRadius: 18, shadowOffset: { width: 0, height: 8 }, elevation: 7 }, navItem: { width: 52, alignItems: 'center' }, navIcon: { height: 26, color: '#A3A6C1', fontSize: 18 }, navIconActive: { color: C.periwinkle }, navLabel: { color: '#A3A6C1', fontSize: 8 }, navLabelActive: { color: C.ink, fontWeight: '700' },
+  navShell: { position: 'absolute', left: 13, right: 13, bottom: 12, height: 67, paddingHorizontal: 4, backgroundColor: 'rgba(255,255,255,0.94)', borderRadius: 24, flexDirection: 'row', justifyContent: 'space-around', alignItems: 'center', shadowColor: '#5F5C8B', shadowOpacity: 0.16, shadowRadius: 18, shadowOffset: { width: 0, height: 8 }, elevation: 7 }, navItem: { width: 45, alignItems: 'center' }, navIcon: { height: 26, color: '#A3A6C1', fontSize: 18 }, navIconActive: { color: C.periwinkle }, navLabel: { color: '#A3A6C1', fontSize: 8 }, navLabelActive: { color: C.ink, fontWeight: '700' },
 });
