@@ -1,6 +1,7 @@
 import { StatusBar } from 'expo-status-bar';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as ImagePicker from 'expo-image-picker';
+import * as FileSystem from 'expo-file-system/legacy';
 import * as Speech from 'expo-speech';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Fragment, useEffect, useRef, useState } from 'react';
@@ -73,8 +74,8 @@ const pageMeta: Record<Page, { icon: string; short: string }> = {
 const bottomNavPages: Page[] = ['Library', 'Plan', 'Write', 'Journey', 'Stats', 'Profile'];
 
 type CitationStyle = 'APA' | 'MLA' | 'Chicago';
-type CitationSourceType = 'book' | 'article' | 'website';
-type ReferenceEntry = { id: string; citation: string; style: CitationStyle; sourceType: CitationSourceType; createdAt: number };
+type CitationSourceType = 'book' | 'article' | 'website' | 'report';
+type ReferenceEntry = { id: string; citation: string; style: CitationStyle; sourceType: CitationSourceType; createdAt: number; sourceUrl?: string };
 
 type ProjectPlan = {
   structure: Record<string, boolean>;
@@ -117,6 +118,22 @@ type ImageTextPlacement = 'top' | 'bottom' | 'left' | 'right' | 'over' | 'separa
 type ImageStatus = 'notStarted' | 'idea' | 'briefReady' | 'sketch' | 'revision' | 'final';
 type ImageRole = 'instructional' | 'example' | 'worksheet' | 'chart' | 'decorative' | 'activity';
 type PermissionStatus = 'unknown' | 'owned' | 'licensed' | 'permissionNeeded' | 'publicDomain';
+type ImageCitation = {
+  style: CitationStyle;
+  title: string;
+  creator: string;
+  caption: string;
+  publisher: string;
+  publicationDate: string;
+  originalImageUrl: string;
+  sourcePageUrl: string;
+  creditLine: string;
+  copyrightHolder: string;
+  license: string;
+  licenseUrl: string;
+  dateAccessed: string;
+  citation: string;
+};
 type BookezImage = {
   id: string;
   uri: string;
@@ -137,6 +154,7 @@ type BookezImage = {
   permissionStatus: PermissionStatus;
   archiveName: string;
   sourceCitation: string;
+  imageCitation?: ImageCitation;
   notes: string;
   connectedPartKey?: string;
   placement: ImagePlacement;
@@ -265,6 +283,14 @@ type BookStudioState = {
   exportedAt?: number;
 };
 type Project = { title: string; color: string; mark: string; type: string; pageGoal: string; unitGoal: string; plan: ProjectPlan; updatedAt?: number; archived?: boolean; studio?: BookStudioState; images?: BookezImage[]; imageEnabled?: boolean };
+
+function getReferenceCitations(plan: ProjectPlan, images: BookezImage[] = []) {
+  return [...(plan.referenceEntries ?? []).map((entry) => entry.citation), ...images.map((image) => image.imageCitation?.citation).filter((citation): citation is string => Boolean(citation))];
+}
+
+function getProjectReferenceCitations(project: Project) {
+  return getReferenceCitations(project.plan, project.images ?? []);
+}
 
 const projectTypes = [
   { name: 'Fiction Book', example: 'Novel, novella, short stories', icon: '✦', color: C.periwinkle },
@@ -1553,7 +1579,7 @@ function assembleBook(project: Project, studio: BookStudioState): AssembledBook 
     id: item.id, label: item.label, kind: 'front' as const, included: Boolean(studio.frontMatterIncluded[item.id]), complete: item.automatic ? true : Boolean(studio.frontMatterText[item.id]?.trim()),
     content: item.id === 'titlePage' ? project.title : item.id === 'tableOfContents' ? tableOfContents : studio.frontMatterText[item.id]?.trim() ?? '',
   }));
-  const referenceCitations = (project.plan.referenceEntries ?? []).map((entry) => entry.citation).join('\n\n');
+  const referenceCitations = getProjectReferenceCitations(project).join('\n\n');
   const backMatter = studioBackMatter.map((item) => {
     const manualText = studio.backMatterText[item.id]?.trim() ?? '';
     const content = item.id === 'references' ? [manualText, referenceCitations].filter(Boolean).join('\n\n') : manualText;
@@ -1706,9 +1732,15 @@ function getJourneyMilestones(snapshot: JourneySnapshot): JourneyMilestone[] {
   type JourneyDraft = Omit<JourneyMilestone, 'status'> & { completed: boolean };
   const drafts: JourneyDraft[] = [];
   const addCheckpoint = (id: string, title: string, detail: string, icon: string, completed: boolean, miniCheckpoints: JourneyMiniCheckpoint[]) => drafts.push({ id, title, detail, icon, kind: 'area', completed, miniCheckpoints });
-  const draftedPercent = snapshot.parts.length ? Math.round((snapshot.draftedParts / snapshot.parts.length) * 100) : 0;
-  const firstQuarter = snapshot.parts.length > 0 && snapshot.draftedParts >= Math.max(1, Math.ceil(snapshot.parts.length / 4));
   const hasOutlineNotes = Boolean(snapshot.outlineReady);
+  const chapterProgressCheckpoints = (prefix: string, targetParts = snapshot.parts.length) => {
+    const count = Math.min(15, Math.max(3, snapshot.parts.length || 3));
+    const target = Math.max(1, targetParts);
+    return Array.from({ length: count }, (_, index) => {
+      const threshold = Math.max(1, Math.ceil(((index + 1) * target) / count));
+      return { id: prefix + '-' + (index + 1), title: 'Chapter progress · ' + (index + 1) + ' of ' + count, completed: snapshot.draftedParts >= threshold };
+    });
+  };
 
   addCheckpoint('book-started', 'Book started', snapshot.ideaReady ? 'The promise of this book is written down.' : 'Give the work a clear promise to follow.', '✦', snapshot.ideaReady, [
     { id: 'idea', title: 'Book idea captured', completed: snapshot.ideaReady },
@@ -1721,19 +1753,11 @@ function getJourneyMilestones(snapshot: JourneySnapshot): JourneyMilestone[] {
   addCheckpoint('outline', 'Outline ready', snapshot.outlineReady ? 'Your notes are giving the book a direction.' : 'Add a throughline, notes, or part ideas.', '⌁', snapshot.outlineReady, [
     { id: 'throughline', title: 'A central thread is visible', completed: hasOutlineNotes },
     { id: 'part-ideas', title: 'At least one part has a note', completed: snapshot.outlineReady },
+    { id: 'opening-direction', title: 'The opening has a direction', completed: snapshot.outlineReady },
   ]);
-  addCheckpoint('first-draft', 'First draft underway', snapshot.firstDraftStarted ? `${snapshot.draftedParts} of ${snapshot.parts.length} parts have words in them.` : 'Open the manuscript and make the first part real.', '✎', snapshot.firstDraftStarted, [
-    { id: 'opening', title: 'The opening part has words', completed: snapshot.firstDraftStarted },
-    { id: 'quarter', title: 'A quarter of the parts are drafted', completed: firstQuarter },
-  ]);
-  addCheckpoint('halfway-point', 'Halfway drafted', snapshot.halfwayReady ? 'The middle of the route is behind you.' : `Keep going until ${Math.ceil(snapshot.parts.length / 2) || 'the first'} parts have a draft.`, '◌', snapshot.halfwayReady, [
-    { id: 'middle', title: 'Half of the planned parts are drafted', completed: snapshot.halfwayReady },
-    { id: 'momentum', title: 'The manuscript has momentum', completed: draftedPercent >= 60 },
-  ]);
-  addCheckpoint('draft-complete', 'First draft complete', snapshot.draftComplete ? 'Every selected part has a draft.' : `${snapshot.draftedParts} of ${snapshot.parts.length} parts are drafted.`, '✓', snapshot.draftComplete, [
-    { id: 'all-parts', title: 'Every selected part has words', completed: snapshot.draftComplete },
-    { id: 'last-page', title: 'The final planned part is drafted', completed: snapshot.draftComplete },
-  ]);
+  addCheckpoint('first-draft', 'First draft underway', snapshot.firstDraftStarted ? `${snapshot.draftedParts} of ${snapshot.parts.length} parts have words in them.` : 'Open the manuscript and make the first part real.', '✎', snapshot.firstDraftStarted, chapterProgressCheckpoints('chapter-progress'));
+  addCheckpoint('halfway-point', 'Halfway drafted', snapshot.halfwayReady ? 'The middle of the route is behind you.' : `Keep going until ${Math.ceil(snapshot.parts.length / 2) || 'the first'} parts have a draft.`, '◌', snapshot.halfwayReady, chapterProgressCheckpoints('chapter-progress-halfway', Math.max(1, Math.ceil(snapshot.parts.length / 2))));
+  addCheckpoint('draft-complete', 'First draft complete', snapshot.draftComplete ? 'Every selected part has a draft.' : `${snapshot.draftedParts} of ${snapshot.parts.length} parts are drafted.`, '✓', snapshot.draftComplete, chapterProgressCheckpoints('chapter-progress-complete'));
   addCheckpoint('manuscript-complete', 'Manuscript complete', snapshot.manuscriptComplete ? 'You reached the end of the writing path.' : 'Move through the completed draft and make the last pass.', '✧', snapshot.manuscriptComplete, [
     { id: 'full-draft', title: 'The full draft is assembled', completed: snapshot.draftComplete },
     { id: 'review', title: 'The manuscript is ready to share', completed: snapshot.manuscriptComplete },
@@ -1779,6 +1803,14 @@ function getJourneyMiniCheckpointProgress(snapshot: JourneySnapshot, milestone: 
   const finishEstimate = getJourneyCompletionEstimate(plan, snapshot.wordCount, snapshot.targetWords);
   const draftedPercent = snapshot.parts.length ? Math.round((snapshot.draftedParts / snapshot.parts.length) * 100) : 0;
   const progressForDraft = (threshold = 100) => Math.min(99, Math.round((draftedPercent / threshold) * 100));
+  if (checkpoint.id.startsWith('chapter-progress-')) {
+    const checkpointNumber = Number.parseInt(checkpoint.id.split('-').pop() ?? '1', 10) || 1;
+    const checkpointCount = Math.min(15, Math.max(3, snapshot.parts.length || 3));
+    const targetParts = milestone.id === 'halfway-point' ? Math.max(1, Math.ceil(snapshot.parts.length / 2)) : Math.max(1, snapshot.parts.length);
+    const threshold = Math.max(1, Math.ceil((checkpointNumber * targetParts) / checkpointCount));
+    const progress = snapshot.draftedParts >= threshold ? 100 : Math.min(99, Math.round((snapshot.draftedParts / threshold) * 100));
+    return { progress, estimateLabel: progress === 100 ? 'Complete' : finishEstimate.label, estimateDetail: progress === 100 ? 'This drafting step is complete.' : 'Draft ' + threshold + ' of ' + Math.max(1, snapshot.parts.length) + ' planned parts to reach this dot.' };
+  }
   if (checkpoint.id === 'idea') return { progress: 0, estimateLabel: 'About 5 minutes', estimateDetail: 'Write one sentence that names the promise, problem, or feeling this project will carry.' };
   if (checkpoint.id === 'project-shape') return { progress: snapshot.foundationReady ? 100 : snapshot.ideaReady ? 50 : 0, estimateLabel: 'About 10 minutes', estimateDetail: 'Choose the project’s scale and the pieces that will give it a clear shape.' };
   if (checkpoint.id === 'scope') return { progress: snapshot.targetWords > 0 ? 100 : 0, estimateLabel: 'About 5 minutes', estimateDetail: 'Set a target size in Plan so the journey can estimate what remains.' };
@@ -2109,6 +2141,115 @@ function getPersonalRecordStats(projects: Project[]): SpecializedStat[] {
   ];
 }
 
+function getProjectStructureStats(project: Project): SpecializedStat[] {
+  const plan = project.plan ?? defaultPlanFor(project.type);
+  const snapshot = getJourneySnapshot(project);
+  const unitParts = snapshot.parts.filter((part) => part.kind === 'unit');
+  const draftedUnits = unitParts.filter((part) => Boolean(plan.drafts[part.key]?.trim()));
+  const unitWords = draftedUnits.map((part) => countWords(plan.drafts[part.key] ?? '')).filter((words) => words > 0);
+  const noteCount = unitParts.filter((part) => Boolean(plan.partNotes[part.key]?.trim() || (part.unitIndex !== undefined && plan.unitIdeas[part.unitIndex]?.trim()))).length;
+  const outlineCount = unitParts.filter((part) => part.unitIndex !== undefined && Boolean(plan.unitIdeas[part.unitIndex]?.trim())).length;
+  const emptyComponents = snapshot.parts.filter((part) => !plan.drafts[part.key]?.trim()).length;
+  const unfinishedComponents = snapshot.parts.filter((part) => Boolean(plan.drafts[part.key]?.trim()) && part.kind === 'unit' && !plan.chapterEnds?.[part.key]).length;
+  const averageLength = unitWords.length ? Math.round(unitWords.reduce((total, words) => total + words, 0) / unitWords.length) : 0;
+  return [
+    { label: 'Units completed', value: `${draftedUnits.length} / ${unitParts.length}`, detail: `${snapshot.blueprint.unitLabelPlural} with drafts` },
+    { label: 'Units in progress', value: unfinishedComponents ? formatCount(unfinishedComponents) : '—', detail: 'drafted but not marked finished' },
+    { label: 'Average unit length', value: averageLength ? `${formatCount(averageLength)} words` : '—', detail: 'across drafted units' },
+    { label: 'Longest unit', value: unitWords.length ? `${formatCount(Math.max(...unitWords))} words` : '—', detail: 'largest drafted unit' },
+    { label: 'Shortest unit', value: unitWords.length ? `${formatCount(Math.min(...unitWords))} words` : '—', detail: 'smallest drafted unit' },
+    { label: 'Empty components', value: formatCount(emptyComponents), detail: 'planned pieces without drafts' },
+    { label: 'Outline coverage', value: unitParts.length ? `${Math.round((outlineCount / unitParts.length) * 100)}%` : '—', detail: 'units with planning notes' },
+    { label: 'Notes coverage', value: unitParts.length ? `${Math.round((noteCount / unitParts.length) * 100)}%` : '—', detail: 'units with notes or ideas' },
+  ];
+}
+
+function getProjectContentProfileStats(project: Project): SpecializedStat[] {
+  const plan = project.plan ?? defaultPlanFor(project.type);
+  const allText = Object.values(plan.drafts).join('\n\n');
+  const words = allText.toLowerCase().match(/[a-z][a-z’'-]*/g) ?? [];
+  const sentences = allText.split(/[.!?]+/).map((sentence) => countWords(sentence)).filter((count) => count > 0);
+  const paragraphs = allText.split(/\n\s*\n/).map((paragraph) => countWords(paragraph)).filter((count) => count > 0);
+  const dialogueWords = countWords((allText.match(/“[^”]+”|"[^"]+"/g) ?? []).join(' '));
+  const frequencies = words.reduce<Record<string, number>>((counts, word) => { counts[word] = (counts[word] ?? 0) + 1; return counts; }, {});
+  const repeatedWords = Object.values(frequencies).filter((count) => count >= 3).length;
+  const longSentences = sentences.filter((count) => count > 25).length;
+  const adverbs = (allText.match(/\b[a-z]+ly\b/gi) ?? []).length;
+  const fillerWords = (allText.match(/\b(very|really|just|that|quite|perhaps|maybe|actually)\b/gi) ?? []).length;
+  const wordCount = words.length;
+  return [
+    { label: 'Dialogue share', value: wordCount ? `${Math.round((dialogueWords / wordCount) * 100)}%` : '—', detail: 'quoted dialogue in the draft' },
+    { label: 'Non-dialogue share', value: wordCount ? `${Math.max(0, 100 - Math.round((dialogueWords / wordCount) * 100))}%` : '—', detail: 'narrative, description, or exposition' },
+    { label: 'Average sentence', value: sentences.length ? `${(wordCount / sentences.length).toFixed(1)} words` : '—', detail: 'simple draft estimate' },
+    { label: 'Average paragraph', value: paragraphs.length ? `${(wordCount / paragraphs.length).toFixed(1)} words` : '—', detail: 'across drafted paragraphs' },
+    { label: 'Vocabulary variety', value: wordCount ? `${Math.round((Object.keys(frequencies).length / wordCount) * 100)}%` : '—', detail: 'unique words as a share of total' },
+    { label: 'Repeated words', value: wordCount ? formatCount(repeatedWords) : '—', detail: 'words appearing three or more times' },
+    { label: 'Long sentences', value: wordCount ? formatCount(longSentences) : '—', detail: 'sentences over 25 words' },
+    { label: 'Adverbs / filler words', value: wordCount ? formatCount(adverbs + fillerWords) : '—', detail: 'light editing signals, not errors' },
+  ];
+}
+
+function getProjectFocusStats(project: Project): SpecializedStat[] {
+  const plan = project.plan ?? defaultPlanFor(project.type);
+  const sessions = plan.writingSessionHistory ?? [];
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const weekSessions = sessions.filter((session) => session.timestamp >= today.getTime() - 6 * 86_400_000);
+  const pomodoros = sessions.filter((session) => session.mode === 'pomodoro' && session.choice === 'finish').length;
+  const flowSessions = sessions.filter((session) => session.mode === 'flow' || session.writingMinutes >= 45).length;
+  const interrupted = sessions.filter((session) => session.choice !== 'finish').length;
+  const totalMinutes = sessions.reduce((total, session) => total + session.writingMinutes, 0);
+  return [
+    { label: 'Focus sessions', value: formatCount(sessions.length), detail: 'completed or recorded sessions' },
+    { label: 'Sessions this week', value: formatCount(weekSessions.length), detail: 'last seven days' },
+    { label: 'Pomodoros completed', value: pomodoros ? formatCount(pomodoros) : '—', detail: 'finished timed intervals' },
+    { label: 'Flow sessions', value: flowSessions ? formatCount(flowSessions) : '—', detail: 'sessions lasting 45 minutes or more' },
+    { label: 'Interrupted sessions', value: interrupted ? formatCount(interrupted) : '—', detail: 'sessions ended before Finish' },
+    { label: 'Focused session time', value: formatDuration(totalMinutes), detail: 'time recorded in session reflections' },
+  ];
+}
+
+function getProjectGoalStats(project: Project): SpecializedStat[] {
+  const plan = project.plan ?? defaultPlanFor(project.type);
+  const dailyGoal = Number.parseInt((plan.customPaceWords ?? '').replace(/,/g, ''), 10) || (plan.paceFlexibility === 'gentle' ? 300 : plan.paceFlexibility === 'ambitious' ? 800 : 500);
+  const todayKey = activityDateKey();
+  const todayWords = plan.activity?.[todayKey]?.words ?? 0;
+  const weekStart = new Date();
+  weekStart.setHours(0, 0, 0, 0);
+  weekStart.setDate(weekStart.getDate() - 6);
+  const weekEntries = Object.entries(plan.activity ?? {}).filter(([key]) => activityDate(key) >= weekStart);
+  const weekWords = weekEntries.reduce((total, [, entry]) => total + entry.words, 0);
+  const daysPerWeek = Math.max(1, writingDaysPerWeek(plan.writingFrequency, plan.customWritingDays));
+  const weeklyGoal = dailyGoal * daysPerWeek;
+  const scheduledDays = Array.from({ length: 7 }, (_, index) => { const date = new Date(weekStart); date.setDate(weekStart.getDate() + index); return date; }).filter((date) => isScheduledWritingDay(plan.writingFrequency, plan.customWritingDays, date));
+  const completedScheduledDays = scheduledDays.filter((date) => { const entry = plan.activity?.[activityDateKey(date.getTime())]; return Boolean(entry && (entry.words > 0 || entry.minutes >= 5)); }).length;
+  const aheadBehind = weekWords - weeklyGoal;
+  return [
+    { label: 'Daily goal', value: `${Math.min(100, Math.round((todayWords / dailyGoal) * 100))}%`, detail: `${formatCount(todayWords)} / ${formatCount(dailyGoal)} words today` },
+    { label: 'Weekly goal', value: `${Math.min(100, Math.round((weekWords / weeklyGoal) * 100))}%`, detail: `${formatCount(weekWords)} / ${formatCount(weeklyGoal)} words this week` },
+    { label: 'Current goal', value: `${formatCount(dailyGoal)} words`, detail: plan.writingPlanCreated ? 'from your writing plan' : 'starter pace until you set a plan' },
+    { label: 'Goal success rate', value: scheduledDays.length ? `${Math.round((completedScheduledDays / scheduledDays.length) * 100)}%` : '—', detail: 'scheduled days completed this week' },
+    { label: 'Schedule adherence', value: scheduledDays.length ? `${Math.round((completedScheduledDays / scheduledDays.length) * 100)}%` : '—', detail: `${completedScheduledDays} of ${scheduledDays.length} planned days` },
+    { label: 'Days ahead / behind', value: aheadBehind === 0 ? 'On pace' : `${aheadBehind > 0 ? '+' : ''}${formatCount(aheadBehind)} words`, detail: 'against this week’s goal' },
+  ];
+}
+
+function getProjectExportReadinessStats(project: Project): SpecializedStat[] {
+  const studio = getBookStudioState(project);
+  const book = assembleBook(project, studio);
+  const includedPages = [...book.frontMatter, ...book.backMatter].filter((item) => item.included);
+  const completedPages = includedPages.filter((item) => item.complete).length;
+  const unfinishedComponents = book.chapters.filter((chapter) => !chapter.complete).length;
+  const totalTracked = includedPages.length + book.chapters.length;
+  const completedTracked = completedPages + book.chapters.filter((chapter) => chapter.complete).length;
+  return [
+    { label: 'Export readiness', value: totalTracked ? `${Math.round((completedTracked / totalTracked) * 100)}%` : '—', detail: 'selected pages and writing units complete' },
+    { label: 'Required pages', value: `${completedPages} / ${includedPages.length}`, detail: 'included front and back matter' },
+    { label: 'Unfinished components', value: formatCount(unfinishedComponents), detail: 'drafted parts still missing from the book' },
+    { label: 'Last export', value: studio.exportedAt ? new Date(studio.exportedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : 'Not yet', detail: studio.exportedAt ? 'most recent shared copy' : 'share from Book Studio when ready' },
+  ];
+}
+
 function getLatestCompletedMilestone(project: Project): Achievement | undefined {
   return [...getProjectMilestones(project)].reverse().find((achievement) => achievement.completed);
 }
@@ -2134,6 +2275,8 @@ function getProjectSpecializedStats(project: Project): { title: string; subtitle
   const peopleCount = plan.people.split(/[,;\n]/).map((name) => name.trim()).filter(Boolean).length;
   const wordsPerUnit = draftedUnits.length ? Math.round(snapshot.wordCount / draftedUnits.length) : 0;
   const completion = snapshot.targetWords ? Math.min(100, Math.round((snapshot.wordCount / snapshot.targetWords) * 100)) : 0;
+  const mediaStats = getMediaStats([project]);
+  const citationStats = getCitationStats([project]);
   const tracked = (label: string, value: string, detail: string): SpecializedStat => ({ label, value, detail });
   const countStat = (label: string, count: number, detail: string): SpecializedStat => tracked(label, count ? formatCount(count) : '—', detail);
   const unitProgress = (label: string) => tracked(label, `${draftedUnits.length} / ${unitParts.length}`, 'drafted / planned');
@@ -2142,13 +2285,13 @@ function getProjectSpecializedStats(project: Project): { title: string; subtitle
     unitProgress('Chapters'), countStat('Scenes', Math.max(0, draftedUnits.reduce((total, part) => total + countParagraphs(plan.drafts[part.key] ?? ''), 0)), 'paragraphs in drafted chapters'), tracked('Words', formatCount(snapshot.wordCount), 'across this project'), tracked('Dialogue', snapshot.wordCount ? `${Math.round((dialogueWords / snapshot.wordCount) * 100)}%` : '—', 'quoted dialogue share'), countStat('Character appearances', peopleCount, 'names in your character notes'), tracked('Outline coverage', snapshot.outlineReady ? 'Ready' : 'In progress', 'based on story map notes'), tracked('Draft progress', `${completion}%`, 'of the word target'), tracked('Revision', snapshot.manuscriptComplete ? 'Complete' : 'Upcoming', 'whole-manuscript pass'),
   ] };
   if (project.type === 'Nonfiction Book') return { title: 'Nonfiction lens', subtitle: 'Argument, examples, and readability', stats: [
-    unitProgress('Chapters'), countStat('Sections', plannedCount(['section', 'subsection']), 'planned structure components'), countStat('Examples', plannedCount(['example']), 'planned examples'), countStat('Case studies', plannedCount(['case study']), 'planned case studies'), countStat('Key takeaways', plannedCount(['takeaway', 'summary']), 'planned recap components'), tracked('Readability', sentenceCount ? `${(snapshot.wordCount / sentenceCount).toFixed(1)} words/sentence` : '—', 'simple draft estimate'),
+    unitProgress('Chapters'), countStat('Sections', plannedCount(['section', 'subsection']), 'planned structure components'), countStat('Examples', plannedCount(['example']), 'planned examples'), countStat('Case studies', plannedCount(['case study']), 'planned case studies'), countStat('Key takeaways', plannedCount(['takeaway', 'summary']), 'planned recap components'), tracked('Readability', sentenceCount ? `${(snapshot.wordCount / sentenceCount).toFixed(1)} words/sentence` : '—', 'simple draft estimate'), tracked('Sources saved', citationStats ? formatCount(citationStats.savedSources) : '—', 'reference records in this project'), tracked('Citation readiness', citationStats ? `${citationStats.citationCompletion}%` : '—', citationStats ? 'saved citations with text' : 'enable References when needed'),
   ] };
   if (project.type === 'Memoir & Biography') return { title: 'Memoir lens', subtitle: 'Memory, people, timeline, and draft signals', stats: [
-    unitProgress('Chapters'), countStat('Memories captured', draftedUnits.length, 'drafted story units'), countStat('Timeline events', Object.values(plan.plotNotes).filter((note) => note.trim()).length, 'filled story-map notes'), countStat('Names to review', peopleCount, 'names in people notes'), tracked('Draft progress', `${completion}%`, 'of the word target'),
+    unitProgress('Chapters'), countStat('Memories captured', draftedUnits.length, 'drafted story units'), countStat('Timeline events', Object.values(plan.plotNotes).filter((note) => note.trim()).length, 'filled story-map notes'), countStat('Names to review', peopleCount, 'names in people notes'), tracked('Photographs', mediaStats ? formatCount(mediaStats.planned) : '—', mediaStats ? `${mediaStats.finalImages} final` : 'add photos when useful'), tracked('Permissions', mediaStats ? `${mediaStats.permissionReviewed} / ${mediaStats.publication}` : '—', mediaStats ? 'publication visuals reviewed' : 'add visuals when useful'), tracked('Draft progress', `${completion}%`, 'of the word target'),
   ] };
   if (project.type === 'Children’s Book') return { title: 'Children’s book lens', subtitle: 'Page turns, spreads, words, and reading flow', stats: [
-    countStat('Pages / spreads', unitParts.length, 'planned story units'), tracked('Words per spread', wordsPerUnit ? formatCount(wordsPerUnit) : '—', 'average across drafted spreads'), tracked('Reading level', 'Not tracked', 'add a reading-level note in Plan'), tracked('Text completion', `${completion}%`, 'of the word target'), tracked('Drafted spreads', `${draftedUnits.length} / ${unitParts.length}`, 'drafted / planned'),
+    countStat('Pages / spreads', unitParts.length, 'planned story units'), tracked('Words per spread', wordsPerUnit ? formatCount(wordsPerUnit) : '—', 'average across drafted spreads'), tracked('Illustrations', mediaStats ? `${mediaStats.visualCompletion}%` : '—', mediaStats ? `${mediaStats.finalImages} final of ${mediaStats.planned}` : 'add illustrations when useful'), tracked('Text-to-image balance', mediaStats?.placed ? `${formatCount(Math.round(snapshot.wordCount / mediaStats.placed))} words / image` : '—', 'draft words per placed visual'), tracked('Reading level', 'Not tracked', 'add a reading-level note in Plan'), tracked('Text completion', `${completion}%`, 'of the word target'), tracked('Drafted spreads', `${draftedUnits.length} / ${unitParts.length}`, 'drafted / planned'),
   ] };
   if (project.type === 'Poetry Collection') return { title: 'Poetry lens', subtitle: 'Poems, lines, stanzas, sections, and layout', stats: [
     unitProgress('Poems completed'), countStat('Poems remaining', Math.max(0, unitParts.length - draftedUnits.length), 'planned poems without drafts'), countStat('Total lines', lineCount, 'non-empty draft lines'), countStat('Stanzas', stanzaCount, 'separated draft blocks'), countStat('Sections', plannedCount(['section']), 'planned sections'), tracked('Average poem length', draftedUnits.length ? `${Math.round(lineCount / draftedUnits.length)} lines` : '—', 'across drafted poems'), tracked('Layout-ready poems', unitParts.length ? `${Object.keys(plan.chapterEnds ?? {}).filter((key) => plan.chapterEnds?.[key]).length} / ${draftedUnits.length}` : '—', 'marked chapter ends / drafted poems'),
@@ -2164,7 +2307,7 @@ function getProjectSpecializedStats(project: Project): { title: string; subtitle
     countStat('Modules', plannedCount(['module']), 'planned modules'), countStat('Lessons', plannedCount(['lesson']), 'planned lessons'), countStat('Exercises', plannedCount(['exercise']), 'planned exercises'), countStat('Response areas', plannedCount(['response']), 'planned response areas'), countStat('Quizzes', plannedCount(['quiz']), 'planned quizzes'), countStat('Answer keys', plannedCount(['answer key']), 'planned answer keys'), countStat('Learning objectives', plannedCount(['objective']), 'planned objectives'), tracked('Objectives completed', snapshot.outlineReady ? 'In progress' : '—', 'track completion in your notes'),
   ] };
   if (project.type === 'Guide or Manual') return { title: 'Guide lens', subtitle: 'Procedures, support, and tested clarity', stats: [
-    countStat('Procedures', plannedCount(['procedure']), 'planned procedures'), countStat('Steps', plannedCount(['step', 'substep']), 'planned instruction steps'), countStat('Warnings', plannedCount(['warning', 'safety']), 'planned warnings'), countStat('Troubleshooting items', plannedCount(['troubleshooting']), 'planned support items'), tracked('Version status', 'Draft', 'update in your version notes'), tracked('Tested instructions', 'Not tracked', 'mark tested steps in your notes'), tracked('Guide completion', `${completion}%`, 'of the word target'),
+    countStat('Procedures', plannedCount(['procedure']), 'planned procedures'), countStat('Steps', plannedCount(['step', 'substep']), 'planned instruction steps'), tracked('Screenshots', mediaStats ? formatCount(mediaStats.planned) : '—', mediaStats ? `${mediaStats.finalImages} final` : 'add visuals when useful'), countStat('Warnings', plannedCount(['warning', 'safety']), 'planned warnings'), countStat('Troubleshooting items', plannedCount(['troubleshooting']), 'planned support items'), tracked('Version status', 'Draft', 'update in your version notes'), tracked('Tested instructions', 'Not tracked', 'mark tested steps in your notes'), tracked('Guide completion', `${completion}%`, 'of the word target'),
   ] };
   if (project.type === 'Essay Collection') return { title: 'Essay collection lens', subtitle: 'Essays, sequence, voice, and reflection', stats: [
     unitProgress('Essays'), countStat('Sections', plannedCount(['section', 'movement', 'theme']), 'planned collection sections'), countStat('Examples', plannedCount(['example', 'case study']), 'planned examples or cases'), countStat('Reflections', plannedCount(['reflection']), 'planned reflection pieces'), countStat('Voices and subjects', peopleCount, 'people or subjects in your notes'), tracked('Average essay length', draftedUnits.length ? `${formatCount(Math.round(snapshot.wordCount / draftedUnits.length))} words` : '—', 'across drafted essays'), tracked('Collection progress', `${completion}%`, 'of the word target'), tracked('Revision', snapshot.manuscriptComplete ? 'Complete' : 'Upcoming', 'whole-collection pass'),
@@ -2190,16 +2333,20 @@ function getProjectProgressStats(project: Project): SpecializedStat[] {
   const targetPages = snapshot.targetWords ? Math.max(1, Math.round(snapshot.targetWords / 250)) : 0;
   const currentPages = Math.round(snapshot.wordCount / 250);
   const remainingWords = Math.max(0, snapshot.targetWords - snapshot.wordCount);
+  const stageProgress = snapshot.manuscriptComplete ? 100 : snapshot.draftComplete ? (snapshot.parts.length ? Math.round((snapshot.writeIndex / snapshot.parts.length) * 100) : 0) : snapshot.firstDraftStarted ? (snapshot.parts.length ? Math.round((snapshot.draftedParts / snapshot.parts.length) * 100) : 0) : snapshot.outlineReady ? 100 : snapshot.foundationReady ? 60 : snapshot.ideaReady ? 30 : 0;
+  const exportStats = getProjectExportReadinessStats(project);
   const plannedFinish = plan.plannedCompletionDate ? new Date(`${plan.plannedCompletionDate}T12:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'Open-ended';
   return [
     { label: 'Overall completion', value: `${snapshot.progressPercent}%`, detail: 'across the full Journey' },
     { label: 'Current stage', value: snapshot.stage, detail: 'where this book is now' },
+    { label: 'Stage completion', value: `${stageProgress}%`, detail: 'progress within the current stage' },
     { label: 'Stage checkpoints', value: `${completedMilestones} / ${milestones.length}`, detail: 'completed / total' },
     { label: 'Target word progress', value: `${wordCompletion}%`, detail: `${formatCount(snapshot.wordCount)} / ${formatCount(snapshot.targetWords)} words` },
     { label: 'Estimated page progress', value: `${currentPages} / ${targetPages || '—'}`, detail: 'estimated pages at 250 words' },
     { label: 'Components', value: `${snapshot.draftedParts} / ${snapshot.parts.length}`, detail: 'drafted / planned' },
     { label: 'First draft', value: snapshot.parts.length ? `${Math.round((snapshot.draftedParts / snapshot.parts.length) * 100)}%` : '—', detail: 'draft completion' },
     { label: 'Revision', value: snapshot.manuscriptComplete ? '100%' : 'Not tracked', detail: snapshot.manuscriptComplete ? 'revision path complete' : 'revision tasks are not logged yet' },
+    { label: 'Formatting', value: exportStats[0].value, detail: 'preview and export preparation' },
     { label: 'Remaining work', value: formatCount(remainingWords), detail: 'estimated words remaining' },
     { label: 'Estimated finish', value: snapshot.estimateLabel, detail: snapshot.estimateDetail },
     { label: 'Planned finish', value: plannedFinish, detail: plan.plannedCompletionDate ? 'your selected date' : 'no deadline selected' },
@@ -2233,14 +2380,279 @@ function getProjectWritingStats(project: Project): SpecializedStat[] {
   ];
 }
 
-function AchievementList({ achievements }: { achievements: Achievement[] }) {
-  return <View style={s.achievementList}>{achievements.map((achievement) => <View key={achievement.id} style={[s.achievementRow, !achievement.completed && s.achievementRowLocked]}><View style={[s.achievementIcon, achievement.completed && s.achievementIconEarned]}><Text style={[s.achievementIconText, !achievement.completed && s.achievementIconTextLocked]}>{achievement.icon}</Text></View><View style={s.achievementCopy}><Text style={[s.achievementTitle, !achievement.completed && s.achievementTitleLocked]}>{achievement.title}</Text><Text style={s.achievementDetail}>{achievement.detail}</Text></View><Text style={[s.achievementState, achievement.completed ? s.achievementStateEarned : s.achievementStateLocked]}>{achievement.completed ? '✓' : '○'}</Text></View>)}</View>;
+function PaginationControls({ page, pageCount, onPageChange }: { page: number; pageCount: number; onPageChange: (page: number) => void }) {
+  if (pageCount <= 1) return null;
+  return <View style={s.achievementPagination}><Pressable onPress={() => onPageChange(Math.max(0, page - 1))} disabled={page === 0} style={[s.achievementPaginationButton, page === 0 && s.achievementPaginationButtonDisabled]} accessibilityRole="button" accessibilityLabel="Show previous page"><Text style={s.achievementPaginationButtonText}>‹</Text></Pressable><Text style={s.achievementPaginationLabel}>{page + 1} / {pageCount}</Text><Pressable onPress={() => onPageChange(Math.min(pageCount - 1, page + 1))} disabled={page === pageCount - 1} style={[s.achievementPaginationButton, page === pageCount - 1 && s.achievementPaginationButtonDisabled]} accessibilityRole="button" accessibilityLabel="Show next page"><Text style={s.achievementPaginationButtonText}>›</Text></Pressable></View>;
 }
 
-type CitationFields = { author: string; title: string; year: string; container: string; volume: string; issue: string; pages: string; url: string };
+function AchievementList({ achievements, pageSize = 4 }: { achievements: Achievement[]; pageSize?: number }) {
+  const [page, setPage] = useState(0);
+  const pageCount = Math.max(1, Math.ceil(achievements.length / pageSize));
+  const visibleAchievements = achievements.slice(page * pageSize, (page + 1) * pageSize);
+  useEffect(() => {
+    setPage((currentPage) => Math.min(currentPage, pageCount - 1));
+  }, [pageCount]);
+  return <View><View style={s.achievementList}>{visibleAchievements.map((achievement) => <View key={achievement.id} style={[s.achievementRow, !achievement.completed && s.achievementRowLocked]}><View style={[s.achievementIcon, achievement.completed && s.achievementIconEarned]}><Text style={[s.achievementIconText, !achievement.completed && s.achievementIconTextLocked]}>{achievement.icon}</Text></View><View style={s.achievementCopy}><Text style={[s.achievementTitle, !achievement.completed && s.achievementTitleLocked]}>{achievement.title}</Text><Text style={s.achievementDetail}>{achievement.detail}</Text></View><Text style={[s.achievementState, achievement.completed ? s.achievementStateEarned : s.achievementStateLocked]}>{achievement.completed ? '✓' : '○'}</Text></View>)}</View><PaginationControls page={page} pageCount={pageCount} onPageChange={setPage} /></View>;
+}
 
-const emptyCitationFields: CitationFields = { author: '', title: '', year: '', container: '', volume: '', issue: '', pages: '', url: '' };
-const citationSourceLabels: Record<CitationSourceType, string> = { book: 'Book', article: 'Article', website: 'Website' };
+type StylePreference = {
+  label: string;
+  detail: string;
+  count: number;
+  total: number;
+  empty: boolean;
+};
+
+function getStylePreferences(projects: Project[]): { planning: StylePreference; session: StylePreference } {
+  const planningCounts = new Map<PlanningMethod, { count: number; latest: number }>();
+  const sessionCounts = new Map<WritingSessionMode, { count: number; minutes: number; latest: number }>();
+  const configuredSessionModes = new Map<WritingSessionMode, { count: number; latest: number }>();
+  let planningTotal = 0;
+  let sessionTotal = 0;
+
+  projects.forEach((project) => {
+    const plan = project.plan ?? defaultPlanFor(project.type);
+    if (plan.planningMethod) {
+      const current = planningCounts.get(plan.planningMethod) ?? { count: 0, latest: 0 };
+      planningCounts.set(plan.planningMethod, { count: current.count + 1, latest: Math.max(current.latest, plan.writingPlanCreatedAt ?? 0) });
+      planningTotal += 1;
+    }
+    if (plan.writingSessionMode) {
+      const current = configuredSessionModes.get(plan.writingSessionMode) ?? { count: 0, latest: 0 };
+      configuredSessionModes.set(plan.writingSessionMode, { count: current.count + 1, latest: Math.max(current.latest, plan.writingPlanCreatedAt ?? 0) });
+    }
+    (plan.writingSessionHistory ?? []).forEach((session) => {
+      const current = sessionCounts.get(session.mode) ?? { count: 0, minutes: 0, latest: 0 };
+      sessionCounts.set(session.mode, { count: current.count + 1, minutes: current.minutes + session.writingMinutes, latest: Math.max(current.latest, session.timestamp) });
+      sessionTotal += 1;
+    });
+  });
+
+  const topPlanning = Array.from(planningCounts.entries()).sort(([, left], [, right]) => right.count - left.count || right.latest - left.latest)[0];
+  const planningLabel = topPlanning ? planningMethods.find((item) => item.method === topPlanning[0])?.label ?? 'Planning style' : 'Choose a planning style';
+  const planning: StylePreference = topPlanning
+    ? { label: planningLabel, detail: topPlanning[1].count + ' of ' + planningTotal + ' project' + (planningTotal === 1 ? '' : 's') + ' use this approach', count: topPlanning[1].count, total: planningTotal, empty: false }
+    : { label: planningLabel, detail: 'Choose an approach in Plan when it feels useful.', count: 0, total: 0, empty: true };
+
+  const topSession = Array.from(sessionCounts.entries()).sort(([, left], [, right]) => right.count - left.count || right.latest - left.latest)[0];
+  if (topSession) {
+    const sessionLabel = writingSessionOptions.find((item) => item.mode === topSession[0])?.label ?? 'Timed session';
+    const averageMinutes = Math.round(topSession[1].minutes / topSession[1].count);
+    return {
+      planning,
+      session: {
+        label: sessionLabel,
+        detail: topSession[1].count + ' completed session' + (topSession[1].count === 1 ? '' : 's') + ' · ' + formatDuration(averageMinutes) + ' typical',
+        count: topSession[1].count,
+        total: sessionTotal,
+        empty: false,
+      },
+    };
+  }
+
+  const topConfiguredSession = Array.from(configuredSessionModes.entries()).sort(([, left], [, right]) => right.count - left.count || right.latest - left.latest)[0];
+  const configuredLabel = topConfiguredSession ? writingSessionOptions.find((item) => item.mode === topConfiguredSession[0])?.label ?? 'Choose a session' : 'Choose a session';
+  return {
+    planning,
+    session: topConfiguredSession
+      ? { label: configuredLabel, detail: 'Your current default · complete a session to make this personal.', count: 0, total: 0, empty: false }
+      : { label: configuredLabel, detail: 'Complete a Writing Session to discover your most comfortable pace.', count: 0, total: 0, empty: true },
+  };
+}
+
+function StylePreferencesCard({ projects, overall }: { projects: Project[]; overall: boolean }) {
+  const preferences = getStylePreferences(projects);
+  return <View style={s.stylePreferencesCard}><View style={s.stylePreferencesHeader}><View><Text style={s.stylePreferencesEyebrow}>WRITING SIGNATURE</Text><Text style={s.stylePreferencesTitle}>The styles you return to</Text><Text style={s.stylePreferencesHint}>{overall ? 'Based on your projects and completed sessions.' : 'Based on this project and its completed sessions.'}</Text></View><Text style={s.stylePreferencesIcon}>✦</Text></View><View style={s.stylePreferencesGrid}><View style={[s.stylePreferenceTile, s.stylePreferenceTilePlan]}><View style={[s.stylePreferenceIcon, s.stylePreferenceIconPlan]}><Text style={s.stylePreferenceIconText}>⌁</Text></View><Text style={s.stylePreferenceLabel}>PLANNING STYLE</Text><Text numberOfLines={2} style={s.stylePreferenceValue}>{preferences.planning.label}</Text><Text style={s.stylePreferenceDetail}>{preferences.planning.detail}</Text></View><View style={[s.stylePreferenceTile, s.stylePreferenceTileSession]}><View style={[s.stylePreferenceIcon, s.stylePreferenceIconSession]}><Text style={s.stylePreferenceIconText}>◷</Text></View><Text style={s.stylePreferenceLabel}>TIME-BASED STYLE</Text><Text numberOfLines={2} style={s.stylePreferenceValue}>{preferences.session.label}</Text><Text style={s.stylePreferenceDetail}>{preferences.session.detail}</Text></View></View></View>;
+}
+
+type CitationFields = { author: string; title: string; year: string; container: string; volume: string; issue: string; pages: string; url: string; doi: string };
+
+const emptyCitationFields: CitationFields = { author: '', title: '', year: '', container: '', volume: '', issue: '', pages: '', url: '', doi: '' };
+const citationSourceLabels: Record<CitationSourceType, string> = { book: 'Book', article: 'Article', website: 'Webpage', report: 'Report' };
+
+type CitationLookupState = 'idle' | 'loading' | 'success' | 'error';
+type CitationMetadata = { fields: CitationFields; sourceType: CitationSourceType; description: string };
+
+const decodeHtml = (value: string) => value.replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code))).replace(/&#x([\da-f]+);/gi, (_, code) => String.fromCharCode(parseInt(code, 16))).replace(/&quot;/gi, '"').replace(/&apos;/gi, "'").replace(/&amp;/gi, '&').replace(/&lt;/gi, '<').replace(/&gt;/gi, '>').replace(/\s+/g, ' ').trim();
+const cleanMetadataValue = (value: string) => decodeHtml(value).replace(/\s+/g, ' ').trim();
+
+function readHtmlMeta(html: string, names: string[]) {
+  const wanted = new Set(names.map((name) => name.toLowerCase()));
+  const tags = html.match(/<meta\b[^>]*>/gi) ?? [];
+  for (const tag of tags) {
+    const key = tag.match(/\b(?:name|property|itemprop)\s*=\s*["']([^"']+)["']/i)?.[1]?.toLowerCase();
+    if (!key || !wanted.has(key)) continue;
+    const content = tag.match(/\bcontent\s*=\s*["']([^"']*)["']/i)?.[1];
+    if (content?.trim()) return cleanMetadataValue(content);
+  }
+  return '';
+}
+
+function readHtmlLink(html: string, relation: string) {
+  const tags = html.match(/<link\b[^>]*>/gi) ?? [];
+  for (const tag of tags) {
+    const rel = tag.match(/\brel\s*=\s*["']([^"']+)["']/i)?.[1]?.toLowerCase().split(/\s+/) ?? [];
+    if (!rel.includes(relation)) continue;
+    const href = tag.match(/\bhref\s*=\s*["']([^"']+)["']/i)?.[1];
+    if (href?.trim()) return cleanMetadataValue(href);
+  }
+  return '';
+}
+
+function readJsonLd(html: string) {
+  const scripts = [...html.matchAll(/<script\b[^>]*type\s*=\s*["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)];
+  for (const match of scripts) {
+    try {
+      const parsed = JSON.parse(match[1].trim()) as unknown;
+      const candidates = Array.isArray(parsed) ? parsed : typeof parsed === 'object' && parsed !== null && '@graph' in parsed && Array.isArray((parsed as { '@graph'?: unknown[] })['@graph']) ? (parsed as { '@graph': unknown[] })['@graph'] : [parsed];
+      const item = candidates.find((candidate) => typeof candidate === 'object' && candidate !== null && ('headline' in candidate || 'name' in candidate || '@type' in candidate)) as Record<string, unknown> | undefined;
+      if (item) return item;
+    } catch {
+      // Ignore malformed structured data and continue with standard meta tags.
+    }
+  }
+  return {} as Record<string, unknown>;
+}
+
+function jsonLdText(value: unknown): string {
+  if (typeof value === 'string') return cleanMetadataValue(value);
+  if (Array.isArray(value)) return value.map((item) => jsonLdText(item)).filter(Boolean).join(', ');
+  if (typeof value === 'object' && value !== null && 'name' in value) return jsonLdText((value as { name?: unknown }).name);
+  return '';
+}
+
+function normalizeCitationUrl(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  const normalized = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  try {
+    return new URL(normalized).toString();
+  } catch {
+    return '';
+  }
+}
+
+function resolveCitationUrl(value: string, baseUrl: string) {
+  const normalized = normalizeCitationUrl(value);
+  if (normalized) return normalized;
+  try {
+    return new URL(value, baseUrl).toString();
+  } catch {
+    return '';
+  }
+}
+
+function inferCitationSourceType(fields: CitationFields, html: string, title: string, url: string): CitationSourceType {
+  const lower = `${html.slice(0, 12000)} ${title} ${url}`.toLowerCase();
+  if (fields.volume || fields.issue || fields.pages || readHtmlMeta(html, ['citation_journal_title', 'journal'])) return 'article';
+  if (/\b(whitepaper|white paper|research report|annual report|technical report|working paper)\b/.test(lower)) return 'report';
+  if (/\b(isbn|ebook|e-book|online book)\b/.test(lower)) return 'book';
+  return 'website';
+}
+
+function parseCitationMetadata(html: string, url: string): CitationMetadata {
+  const jsonLd = readJsonLd(html);
+  const jsonLdAuthor = jsonLdText(jsonLd.author);
+  const jsonLdPublisher = jsonLdText(jsonLd.publisher);
+  const jsonLdDate = jsonLdText(jsonLd.datePublished ?? jsonLd.dateCreated);
+  const jsonLdTitle = jsonLdText(jsonLd.headline ?? jsonLd.name);
+  const jsonLdUrl = jsonLdText(jsonLd.url);
+  const title = readHtmlMeta(html, ['citation_title', 'og:title', 'twitter:title']) || jsonLdTitle || cleanMetadataValue(html.match(/<title\b[^>]*>([\s\S]*?)<\/title>/i)?.[1] ?? '');
+  const author = readHtmlMeta(html, ['citation_author', 'author', 'article:author', 'parsely-author', 'dc.creator']) || jsonLdAuthor;
+  const date = readHtmlMeta(html, ['citation_publication_date', 'article:published_time', 'datePublished', 'date', 'dc.date', 'parsely-pub-date']) || jsonLdDate;
+  const journal = readHtmlMeta(html, ['citation_journal_title', 'journal']) || jsonLdText(jsonLd.isPartOf);
+  const publisher = readHtmlMeta(html, ['citation_publisher', 'og:site_name', 'application-name', 'publisher']) || jsonLdPublisher;
+  const canonicalUrl = readHtmlLink(html, 'canonical') || readHtmlMeta(html, ['og:url']) || jsonLdUrl || url;
+  const doi = readHtmlMeta(html, ['citation_doi', 'doi', 'dc.identifier']).replace(/^https?:\/\/doi\.org\//i, '').replace(/^doi:\s*/i, '');
+  const firstPage = readHtmlMeta(html, ['citation_firstpage']);
+  const lastPage = readHtmlMeta(html, ['citation_lastpage']);
+  const fields: CitationFields = {
+    author,
+    title,
+    year: date.match(/\b(\d{4})\b/)?.[1] ?? '',
+    container: journal || publisher,
+    volume: readHtmlMeta(html, ['citation_volume', 'volume']) || jsonLdText(jsonLd.volumeNumber),
+    issue: readHtmlMeta(html, ['citation_issue', 'issue']) || jsonLdText(jsonLd.issueNumber),
+    pages: firstPage && lastPage ? `${firstPage}-${lastPage}` : firstPage || lastPage || readHtmlMeta(html, ['pagination', 'page']) || jsonLdText(jsonLd.pagination),
+    url: normalizeCitationUrl(canonicalUrl) || url,
+    doi,
+  };
+  const sourceType = inferCitationSourceType(fields, html, title, url);
+  return { fields, sourceType, description: [author, publisher || journal, fields.year].filter(Boolean).join(' · ') || 'Metadata found from the page' };
+}
+
+type ImageCitationDraft = Omit<ImageCitation, 'citation' | 'style'> & { fileName: string; mimeType: string; width?: number; height?: number; fileSize?: number };
+
+function asJsonLdRecord(value: unknown): Record<string, unknown> {
+  if (Array.isArray(value)) return (value.find((item) => typeof item === 'object' && item !== null) as Record<string, unknown> | undefined) ?? {};
+  return typeof value === 'object' && value !== null ? value as Record<string, unknown> : {};
+}
+
+function imageFileName(url: string) {
+  try {
+    const path = decodeURIComponent(new URL(url).pathname);
+    return path.split('/').pop() || 'bookez-image';
+  } catch {
+    return 'bookez-image';
+  }
+}
+
+function imageHost(url: string) {
+  try {
+    return new URL(url).hostname.replace(/^www\./i, '');
+  } catch {
+    return '';
+  }
+}
+
+function parseImageCitationMetadata(html: string, sourcePageUrl: string): ImageCitationDraft {
+  const jsonLd = readJsonLd(html);
+  const imageNode = asJsonLdRecord(jsonLd['@type']?.toString().toLowerCase().includes('imageobject') ? jsonLd : jsonLd.image ?? jsonLd.thumbnail);
+  const originalImageUrl = resolveCitationUrl(jsonLdText(imageNode.contentUrl ?? imageNode.encodingUrl ?? imageNode.url) || readHtmlMeta(html, ['og:image', 'twitter:image', 'image']), sourcePageUrl);
+  const pageTitle = readHtmlMeta(html, ['og:title', 'twitter:title']) || cleanMetadataValue(html.match(/<title\b[^>]*>([\s\S]*?)<\/title>/i)?.[1] ?? '');
+  const title = jsonLdText(imageNode.name ?? imageNode.headline ?? imageNode.caption) || readHtmlMeta(html, ['og:image:alt', 'twitter:image:alt', 'citation_title']) || pageTitle || imageFileName(originalImageUrl || sourcePageUrl).replace(/\.[^.]+$/, '');
+  const creator = jsonLdText(imageNode.author ?? imageNode.creator) || readHtmlMeta(html, ['citation_author', 'author', 'article:author', 'dc.creator']);
+  const caption = jsonLdText(imageNode.caption) || readHtmlMeta(html, ['og:description', 'description', 'twitter:description']);
+  const publisher = jsonLdText(imageNode.publisher) || readHtmlMeta(html, ['og:site_name', 'application-name', 'publisher']) || imageHost(sourcePageUrl);
+  const publicationDate = jsonLdText(imageNode.datePublished ?? imageNode.dateCreated) || readHtmlMeta(html, ['article:published_time', 'citation_publication_date', 'datePublished', 'date', 'dc.date']);
+  const creditLine = jsonLdText(imageNode.creditText) || readHtmlMeta(html, ['creditText', 'credit', 'image:credit']);
+  const copyrightHolder = jsonLdText(imageNode.copyrightHolder) || readHtmlMeta(html, ['copyrightHolder', 'copyright']);
+  const license = jsonLdText(imageNode.license) || readHtmlMeta(html, ['license', 'usageInfo']);
+  const licenseUrl = normalizeCitationUrl(typeof imageNode.license === 'string' ? imageNode.license : readHtmlMeta(html, ['license'])) || '';
+  const canonical = normalizeCitationUrl(readHtmlLink(html, 'canonical') || readHtmlMeta(html, ['og:url']) || sourcePageUrl) || sourcePageUrl;
+  return { title, creator, caption, publisher, publicationDate, originalImageUrl, sourcePageUrl: canonical, creditLine, copyrightHolder, license, licenseUrl, dateAccessed: new Date().toISOString().slice(0, 10), fileName: imageFileName(originalImageUrl || sourcePageUrl), mimeType: '', };
+}
+
+function directImageCitationMetadata(url: string, mimeType: string): ImageCitationDraft {
+  const fileName = imageFileName(url);
+  return { title: fileName.replace(/\.[^.]+$/, '') || 'Untitled image', creator: '', caption: '', publisher: imageHost(url), publicationDate: '', originalImageUrl: url, sourcePageUrl: '', creditLine: '', copyrightHolder: '', license: '', licenseUrl: '', dateAccessed: new Date().toISOString().slice(0, 10), fileName, mimeType, };
+}
+
+function formatImageCitation(draft: ImageCitationDraft, style: CitationStyle) {
+  const creator = draft.creator.trim() || 'Unknown creator';
+  const title = draft.title.trim() || 'Untitled image';
+  const year = draft.publicationDate.match(/\b(\d{4})\b/)?.[1] ?? 'n.d.';
+  const publisher = draft.publisher.trim() || imageHost(draft.sourcePageUrl || draft.originalImageUrl) || 'Source';
+  const link = draft.sourcePageUrl || draft.originalImageUrl;
+  const license = draft.license.trim() ? ` ${draft.license.trim()}.` : '';
+  if (style === 'APA') return `${creator}. (${year}). ${title} [Image]. ${publisher}.${license}${link ? ` ${link}` : ''}`;
+  if (style === 'MLA') return `${creator}. “${title}.” ${publisher}, ${year}.${license}${link ? ` ${link}.` : ''}`;
+  return `${creator}. “${title}.” ${publisher}. ${year}.${license}${link ? ` ${link}.` : ''}`;
+}
+
+async function downloadRemoteImage(url: string, mimeType: string) {
+  const extensionFromMime = mimeType.split('/')[1]?.split(';')[0].toLowerCase();
+  const extensionFromUrl = imageFileName(url).match(/\.([a-z\d]+)$/i)?.[1]?.toLowerCase();
+  const extension = ['jpeg', 'jpg', 'png', 'webp', 'gif', 'heic', 'avif'].includes(extensionFromMime ?? '') ? extensionFromMime : ['jpeg', 'jpg', 'png', 'webp', 'gif', 'heic', 'avif'].includes(extensionFromUrl ?? '') ? extensionFromUrl : 'jpg';
+  const destination = `${FileSystem.cacheDirectory}bookez-image-${Date.now()}.${extension}`;
+  const downloaded = await FileSystem.downloadAsync(url, destination);
+  const info = await FileSystem.getInfoAsync(downloaded.uri);
+  return { uri: downloaded.uri, fileName: imageFileName(url) || `bookez-image.${extension}`, mimeType: mimeType || `image/${extension === 'jpg' ? 'jpeg' : extension}`, fileSize: info.exists ? info.size : undefined };
+}
+
+function getImageDimensions(uri: string) {
+  return new Promise<{ width: number; height: number } | undefined>((resolve) => Image.getSize(uri, (width, height) => resolve({ width, height }), () => resolve(undefined)));
+}
 
 const citationPart = (value: string) => value.trim().replace(/[.。]+$/, '');
 const citationYear = (value: string) => value.trim() || 'n.d.';
@@ -2254,19 +2666,20 @@ function formatCitation(fields: CitationFields, style: CitationStyle, sourceType
   const issue = citationPart(fields.issue);
   const pages = citationPart(fields.pages);
   const url = fields.url.trim();
+  const citationLink = fields.doi.trim() ? `https://doi.org/${fields.doi.trim().replace(/^https?:\/\/doi\.org\//i, '')}` : url;
   if (style === 'APA') {
-    if (sourceType === 'book') return `${author}. (${year}). ${title}.${container ? ` ${container}.` : ''}${url ? ` ${url}` : ''}`;
-    if (sourceType === 'article') return `${author}. (${year}). ${title}.${container ? ` ${container}` : ''}${volume ? `, ${volume}` : ''}${issue ? `(${issue})` : ''}${pages ? `, ${pages}` : ''}.${url ? ` ${url}` : ''}`;
-    return `${author}. (${year}). ${title}.${container ? ` ${container}.` : ''}${url ? ` ${url}` : ''}`;
+    if (sourceType === 'book' || sourceType === 'report') return `${author}. (${year}). ${title}.${container ? ` ${container}.` : ''}${citationLink ? ` ${citationLink}` : ''}`;
+    if (sourceType === 'article') return `${author}. (${year}). ${title}.${container ? ` ${container}` : ''}${volume ? `, ${volume}` : ''}${issue ? `(${issue})` : ''}${pages ? `, ${pages}` : ''}.${citationLink ? ` ${citationLink}` : ''}`;
+    return `${author}. (${year}). ${title}.${container ? ` ${container}.` : ''}${citationLink ? ` ${citationLink}` : ''}`;
   }
   if (style === 'MLA') {
-    if (sourceType === 'book') return `${author}. ${title}.${container ? ` ${container},` : ''} ${year}.${url ? ` ${url}.` : ''}`;
-    if (sourceType === 'article') return `${author}. “${title}.”${container ? ` ${container},` : ''}${volume ? ` vol. ${volume},` : ''}${issue ? ` no. ${issue},` : ''} ${year}${pages ? `, pp. ${pages}` : ''}.${url ? ` ${url}.` : ''}`;
-    return `${author}. “${title}.”${container ? ` ${container},` : ''} ${year}.${url ? ` ${url}.` : ''}`;
+    if (sourceType === 'book' || sourceType === 'report') return `${author}. ${title}.${container ? ` ${container},` : ''} ${year}.${citationLink ? ` ${citationLink}.` : ''}`;
+    if (sourceType === 'article') return `${author}. “${title}.”${container ? ` ${container},` : ''}${volume ? ` vol. ${volume},` : ''}${issue ? ` no. ${issue},` : ''} ${year}${pages ? `, pp. ${pages}` : ''}.${citationLink ? ` ${citationLink}.` : ''}`;
+    return `${author}. “${title}.”${container ? ` ${container},` : ''} ${year}.${citationLink ? ` ${citationLink}.` : ''}`;
   }
-  if (sourceType === 'book') return `${author}. ${title}.${container ? ` ${container},` : ''} ${year}.${url ? ` ${url}.` : ''}`;
-  if (sourceType === 'article') return `${author}. “${title}.”${container ? ` ${container}` : ''}${volume ? ` ${volume}` : ''}${issue ? `, no. ${issue}` : ''} (${year})${pages ? `: ${pages}` : ''}.${url ? ` ${url}.` : ''}`;
-  return `${author}. “${title}.”${container ? ` ${container}.` : ''} ${year}.${url ? ` ${url}.` : ''}`;
+  if (sourceType === 'book' || sourceType === 'report') return `${author}. ${title}.${container ? ` ${container},` : ''} ${year}.${citationLink ? ` ${citationLink}.` : ''}`;
+  if (sourceType === 'article') return `${author}. “${title}.”${container ? ` ${container}` : ''}${volume ? ` ${volume}` : ''}${issue ? `, no. ${issue}` : ''} (${year})${pages ? `: ${pages}` : ''}.${citationLink ? ` ${citationLink}.` : ''}`;
+  return `${author}. “${title}.”${container ? ` ${container}.` : ''} ${year}.${citationLink ? ` ${citationLink}.` : ''}`;
 }
 
 function CitationGenerator({ project, onUpdateProject }: { project: Project; onUpdateProject: (title: string, changes: Partial<Project>) => void }) {
@@ -2300,6 +2713,176 @@ function CitationGenerator({ project, onUpdateProject }: { project: Project; onU
   return <View style={s.citationGeneratorCard}><View style={s.citationHeader}><View style={s.citationIcon}><Text style={s.citationIconText}>↗</Text></View><View style={s.citationHeaderCopy}><Text style={s.citationEyebrow}>REFERENCE TOOL</Text><Text style={s.citationTitle}>Citation generator</Text><Text style={s.citationHint}>Build a clean starting citation, then review it against your source.</Text></View></View><Text style={s.citationProjectLabel}>ADDING TO · {project.title.toUpperCase()}</Text><Text style={s.citationFieldLabel}>STYLE</Text><View style={s.citationChoiceRow}>{(['APA', 'MLA', 'Chicago'] as CitationStyle[]).map((item) => <Pressable key={item} onPress={() => { setStyle(item); setGenerated(''); setAdded(false); }} style={[s.citationChoice, style === item && s.citationChoiceActive]}><Text style={[s.citationChoiceText, style === item && s.citationChoiceTextActive]}>{item}</Text></Pressable>)}</View><Text style={s.citationFieldLabel}>SOURCE TYPE</Text><View style={s.citationChoiceRow}>{(['book', 'article', 'website'] as CitationSourceType[]).map((item) => <Pressable key={item} onPress={() => { setSourceType(item); setGenerated(''); setAdded(false); }} style={[s.citationChoice, sourceType === item && s.citationChoiceActive]}><Text style={[s.citationChoiceText, sourceType === item && s.citationChoiceTextActive]}>{citationSourceLabels[item]}</Text></Pressable>)}</View><View style={s.citationFieldGrid}><TextInput value={fields.author} onChangeText={(value) => updateField('author', value)} placeholder="Author or organization" placeholderTextColor="#B2B3C0" style={s.citationInput} accessibilityLabel="Citation author" /><TextInput value={fields.title} onChangeText={(value) => updateField('title', value)} placeholder="Title *" placeholderTextColor="#B2B3C0" style={s.citationInput} accessibilityLabel="Citation title" /><TextInput value={fields.year} onChangeText={(value) => updateField('year', value)} placeholder="Year" placeholderTextColor="#B2B3C0" keyboardType="number-pad" style={s.citationInputHalf} accessibilityLabel="Citation year" /><TextInput value={fields.container} onChangeText={(value) => updateField('container', value)} placeholder={sourceType === 'book' ? 'Publisher' : sourceType === 'article' ? 'Journal' : 'Site name'} placeholderTextColor="#B2B3C0" style={s.citationInputHalf} accessibilityLabel="Publisher, journal, or site" /><TextInput value={fields.volume} onChangeText={(value) => updateField('volume', value)} placeholder="Volume" placeholderTextColor="#B2B3C0" style={s.citationInputHalf} accessibilityLabel="Citation volume" /><TextInput value={fields.issue} onChangeText={(value) => updateField('issue', value)} placeholder="Issue" placeholderTextColor="#B2B3C0" style={s.citationInputHalf} accessibilityLabel="Citation issue" /><TextInput value={fields.pages} onChangeText={(value) => updateField('pages', value)} placeholder="Pages" placeholderTextColor="#B2B3C0" style={s.citationInputHalf} accessibilityLabel="Citation pages" /><TextInput value={fields.url} onChangeText={(value) => updateField('url', value)} placeholder="URL (optional)" placeholderTextColor="#B2B3C0" autoCapitalize="none" style={s.citationInput} accessibilityLabel="Citation URL" /></View><Text style={s.citationExample}>Example fields: “Octavia Butler” · “Parable of the Sower” · “1993” · “Seven Stories Press”</Text><Pressable onPress={generate} style={s.citationGenerateButton}><Text style={s.citationGenerateText}>Generate citation</Text><Text style={s.citationGenerateArrow}>→</Text></Pressable>{generated && <View style={s.citationResult}><Text style={s.citationResultLabel}>{style.toUpperCase()} · REVIEW BEFORE USING</Text><Text style={s.citationResultText}>{generated}</Text><Pressable onPress={addToReferences} style={[s.citationAddButton, added && s.citationAddButtonAdded]}><Text style={s.citationAddText}>{added ? 'Added to References ✓' : 'Add to References page'}</Text></Pressable></View>}{references.length > 0 && <Text style={s.citationExisting}>{references.length} citation{references.length === 1 ? '' : 's'} already saved to this book.</Text>}</View>;
 }
 
+function CitationGeneratorWithUrl({ project, onUpdateProject }: { project: Project; onUpdateProject: (title: string, changes: Partial<Project>) => void }) {
+  const plan = project.plan ?? defaultPlanFor(project.type);
+  const [style, setStyle] = useState<CitationStyle>(plan.referenceStyle ?? 'APA');
+  const [sourceType, setSourceType] = useState<CitationSourceType>('website');
+  const [fields, setFields] = useState<CitationFields>(emptyCitationFields);
+  const [generated, setGenerated] = useState('');
+  const [added, setAdded] = useState(false);
+  const [manualOpen, setManualOpen] = useState(false);
+  const [lookupState, setLookupState] = useState<CitationLookupState>('idle');
+  const [lookupError, setLookupError] = useState('');
+  const [lookupSummary, setLookupSummary] = useState('');
+  const references = plan.referenceEntries ?? [];
+  const updateField = (key: keyof CitationFields, value: string) => {
+    setFields((current) => ({ ...current, [key]: value }));
+    setGenerated('');
+    setAdded(false);
+    if (key === 'url') setLookupState('idle');
+  };
+  const lookupUrl = async () => {
+    const normalizedUrl = normalizeCitationUrl(fields.url);
+    if (!normalizedUrl) {
+      Alert.alert('Add a valid URL', 'Paste a webpage address beginning with http:// or https://.');
+      return;
+    }
+    setLookupState('loading');
+    setLookupError('');
+    setGenerated('');
+    setAdded(false);
+    try {
+      const response = await fetch(normalizedUrl, { headers: { Accept: 'text/html,application/xhtml+xml' } });
+      if (!response.ok) throw new Error(`Page returned ${response.status}`);
+      const metadata = parseCitationMetadata(await response.text(), normalizedUrl);
+      if (!metadata.fields.title) throw new Error('No title metadata found');
+      setFields(metadata.fields);
+      setSourceType(metadata.sourceType);
+      setLookupSummary(metadata.description);
+      setGenerated(formatCitation(metadata.fields, style, metadata.sourceType));
+      setLookupState('success');
+    } catch {
+      setLookupState('error');
+      setLookupError('Bookez could not read that page. You can review the URL and use manual entry below.');
+    }
+  };
+  const generateManual = () => {
+    if (!fields.title.trim()) {
+      Alert.alert('Add a source title', 'Give Bookez the title so it can create a citation.');
+      return;
+    }
+    setGenerated(formatCitation(fields, style, sourceType));
+    setAdded(false);
+  };
+  const addToReferences = () => {
+    if (!generated) return;
+    const referencesKey = getStructureItems(project.type, planBlueprints[project.type] ?? planBlueprints['Custom Project']).find((item) => item.key === 'references');
+    const nextStructure = referencesKey ? { ...plan.structure, [referencesKey.key ?? 'references']: true } : plan.structure;
+    const nextEntry: ReferenceEntry = { id: `reference-${Date.now()}`, citation: generated, style, sourceType, createdAt: Date.now(), sourceUrl: fields.url.trim() || undefined };
+    const referenceDraftKey = referencesKey ? `structure:${referencesKey.key ?? 'references'}` : '';
+    const nextDrafts = referenceDraftKey ? { ...plan.drafts, [referenceDraftKey]: [plan.drafts[referenceDraftKey]?.trim(), generated].filter(Boolean).join('\n\n') } : plan.drafts;
+    const studio = getBookStudioState(project);
+    onUpdateProject(project.title, { plan: { ...plan, structure: nextStructure, drafts: nextDrafts, referenceStyle: style, referenceEntries: [...references, nextEntry] }, studio: { ...studio, backMatterIncluded: { ...studio.backMatterIncluded, references: true } } });
+    setAdded(true);
+  };
+  return <View style={s.citationGeneratorCard}>
+    <View style={s.citationHeader}><View style={s.citationIcon}><Text style={s.citationIconText}>↗</Text></View><View style={s.citationHeaderCopy}><Text style={s.citationEyebrow}>REFERENCE TOOL</Text><Text style={s.citationTitle}>Citation generator</Text><Text style={s.citationHint}>Paste a URL and Bookez will read citation metadata locally before you review and save it.</Text></View></View>
+    <Text style={s.citationProjectLabel}>ADDING TO · {project.title.toUpperCase()}</Text>
+    <Text style={s.citationFieldLabel}>STYLE</Text>
+    <View style={s.citationChoiceRow}>{(['APA', 'MLA', 'Chicago'] as CitationStyle[]).map((item) => <Pressable key={item} onPress={() => { setStyle(item); setGenerated(''); setAdded(false); }} style={[s.citationChoice, style === item && s.citationChoiceActive]}><Text style={[s.citationChoiceText, style === item && s.citationChoiceTextActive]}>{item}</Text></Pressable>)}</View>
+    <Text style={s.citationFieldLabel}>SOURCE URL</Text>
+    <View style={s.citationUrlRow}><TextInput value={fields.url} onChangeText={(value) => updateField('url', value)} placeholder="Paste a webpage, article, report, or book URL" placeholderTextColor="#B2B3C0" autoCapitalize="none" autoCorrect={false} keyboardType="url" style={s.citationUrlInput} accessibilityLabel="Source URL" /><Pressable onPress={lookupUrl} disabled={lookupState === 'loading'} style={[s.citationLookupButton, lookupState === 'loading' && s.citationLookupButtonDisabled]} accessibilityRole="button"><Text style={s.citationLookupText}>{lookupState === 'loading' ? 'Reading…' : 'Look up'}</Text></Pressable></View>
+    <Text style={s.citationLocalNote}>Reads standard webpage metadata on-device. No external AI API is used.</Text>
+    {lookupState === 'error' && <Text style={s.citationLookupError}>{lookupError}</Text>}
+    {lookupState === 'success' && <View style={s.citationMetadataCard}><Text style={s.citationMetadataLabel}>FOUND ON PAGE · {citationSourceLabels[sourceType].toUpperCase()}</Text><Text style={s.citationMetadataTitle}>{fields.title}</Text><Text style={s.citationMetadataDetail}>{lookupSummary}</Text><Text style={s.citationMetadataDetail}>Review the details below before saving.</Text></View>}
+
+    <Pressable onPress={() => setManualOpen(!manualOpen)} style={s.citationManualToggle} accessibilityRole="button" accessibilityLabel={manualOpen ? 'Hide manual citation entry' : 'Open manual citation entry'}><Text style={s.citationManualToggleText}>{manualOpen ? 'Hide manual entry' : 'Or enter citation details manually'}</Text><Text style={s.citationManualToggleArrow}>{manualOpen ? '⌃' : '⌄'}</Text></Pressable>
+    {manualOpen && <View style={s.citationManualFields}><Text style={s.citationFieldLabel}>SOURCE TYPE</Text><View style={s.citationChoiceRow}>{(['book', 'article', 'website', 'report'] as CitationSourceType[]).map((item) => <Pressable key={item} onPress={() => { setSourceType(item); setGenerated(''); setAdded(false); }} style={[s.citationChoice, sourceType === item && s.citationChoiceActive]}><Text style={[s.citationChoiceText, sourceType === item && s.citationChoiceTextActive]}>{citationSourceLabels[item]}</Text></Pressable>)}</View><View style={s.citationFieldGrid}><TextInput value={fields.author} onChangeText={(value) => updateField('author', value)} placeholder="Author or organization" placeholderTextColor="#B2B3C0" style={s.citationInput} accessibilityLabel="Citation author" /><TextInput value={fields.title} onChangeText={(value) => updateField('title', value)} placeholder="Title *" placeholderTextColor="#B2B3C0" style={s.citationInput} accessibilityLabel="Citation title" /><TextInput value={fields.year} onChangeText={(value) => updateField('year', value)} placeholder="Year" placeholderTextColor="#B2B3C0" keyboardType="number-pad" style={s.citationInputHalf} accessibilityLabel="Citation year" /><TextInput value={fields.container} onChangeText={(value) => updateField('container', value)} placeholder={sourceType === 'book' || sourceType === 'report' ? 'Publisher' : sourceType === 'article' ? 'Journal or site' : 'Site name'} placeholderTextColor="#B2B3C0" style={s.citationInputHalf} accessibilityLabel="Publisher, journal, or site" /><TextInput value={fields.volume} onChangeText={(value) => updateField('volume', value)} placeholder="Volume" placeholderTextColor="#B2B3C0" style={s.citationInputHalf} accessibilityLabel="Citation volume" /><TextInput value={fields.issue} onChangeText={(value) => updateField('issue', value)} placeholder="Issue" placeholderTextColor="#B2B3C0" style={s.citationInputHalf} accessibilityLabel="Citation issue" /><TextInput value={fields.pages} onChangeText={(value) => updateField('pages', value)} placeholder="Pages" placeholderTextColor="#B2B3C0" style={s.citationInputHalf} accessibilityLabel="Citation pages" /></View><Text style={s.citationExample}>Add only the details you know. Bookez formats the citation deterministically.</Text><Pressable onPress={generateManual} style={s.citationGenerateButton}><Text style={s.citationGenerateText}>Review citation</Text><Text style={s.citationGenerateArrow}>→</Text></Pressable></View>}
+
+    {generated && <View style={s.citationResult}><Text style={s.citationResultLabel}>{style.toUpperCase()} · REVIEW CITATION</Text><Text style={s.citationResultText}>{generated}</Text><View style={s.citationReviewActions}><Pressable onPress={() => { setGenerated(''); setAdded(false); setManualOpen(true); }} style={s.citationReviewEditButton}><Text style={s.citationReviewEditText}>Edit details</Text></Pressable><Pressable onPress={addToReferences} style={[s.citationAddButton, s.citationReviewSaveButton, added && s.citationAddButtonAdded]}><Text style={s.citationAddText}>{added ? 'Saved ✓' : 'Save citation'}</Text></Pressable></View></View>}
+    {references.length > 0 && <Text style={s.citationExisting}>{references.length} citation{references.length === 1 ? '' : 's'} already saved to this book.</Text>}
+  </View>;
+}
+
+function ImageCitationGenerator({ project, onUpdateProject }: { project: Project; onUpdateProject: (title: string, changes: Partial<Project>) => void }) {
+  const plan = project.plan ?? defaultPlanFor(project.type);
+  const [style, setStyle] = useState<CitationStyle>(plan.referenceStyle ?? 'APA');
+  const [imageUrl, setImageUrl] = useState('');
+  const [draft, setDraft] = useState<ImageCitationDraft | null>(null);
+  const [previewUri, setPreviewUri] = useState('');
+  const [lookupState, setLookupState] = useState<CitationLookupState>('idle');
+  const [lookupError, setLookupError] = useState('');
+  const [generated, setGenerated] = useState('');
+  const [saved, setSaved] = useState(false);
+  const [manualOpen, setManualOpen] = useState(false);
+  const lookupImage = async () => {
+    const normalizedUrl = normalizeCitationUrl(imageUrl);
+    if (!normalizedUrl) {
+      Alert.alert('Add a valid image URL', 'Paste an image URL or the webpage where the image appears.');
+      return;
+    }
+    setLookupState('loading');
+    setLookupError('');
+    setGenerated('');
+    setSaved(false);
+    try {
+      const response = await fetch(normalizedUrl, { headers: { Accept: 'text/html,image/*' } });
+      if (!response.ok) throw new Error(`Source returned ${response.status}`);
+      const responseType = response.headers.get('content-type') ?? '';
+      const directImage = responseType.startsWith('image/') || /\.(avif|gif|heic|jpe?g|png|webp)(?:[?#].*)?$/i.test(normalizedUrl);
+      const metadata = directImage ? directImageCitationMetadata(normalizedUrl, responseType) : parseImageCitationMetadata(await response.text(), normalizedUrl);
+      if (!metadata.originalImageUrl) throw new Error('No image URL found on page');
+      const downloaded = await downloadRemoteImage(metadata.originalImageUrl, metadata.mimeType);
+      const dimensions = await getImageDimensions(downloaded.uri);
+      const nextDraft = { ...metadata, ...downloaded, ...(dimensions ?? {}) };
+      setDraft(nextDraft);
+      setPreviewUri(downloaded.uri);
+      setGenerated(formatImageCitation(nextDraft, style));
+      setLookupState('success');
+    } catch {
+      setLookupState('error');
+      setLookupError('Bookez could not import an image from that URL. Try the image’s source webpage, or review the attribution manually below.');
+    }
+  };
+  const updateDraft = (key: keyof ImageCitationDraft, value: string) => {
+    setDraft((current) => current ? { ...current, [key]: value } : current);
+    setGenerated('');
+    setSaved(false);
+  };
+  const openManual = () => {
+    if (!manualOpen && !draft) setDraft(directImageCitationMetadata(normalizeCitationUrl(imageUrl) || 'https://example.com/image.jpg', ''));
+    setManualOpen(!manualOpen);
+  };
+  const reviewCitation = () => {
+    if (!draft?.title.trim()) {
+      Alert.alert('Add an image title', 'Give the image a title before reviewing its citation.');
+      return;
+    }
+    setGenerated(formatImageCitation(draft, style));
+    setSaved(false);
+  };
+  const saveImageAndReference = () => {
+    if (!draft || !previewUri || !generated) return;
+    const config = getImageSystemConfig(project.type);
+    const timestamp = Date.now();
+    const imageCitation: ImageCitation = { style, title: draft.title, creator: draft.creator, caption: draft.caption, publisher: draft.publisher, publicationDate: draft.publicationDate, originalImageUrl: draft.originalImageUrl, sourcePageUrl: draft.sourcePageUrl, creditLine: draft.creditLine, copyrightHolder: draft.copyrightHolder, license: draft.license, licenseUrl: draft.licenseUrl, dateAccessed: draft.dateAccessed, citation: generated };
+    const importedImage: BookezImage = { id: `image-${timestamp}-${Math.random().toString(36).slice(2, 7)}`, uri: previewUri, fileName: draft.fileName, mimeType: draft.mimeType, width: draft.width, height: draft.height, fileSize: draft.fileSize, title: draft.title, caption: draft.caption, captionRequested: Boolean(draft.caption), altText: draft.caption, credit: draft.creditLine || draft.creator, source: draft.sourcePageUrl || draft.originalImageUrl, date: draft.publicationDate, location: '', people: draft.creator, permissionStatus: 'unknown', archiveName: '', sourceCitation: generated, imageCitation, notes: '', placement: config.placements[0] ?? 'inline', textPlacement: 'bottom', fullBleed: false, includeInExport: false, referenceOnly: true, status: 'final', role: config.roles[0], order: (project.images ?? []).length, createdAt: timestamp, updatedAt: timestamp };
+    onUpdateProject(project.title, { imageEnabled: true, images: [...(project.images ?? []), importedImage] });
+    setSaved(true);
+  };
+  const savedImageReferences = (project.images ?? []).filter((image) => image.imageCitation);
+  const references = savedImageReferences.length;
+  return <View style={s.citationGeneratorCard}>
+    <View style={s.citationHeader}><View style={s.citationIcon}><Text style={s.citationIconText}>▧</Text></View><View style={s.citationHeaderCopy}><Text style={s.citationEyebrow}>IMAGE REFERENCES</Text><Text style={s.citationTitle}>Import an image with credit</Text><Text style={s.citationHint}>Use the source webpage when possible so Bookez can find attribution, license, and copyright details.</Text></View></View>
+    <Text style={s.citationFieldLabel}>CITATION STYLE</Text>
+    <View style={s.citationChoiceRow}>{(['APA', 'MLA', 'Chicago'] as CitationStyle[]).map((item) => <Pressable key={item} onPress={() => { setStyle(item); setGenerated(''); setSaved(false); }} style={[s.citationChoice, style === item && s.citationChoiceActive]}><Text style={[s.citationChoiceText, style === item && s.citationChoiceTextActive]}>{item}</Text></Pressable>)}</View>
+    <Text style={s.citationFieldLabel}>IMAGE OR SOURCE PAGE URL</Text>
+    <View style={s.citationUrlRow}><TextInput value={imageUrl} onChangeText={(value) => { setImageUrl(value); setLookupState('idle'); setGenerated(''); }} placeholder="Paste a museum, article, or image URL" placeholderTextColor="#B2B3C0" autoCapitalize="none" autoCorrect={false} keyboardType="url" style={s.citationUrlInput} accessibilityLabel="Image or source page URL" /><Pressable onPress={lookupImage} disabled={lookupState === 'loading'} style={[s.citationLookupButton, lookupState === 'loading' && s.citationLookupButtonDisabled]} accessibilityRole="button"><Text style={s.citationLookupText}>{lookupState === 'loading' ? 'Importing…' : 'Import'}</Text></Pressable></View>
+    <Text style={s.citationLocalNote}>Webpage metadata is read locally. Direct image links provide less attribution information, so review every credit before saving.</Text>
+    {lookupState === 'error' && <Text style={s.citationLookupError}>{lookupError}</Text>}
+    {lookupState === 'success' && draft && <View style={s.imageCitationReviewCard}><Image source={{ uri: previewUri }} style={s.imageCitationPreview} resizeMode="cover" /><View style={s.imageCitationReviewCopy}><Text style={s.citationMetadataLabel}>IMPORTED · {draft.mimeType || 'IMAGE'} · {draft.width && draft.height ? `${draft.width} × ${draft.height}px` : 'Size unavailable'}</Text><Text style={s.citationMetadataTitle}>{draft.title}</Text><Text style={s.citationMetadataDetail}>{draft.creator || 'Creator not found'} · {draft.publisher || 'Publisher not found'}</Text><Text style={s.citationMetadataDetail}>{draft.license || 'License not found'} · verify before publication</Text></View></View>}
+    <Pressable onPress={openManual} style={s.citationManualToggle} accessibilityRole="button" accessibilityLabel={manualOpen ? 'Hide manual image attribution' : 'Open manual image attribution'}><Text style={s.citationManualToggleText}>{manualOpen ? 'Hide manual attribution' : 'Or add attribution manually'}</Text><Text style={s.citationManualToggleArrow}>{manualOpen ? '⌃' : '⌄'}</Text></Pressable>
+    {manualOpen && draft && <View style={s.citationManualFields}><TextInput value={draft.title} onChangeText={(value) => updateDraft('title', value)} placeholder="Image title *" placeholderTextColor="#B2B3C0" style={s.citationInput} accessibilityLabel="Image citation title" /><TextInput value={draft.creator} onChangeText={(value) => updateDraft('creator', value)} placeholder="Creator or photographer" placeholderTextColor="#B2B3C0" style={s.citationInput} accessibilityLabel="Image creator" /><TextInput value={draft.publisher} onChangeText={(value) => updateDraft('publisher', value)} placeholder="Website, museum, publisher, or collection" placeholderTextColor="#B2B3C0" style={s.citationInput} accessibilityLabel="Image publisher" /><View style={s.citationFieldGrid}><TextInput value={draft.publicationDate} onChangeText={(value) => updateDraft('publicationDate', value)} placeholder="Publication date" placeholderTextColor="#B2B3C0" style={s.citationInputHalf} accessibilityLabel="Image publication date" /><TextInput value={draft.creditLine} onChangeText={(value) => updateDraft('creditLine', value)} placeholder="Credit line" placeholderTextColor="#B2B3C0" style={s.citationInputHalf} accessibilityLabel="Image credit line" /></View><TextInput value={draft.copyrightHolder} onChangeText={(value) => updateDraft('copyrightHolder', value)} placeholder="Copyright holder" placeholderTextColor="#B2B3C0" style={s.citationInput} accessibilityLabel="Image copyright holder" /><View style={s.citationFieldGrid}><TextInput value={draft.license} onChangeText={(value) => updateDraft('license', value)} placeholder="License" placeholderTextColor="#B2B3C0" style={s.citationInputHalf} accessibilityLabel="Image license" /><TextInput value={draft.licenseUrl} onChangeText={(value) => updateDraft('licenseUrl', value)} placeholder="License URL" placeholderTextColor="#B2B3C0" autoCapitalize="none" style={s.citationInputHalf} accessibilityLabel="Image license URL" /></View><TextInput value={draft.sourcePageUrl} onChangeText={(value) => updateDraft('sourcePageUrl', value)} placeholder="Source webpage URL" placeholderTextColor="#B2B3C0" autoCapitalize="none" style={s.citationInput} accessibilityLabel="Image source webpage URL" /><TextInput value={draft.caption} onChangeText={(value) => updateDraft('caption', value)} placeholder="Caption or neutral description" placeholderTextColor="#B2B3C0" multiline style={s.citationInput} accessibilityLabel="Image caption" /><Pressable onPress={reviewCitation} style={s.citationGenerateButton}><Text style={s.citationGenerateText}>Review image citation</Text><Text style={s.citationGenerateArrow}>→</Text></Pressable></View>}
+    {generated && draft && <View style={s.citationResult}><Text style={s.citationResultLabel}>{style.toUpperCase()} · REVIEW IMAGE CREDIT</Text><Text style={s.citationResultText}>{generated}</Text><View style={s.citationReviewActions}><Pressable onPress={() => { setGenerated(''); setSaved(false); setManualOpen(true); }} style={s.citationReviewEditButton}><Text style={s.citationReviewEditText}>Edit attribution</Text></Pressable><Pressable onPress={saveImageAndReference} disabled={saved || !previewUri} style={[s.citationAddButton, s.citationReviewSaveButton, saved && s.citationAddButtonAdded, !previewUri && s.citationLookupButtonDisabled]}><Text style={s.citationAddText}>{saved ? 'Saved ✓' : previewUri ? 'Save image + credit' : 'Import image first'}</Text></Pressable></View></View>}
+    {references > 0 && <View style={s.imageCitationSavedList}><Text style={s.citationMetadataLabel}>SAVED IMAGE REFERENCES</Text>{savedImageReferences.map((image) => <View key={image.id} style={s.imageCitationSavedRow}><Image source={{ uri: image.uri }} style={s.imageCitationSavedThumb} resizeMode="cover" /><View style={s.imageCitationReviewCopy}><Text numberOfLines={1} style={s.citationMetadataTitle}>{image.imageCitation?.title || image.title}</Text><Text numberOfLines={2} style={s.citationMetadataDetail}>{image.imageCitation?.citation}</Text></View></View>)}</View>}
+  </View>;
+}
+
+function ReferenceTool({ project, onUpdateProject }: { project: Project; onUpdateProject: (title: string, changes: Partial<Project>) => void }) {
+  const [mode, setMode] = useState<'text' | 'image'>('text');
+  return <View><View style={s.referenceModeToggle}><Pressable onPress={() => setMode('text')} style={[s.referenceModeOption, mode === 'text' && s.referenceModeOptionActive]}><Text style={[s.referenceModeOptionText, mode === 'text' && s.referenceModeOptionTextActive]}>Text citations</Text></Pressable><Pressable onPress={() => setMode('image')} style={[s.referenceModeOption, mode === 'image' && s.referenceModeOptionActive]}><Text style={[s.referenceModeOptionText, mode === 'image' && s.referenceModeOptionTextActive]}>Image credits</Text></Pressable></View>{mode === 'text' ? <CitationGeneratorWithUrl project={project} onUpdateProject={onUpdateProject} /> : <ImageCitationGenerator project={project} onUpdateProject={onUpdateProject} />}</View>;
+}
+
 function getMediaStats(projects: Project[]) {
   const images = projects.flatMap((project) => project.images ?? []);
   if (!images.length) return null;
@@ -2312,35 +2895,42 @@ function getMediaStats(projects: Project[]) {
   const placed = images.filter((image) => Boolean(image.connectedPartKey)).length;
   const draftImages = images.filter((image) => ['idea', 'briefReady', 'sketch', 'revision'].includes(image.status)).length;
   const referenceOnly = images.filter((image) => image.referenceOnly).length;
-  return { planned: images.length, placed, publication: publication.length, completed: completed.length, remaining: Math.max(0, images.length - completed.length), visualCompletion: Math.round((completed.length / images.length) * 100), draftImages, finalImages: completed.length, captionRequested: captionRequested.length, captionsCompleted, missingCaptions: Math.max(0, captionRequested.length - captionsCompleted), creditsCompleted, missingCredits: Math.max(0, publication.length - creditsCompleted), permissionReviewed, unknownPermissions: Math.max(0, publication.length - permissionReviewed), referenceOnly };
+  const altTextRequired = publication.length;
+  const altTextCompleted = publication.filter((image) => Boolean(image.altText?.trim())).length;
+  const unplaced = images.filter((image) => !image.connectedPartKey).length;
+  const unknownSources = publication.filter((image) => !image.source?.trim() && !image.credit?.trim()).length;
+  return { planned: images.length, placed, publication: publication.length, completed: completed.length, remaining: Math.max(0, images.length - completed.length), visualCompletion: Math.round((completed.length / images.length) * 100), draftImages, finalImages: completed.length, captionRequested: captionRequested.length, captionsCompleted, missingCaptions: Math.max(0, captionRequested.length - captionsCompleted), creditsCompleted, missingCredits: Math.max(0, publication.length - creditsCompleted), permissionReviewed, unknownPermissions: Math.max(0, publication.length - permissionReviewed), referenceOnly, altTextRequired, altTextCompleted, missingAltText: Math.max(0, altTextRequired - altTextCompleted), unplaced, unknownSources };
 }
 
 function projectUsesReferences(project: Project) {
   const plan = project.plan ?? defaultPlanFor(project.type);
   const entries = plan.referenceEntries ?? [];
   const referencesItem = getStructureItems(project.type, planBlueprints[project.type] ?? planBlueprints['Custom Project']).find((item) => item.key === 'references');
-  return Boolean(entries.length || plan.drafts['structure:references']?.trim() || (referencesItem && isStructureEnabled(plan.structure, referencesItem, planBlueprints[project.type] ?? planBlueprints['Custom Project'])));
+  return Boolean(entries.length || (project.images ?? []).some((image) => image.imageCitation) || plan.drafts['structure:references']?.trim() || (referencesItem && isStructureEnabled(plan.structure, referencesItem, planBlueprints[project.type] ?? planBlueprints['Custom Project'])));
 }
 
 function getCitationStats(projects: Project[]) {
   const usedProjects = projects.filter(projectUsesReferences);
   if (!usedProjects.length) return null;
   const entries = usedProjects.flatMap((project) => (project.plan?.referenceEntries ?? []).map((entry) => ({ ...entry, project: project.title })));
-  const styles = Array.from(new Set(entries.map((entry) => entry.style)));
-  const sourceTypes = Array.from(new Set(entries.map((entry) => entry.sourceType)));
-  return { projectCount: usedProjects.length, citationCount: entries.length, styles, sourceTypes, lastCitation: entries[entries.length - 1]?.citation ?? '' };
+  const imageEntries = usedProjects.flatMap((project) => (project.images ?? []).map((image) => image.imageCitation).filter((citation): citation is ImageCitation => Boolean(citation)));
+  const savedSources = entries.length + imageEntries.length;
+  const completeCitations = entries.filter((entry) => Boolean(entry.citation?.trim())).length + imageEntries.filter((entry) => Boolean(entry.citation?.trim())).length;
+  const styles = Array.from(new Set([...entries.map((entry) => entry.style), ...imageEntries.map((entry) => entry.style)]));
+  const sourceTypes = Array.from(new Set([...entries.map((entry) => citationSourceLabels[entry.sourceType]), ...(imageEntries.length ? ['Image'] : [])]));
+  return { projectCount: usedProjects.length, savedSources, citationCount: savedSources, citationCompletion: savedSources ? Math.round((completeCitations / savedSources) * 100) : 0, incompleteCitations: Math.max(0, savedSources - completeCitations), styles, sourceTypes, lastCitation: imageEntries[imageEntries.length - 1]?.citation ?? entries[entries.length - 1]?.citation ?? '' };
 }
 
 function ConditionalMediaStats({ projects, overall }: { projects: Project[]; overall: boolean }) {
   const stats = getMediaStats(projects);
   if (!stats) return null;
-  return <View style={s.conditionalStatsCard}><View style={s.conditionalStatsHeader}><View><Text style={s.conditionalStatsEyebrow}>MEDIA PROGRESS</Text><Text style={s.conditionalStatsTitle}>{overall ? 'Visuals across your projects' : 'Visual progress'}</Text><Text style={s.conditionalStatsHint}>{overall ? 'Only projects with added images are included.' : 'Tracked from images added to this project.'}</Text></View><Text style={s.conditionalStatsIcon}>▧</Text></View><View style={s.conditionalStatsGrid}><View style={s.conditionalStat}><Text style={s.conditionalStatValue}>{formatCount(stats.placed)}</Text><Text style={s.conditionalStatLabel}>IMAGES PLACED</Text><Text style={s.conditionalStatDetail}>{stats.planned} planned</Text></View><View style={s.conditionalStat}><Text style={s.conditionalStatValue}>{stats.visualCompletion}%</Text><Text style={s.conditionalStatLabel}>VISUAL COMPLETION</Text><Text style={s.conditionalStatDetail}>{stats.remaining} remaining</Text></View><View style={s.conditionalStat}><Text style={s.conditionalStatValue}>{formatCount(stats.publication)}</Text><Text style={s.conditionalStatLabel}>IN BOOK STUDIO</Text><Text style={s.conditionalStatDetail}>{stats.referenceOnly} reference-only</Text></View><View style={s.conditionalStat}><Text style={s.conditionalStatValue}>{formatCount(stats.finalImages)}</Text><Text style={s.conditionalStatLabel}>FINAL IMAGES</Text><Text style={s.conditionalStatDetail}>{stats.draftImages} in progress</Text></View></View>{stats.captionRequested > 0 && <View style={s.conditionalStatsNote}><Text style={s.conditionalStatsNoteIcon}>＋</Text><Text style={s.conditionalStatsNoteText}>{stats.captionsCompleted} of {stats.captionRequested} requested captions completed · {stats.missingCaptions} still to write.</Text></View>}{(stats.missingCredits > 0 || stats.unknownPermissions > 0) && <Text style={s.conditionalStatsFootnote}>{stats.missingCredits ? `${stats.missingCredits} publication image${stats.missingCredits === 1 ? '' : 's'} need credit` : ''}{stats.missingCredits && stats.unknownPermissions ? ' · ' : ''}{stats.unknownPermissions ? `${stats.unknownPermissions} need permission review` : ''}</Text>}</View>;
+  return <View style={s.conditionalStatsCard}><View style={s.conditionalStatsHeader}><View><Text style={s.conditionalStatsEyebrow}>MEDIA PROGRESS</Text><Text style={s.conditionalStatsTitle}>{overall ? 'Visuals across your projects' : 'Visual progress'}</Text><Text style={s.conditionalStatsHint}>{overall ? 'Only projects with added images are included.' : 'Tracked from images added to this project.'}</Text></View><Text style={s.conditionalStatsIcon}>▧</Text></View><View style={s.conditionalStatsGrid}><View style={s.conditionalStat}><Text style={s.conditionalStatValue}>{formatCount(stats.placed)}</Text><Text style={s.conditionalStatLabel}>IMAGES PLACED</Text><Text style={s.conditionalStatDetail}>{stats.planned} planned</Text></View><View style={s.conditionalStat}><Text style={s.conditionalStatValue}>{stats.visualCompletion}%</Text><Text style={s.conditionalStatLabel}>VISUAL COMPLETION</Text><Text style={s.conditionalStatDetail}>{stats.remaining} remaining</Text></View><View style={s.conditionalStat}><Text style={s.conditionalStatValue}>{formatCount(stats.publication)}</Text><Text style={s.conditionalStatLabel}>IN BOOK STUDIO</Text><Text style={s.conditionalStatDetail}>{stats.referenceOnly} reference-only</Text></View><View style={s.conditionalStat}><Text style={s.conditionalStatValue}>{formatCount(stats.finalImages)}</Text><Text style={s.conditionalStatLabel}>FINAL IMAGES</Text><Text style={s.conditionalStatDetail}>{stats.draftImages} in progress</Text></View><View style={s.conditionalStat}><Text style={s.conditionalStatValue}>{stats.altTextRequired ? `${Math.round((stats.altTextCompleted / stats.altTextRequired) * 100)}%` : '—'}</Text><Text style={s.conditionalStatLabel}>ALT TEXT</Text><Text style={s.conditionalStatDetail}>{stats.missingAltText} missing</Text></View><View style={s.conditionalStat}><Text style={s.conditionalStatValue}>{formatCount(stats.unplaced)}</Text><Text style={s.conditionalStatLabel}>UNPLACED</Text><Text style={s.conditionalStatDetail}>{stats.unknownSources} source missing</Text></View></View>{stats.captionRequested > 0 && <View style={s.conditionalStatsNote}><Text style={s.conditionalStatsNoteIcon}>＋</Text><Text style={s.conditionalStatsNoteText}>{stats.captionsCompleted} of {stats.captionRequested} requested captions completed · {stats.missingCaptions} still to write.</Text></View>}{(stats.missingCredits > 0 || stats.unknownPermissions > 0) && <Text style={s.conditionalStatsFootnote}>{stats.missingCredits ? `${stats.missingCredits} publication image${stats.missingCredits === 1 ? '' : 's'} need credit` : ''}{stats.missingCredits && stats.unknownPermissions ? ' · ' : ''}{stats.unknownPermissions ? `${stats.unknownPermissions} need permission review` : ''}</Text>}</View>;
 }
 
 function ConditionalCitationStats({ projects, overall }: { projects: Project[]; overall: boolean }) {
   const stats = getCitationStats(projects);
   if (!stats) return null;
-  return <View style={s.conditionalStatsCardCitation}><View style={s.conditionalStatsHeader}><View><Text style={s.conditionalStatsEyebrowCitation}>REFERENCE PROGRESS</Text><Text style={s.conditionalStatsTitle}>Citations in use</Text><Text style={s.conditionalStatsHint}>{overall ? 'Across projects with References enabled.' : 'Tracked from this project’s References page.'}</Text></View><Text style={s.conditionalStatsIconCitation}>↗</Text></View><View style={s.conditionalStatsGrid}><View style={s.conditionalStat}><Text style={s.conditionalStatValue}>{formatCount(stats.citationCount)}</Text><Text style={s.conditionalStatLabel}>CITATIONS SAVED</Text><Text style={s.conditionalStatDetail}>{stats.projectCount} project{stats.projectCount === 1 ? '' : 's'}</Text></View><View style={s.conditionalStat}><Text style={s.conditionalStatValue}>{stats.styles.length || '—'}</Text><Text style={s.conditionalStatLabel}>STYLES USED</Text><Text style={s.conditionalStatDetail}>{stats.styles.join(' · ') || 'Not generated yet'}</Text></View><View style={s.conditionalStat}><Text style={s.conditionalStatValue}>{stats.sourceTypes.length || '—'}</Text><Text style={s.conditionalStatLabel}>SOURCE TYPES</Text><Text style={s.conditionalStatDetail}>{stats.sourceTypes.map((type) => citationSourceLabels[type]).join(' · ') || 'Not added yet'}</Text></View></View>{stats.lastCitation && <View style={s.conditionalStatsCitation}><Text style={s.conditionalStatsCitationLabel}>MOST RECENT</Text><Text numberOfLines={3} style={s.conditionalStatsCitationText}>{stats.lastCitation}</Text></View>}</View>;
+  return <View style={s.conditionalStatsCardCitation}><View style={s.conditionalStatsHeader}><View><Text style={s.conditionalStatsEyebrowCitation}>REFERENCE PROGRESS</Text><Text style={s.conditionalStatsTitle}>Citations in use</Text><Text style={s.conditionalStatsHint}>{overall ? 'Across projects with References enabled.' : 'Tracked from this project’s References page.'}</Text></View><Text style={s.conditionalStatsIconCitation}>↗</Text></View><View style={s.conditionalStatsGrid}><View style={s.conditionalStat}><Text style={s.conditionalStatValue}>{formatCount(stats.savedSources)}</Text><Text style={s.conditionalStatLabel}>SOURCES SAVED</Text><Text style={s.conditionalStatDetail}>{stats.projectCount} project{stats.projectCount === 1 ? '' : 's'}</Text></View><View style={s.conditionalStat}><Text style={s.conditionalStatValue}>{formatCount(stats.citationCount)}</Text><Text style={s.conditionalStatLabel}>CITATIONS INSERTED</Text><Text style={s.conditionalStatDetail}>saved reference records</Text></View><View style={s.conditionalStat}><Text style={s.conditionalStatValue}>{stats.citationCompletion}%</Text><Text style={s.conditionalStatLabel}>CITATION COMPLETION</Text><Text style={s.conditionalStatDetail}>{stats.incompleteCitations} incomplete</Text></View><View style={s.conditionalStat}><Text style={s.conditionalStatValue}>{stats.styles.length || '—'}</Text><Text style={s.conditionalStatLabel}>STYLES USED</Text><Text style={s.conditionalStatDetail}>{stats.styles.join(' · ') || 'Not generated yet'}</Text></View><View style={s.conditionalStat}><Text style={s.conditionalStatValue}>{stats.sourceTypes.length || '—'}</Text><Text style={s.conditionalStatLabel}>SOURCE TYPES</Text><Text style={s.conditionalStatDetail}>{stats.sourceTypes.join(' · ') || 'Not added yet'}</Text></View></View>{stats.lastCitation && <View style={s.conditionalStatsCitation}><Text style={s.conditionalStatsCitationLabel}>MOST RECENT</Text><Text numberOfLines={3} style={s.conditionalStatsCitationText}>{stats.lastCitation}</Text></View>}</View>;
 }
 
 function getWriteContext(part: WritePart, plan: ProjectPlan, blueprint: PlanBlueprint): { label: string; value: string }[] {
@@ -2357,7 +2947,7 @@ function getWriteContext(part: WritePart, plan: ProjectPlan, blueprint: PlanBlue
     if (plan.plotNotes[prompt.label]?.trim()) notes.push({ label: prompt.label, value: plan.plotNotes[prompt.label] });
   });
   if (plan.people.trim()) notes.push({ label: blueprint.peopleLabel, value: plan.people });
-  if (part.title.toLowerCase().includes('reference') && plan.referenceEntries?.length) notes.push({ label: 'Generated citations', value: plan.referenceEntries.map((entry) => entry.citation).join('\n\n') });
+  if (part.title.toLowerCase().includes('reference') && getProjectReferenceCitations({ ...({} as Project), plan } as Project).length) notes.push({ label: 'Generated citations', value: getProjectReferenceCitations({ ...({} as Project), plan } as Project).join('\n\n') });
   return notes.slice(0, 4).map((note) => ({ ...note, value: compactNote(note.value) }));
 }
 
@@ -2556,7 +3146,7 @@ function Write({ projects, activeProject, onSelectProject, onUpdateProject, onPa
   const pageReferenceItems = activePart ? [
     { label: 'Purpose', value: activePart.helper },
     { label: 'Next step', value: compass.next },
-    ...(activePart.title.toLowerCase().includes('reference') && plan.referenceEntries?.length ? [{ label: 'Saved citations', value: plan.referenceEntries.map((entry) => entry.citation).join('\n\n') }] : []),
+    ...(activePart.title.toLowerCase().includes('reference') && getProjectReferenceCitations(currentProject).length ? [{ label: 'Saved citations', value: getProjectReferenceCitations(currentProject).join('\n\n') }] : []),
     ...(plan.partNotes[activePart.key]?.trim() ? [{ label: 'Your note', value: compactNote(plan.partNotes[activePart.key]) }] : contextNotes.slice(0, 1)),
   ] : [];
   const projectImages = currentProject.images ?? [];
@@ -3007,7 +3597,14 @@ function Profile({ projects, onLogout, onDeleteAccount }: { projects: Project[];
   const isPrivacy = legalDocument === 'privacy';
   const dayLabels = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
   const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-  const selectedBadges = getWriterAchievements(projects).filter((achievement) => achievement.completed).slice(-3).reverse();
+  const earnedBadges = getWriterAchievements(projects).filter((achievement) => achievement.completed).reverse();
+  const badgePageSize = 3;
+  const badgePageCount = Math.max(1, Math.ceil(earnedBadges.length / badgePageSize));
+  const [badgePage, setBadgePage] = useState(0);
+  const visibleBadges = earnedBadges.slice(badgePage * badgePageSize, (badgePage + 1) * badgePageSize);
+  useEffect(() => {
+    setBadgePage((currentPage) => Math.min(currentPage, badgePageCount - 1));
+  }, [badgePageCount]);
 
   const updateProfileReminder = (id: string, changes: Partial<ProfileReminder>) => setProfileReminders((current) => current.map((reminder) => reminder.id === id ? { ...reminder, ...changes } : reminder));
   const toggleProfileReminderDay = (id: string, day: number) => setProfileReminders((current) => current.map((reminder) => {
@@ -3036,7 +3633,7 @@ function Profile({ projects, onLogout, onDeleteAccount }: { projects: Project[];
   };
 
   return <><View style={s.profileTop}><View style={s.profileAvatar}><Text style={s.profileAvatarText}>L</Text><View style={s.profileHalo} /></View><Text style={s.profileName}>Lena Morris</Text><Text style={s.profileEmail}>lena@bookez.studio</Text><View style={s.pathfinder}><Text style={s.pathfinderText}>✦ PATHFINDER</Text></View></View>
-    <View style={s.profileBadgesCard}><View style={s.profileBadgesHeader}><View><Text style={s.profileBadgesEyebrow}>SELECTED BADGES</Text><Text style={s.profileBadgesTitle}>Your writing wins</Text></View><Text style={s.profileBadgesCount}>{selectedBadges.length ? `${selectedBadges.length} earned` : 'Keep writing'}</Text></View>{selectedBadges.length ? <View style={s.profileBadgesRow}>{selectedBadges.map((achievement) => <View key={achievement.id} style={s.profileBadge}><View style={s.profileBadgeIcon}><Text style={s.profileBadgeIconText}>{achievement.icon}</Text></View><Text numberOfLines={2} style={s.profileBadgeTitle}>{achievement.title}</Text></View>)}</View> : <Text style={s.profileBadgesEmpty}>Your first milestone will become a badge here.</Text>}</View>
+    <View style={s.profileBadgesCard}><View style={s.profileBadgesHeader}><View><Text style={s.profileBadgesEyebrow}>BADGES EARNED</Text><Text style={s.profileBadgesTitle}>Your writing wins</Text></View><Text style={s.profileBadgesCount}>{earnedBadges.length ? `${earnedBadges.length} earned` : 'Keep writing'}</Text></View>{earnedBadges.length ? <><View style={s.profileBadgesRow}>{visibleBadges.map((achievement) => <View key={achievement.id} style={s.profileBadge}><View style={s.profileBadgeIcon}><Text style={s.profileBadgeIconText}>{achievement.icon}</Text></View><Text numberOfLines={2} style={s.profileBadgeTitle}>{achievement.title}</Text></View>)}</View><PaginationControls page={badgePage} pageCount={badgePageCount} onPageChange={setBadgePage} /></> : <Text style={s.profileBadgesEmpty}>Your first milestone will become a badge here.</Text>}</View>
     <Text style={s.preferenceTitle}>Your space</Text>
     <View style={s.preferences}><View style={s.prefRow}><View><Text style={s.prefTitle}>Writing reminders</Text><Text style={s.prefSub}>A gentle nudge each evening</Text></View><Switch value={reminders} onValueChange={setReminders} trackColor={{ false: '#D7D9E6', true: '#BAB6F1' }} thumbColor={reminders ? C.periwinkle : '#FFF'} /></View><View style={s.prefLine} /><View style={s.prefRow}><View><Text style={s.prefTitle}>Cloud backup</Text><Text style={s.prefSub}>Keep every chapter safe</Text></View><Switch value={cloud} onValueChange={setCloud} trackColor={{ false: '#D7D9E6', true: '#B7DAB9' }} thumbColor={cloud ? '#75AF80' : '#FFF'} /></View></View>
     <Text style={s.preferenceTitle}>Notifications</Text>
@@ -3078,7 +3675,11 @@ function AccountExit({ deleted, onReturn }: { deleted: boolean; onReturn: () => 
   return <View style={s.accountExit}><View style={[s.accountExitIcon, deleted ? s.confirmIconDelete : s.confirmIconLogout]}><Text style={s.confirmIconText}>{deleted ? '×' : '↗'}</Text></View><Text style={s.accountExitTitle}>{deleted ? 'Your account is gone.' : 'You’re all signed out.'}</Text><Text style={s.accountExitCopy}>{deleted ? 'This Bookez preview has no live account connection yet, so you can keep exploring the interface as a new visitor.' : 'Your writing space is paused until you sign back in.'}</Text><Pressable onPress={onReturn} style={s.accountExitButton}><Text style={s.accountExitButtonText}>Return to Bookez</Text><Text style={s.accountExitButtonArrow}>→</Text></Pressable></View>;
 }
 
-function Stats({ projects, activeProject, onSelectProject, onUpdateProject, onPage }: { projects: Project[]; activeProject: string; onSelectProject: (title: string) => void; onUpdateProject: (title: string, changes: Partial<Project>) => void; onPage: (page: Page) => void }) {
+function StatsCategoryCard({ eyebrow, title, subtitle, stats, tone = 'blue' }: { eyebrow: string; title: string; subtitle: string; stats: SpecializedStat[]; tone?: 'blue' | 'mint' | 'rose' | 'gold' }) {
+  return <View style={[s.specializedStatsCard, tone === 'mint' && s.specializedStatsCardMint, tone === 'rose' && s.specializedStatsCardRose, tone === 'gold' && s.specializedStatsCardWarm]}><Text style={s.specializedStatsEyebrow}>{eyebrow}</Text><Text style={s.specializedStatsTitle}>{title}</Text><Text style={s.specializedStatsSubtitle}>{subtitle}</Text><View style={s.specializedStatsGrid}>{stats.map((item) => <View key={item.label} style={s.specializedStat}><Text style={s.specializedStatLabel}>{item.label.toUpperCase()}</Text><Text style={s.specializedStatValue}>{item.value}</Text><Text style={s.specializedStatDetail}>{item.detail}</Text></View>)}</View></View>;
+}
+
+function Stats({ projects, activeProject, onSelectProject, onPage }: { projects: Project[]; activeProject: string; onSelectProject: (title: string) => void; onPage: (page: Page) => void }) {
   const [range, setRange] = useState<StatsRange>('Week');
   const [scope, setScope] = useState<StatsScope>('overall');
   const currentProject = projects.find((project) => project.title === activeProject) ?? projects[0];
@@ -3086,6 +3687,11 @@ function Stats({ projects, activeProject, onSelectProject, onUpdateProject, onPa
   const specializedStats = getProjectSpecializedStats(currentProject);
   const projectProgressStats = getProjectProgressStats(currentProject);
   const projectWritingStats = getProjectWritingStats(currentProject);
+  const projectStructureStats = getProjectStructureStats(currentProject);
+  const projectContentStats = getProjectContentProfileStats(currentProject);
+  const projectFocusStats = getProjectFocusStats(currentProject);
+  const projectGoalStats = getProjectGoalStats(currentProject);
+  const projectExportStats = getProjectExportReadinessStats(currentProject);
   const writerOverviewStats = getWriterOverviewStats(projects);
   const personalRecordStats = getPersonalRecordStats(projects);
   const projectMilestones = getProjectMilestones(currentProject);
@@ -3094,6 +3700,7 @@ function Stats({ projects, activeProject, onSelectProject, onUpdateProject, onPa
   const earnedProjectMilestones = projectMilestones.filter((achievement) => achievement.completed).length;
   const earnedWriterAchievements = writerAchievements.filter((achievement) => achievement.completed).length;
   const maxChartWords = Math.max(1, ...stats.chartRows.map((row) => row.words));
+  const maxChartMinutes = Math.max(1, ...stats.chartRows.map((row) => row.minutes));
   const inputTotal = stats.dictationUses + stats.writingUses;
   const hasActivity = stats.entries.length > 0;
   const average = (value: number, suffix = '') => value ? `${value >= 10 ? Math.round(value) : value.toFixed(1)}${suffix}` : '—';
@@ -3107,7 +3714,7 @@ function Stats({ projects, activeProject, onSelectProject, onUpdateProject, onPa
 
     <View style={s.achievementSection}><View style={s.statsSectionHeader}><View><Text style={s.statsSectionTitle}>Achievements</Text><Text style={s.statsCardHint}>Completion wins for {currentProject.title}</Text></View><Text style={s.statsSectionCount}>{getProjectMilestones(currentProject).filter((achievement) => achievement.completed).length} earned</Text></View><View style={s.achievementCard}><AchievementList achievements={getProjectMilestones(currentProject)} /></View></View>
 
-    <View style={s.chartCard}><View style={s.chartHeader}><View><Text style={s.chartTitle}>Words by day</Text><Text style={s.statsCardHint}>{range === 'Week' ? 'Last seven days' : range === 'Month' ? 'Last thirty days' : 'Logged writing days'}</Text></View><Text style={s.chartTotal}>{stats.totalLoggedWords ? formatCount(stats.totalLoggedWords) : '—'}</Text></View><View style={s.chart}>{stats.chartRows.map((row, index) => <View key={row.key} style={s.barCol}><View style={[s.bar, { height: row.words ? Math.max(7, Math.round((row.words / maxChartWords) * 95)) : 3 }, row.words > 0 && index === stats.chartRows.length - 1 && s.barActive]} /><Text style={s.barLabel}>{formatActivityDay(row.key)}</Text></View>)}</View>{!hasActivity && <Text style={s.statsEmptyHint}>No writing days logged yet. Your next manuscript session will start the rhythm here.</Text>}</View>
+    <View style={s.chartCard}><View style={s.chartHeader}><View><Text style={s.chartTitle}>Writing rhythm</Text><Text style={s.statsCardHint}>{range === 'Week' ? 'Words and focused minutes · last seven days' : range === 'Month' ? 'Recent writing pattern · last thirty days' : 'Most recent logged writing days'}</Text></View><Text style={s.chartTotal}>{stats.totalLoggedWords ? formatCount(stats.totalLoggedWords) : '—'} words</Text></View><View style={s.chartLegend}><View style={s.chartLegendItem}><View style={[s.chartLegendDot, { backgroundColor: '#CFC8F6' }]} /><Text style={s.chartLegendText}>Words</Text></View><View style={s.chartLegendItem}><View style={[s.chartLegendDot, { backgroundColor: '#F2B9A1' }]} /><Text style={s.chartLegendText}>Focused minutes</Text></View></View><View style={s.chart}>{stats.chartRows.map((row, index) => <View key={row.key} style={s.barCol}><View style={s.barPair}><View style={[s.bar, { height: row.words ? Math.max(7, Math.round((row.words / maxChartWords) * 95)) : 3 }, row.words > 0 && index === stats.chartRows.length - 1 && s.barActive]} /><View style={[s.barTime, { height: row.minutes ? Math.max(7, Math.round((row.minutes / maxChartMinutes) * 95)) : 3 }]} /></View><Text style={s.barLabel}>{formatActivityDay(row.key)}</Text></View>)}</View>{!hasActivity && <Text style={s.statsEmptyHint}>No writing days logged yet. Your next manuscript session will start the rhythm here.</Text>}</View>
 
     <View style={s.statsSectionHeader}><View><Text style={s.statsSectionTitle}>Daily ledger</Text><Text style={s.statsCardHint}>Words, estimated pages, time, and completion</Text></View><Text style={s.statsSectionCount}>{stats.activeDays ? `${stats.activeDays} days` : 'No days yet'}</Text></View>
     {stats.dailyRows.length ? stats.dailyRows.map((entry) => <View key={entry.key} style={s.statsDayRow}><View style={s.statsDayCopy}><Text style={s.statsDayTitle}>{formatActivityDay(entry.key, true)}</Text><Text style={s.statsDaySub}>{formatDuration(entry.minutes)} active</Text></View><View style={s.statsDayMetric}><Text style={s.statsDayValue}>{formatCount(entry.words)}</Text><Text style={s.statsDayLabel}>WORDS</Text></View><View style={s.statsDayMetric}><Text style={s.statsDayValue}>{entry.pages ? entry.pages.toFixed(1) : '—'}</Text><Text style={s.statsDayLabel}>EST. PAGES</Text></View><View style={s.statsDayMetric}><Text style={s.statsDayValue}>{entry.completion ? `${Math.round(entry.completion)}%` : '—'}</Text><Text style={s.statsDayLabel}>DONE</Text></View></View>) : <View style={s.statsEmptyCard}><Text style={s.statsEmptyIcon}>⌁</Text><Text style={s.statsEmptyTitle}>Your daily record is waiting.</Text><Text style={s.statsEmptyCopy}>Start writing in the manuscript and Bookez will track your words, pace, pages, and progress by day.</Text></View>}
@@ -3121,11 +3728,10 @@ function Stats({ projects, activeProject, onSelectProject, onUpdateProject, onPa
     <ConditionalMediaStats projects={scope === 'overall' ? projects : [currentProject]} overall={scope === 'overall'} />
     <ConditionalCitationStats projects={scope === 'overall' ? projects : [currentProject]} overall={scope === 'overall'} />
 
-    <CitationGenerator project={currentProject} onUpdateProject={onUpdateProject} />
-
     <View style={s.statsInsightCard}><Text style={s.statsInsightEyebrow}>A LITTLE SOMETHING TO NOTICE</Text>{stats.strongestDay ? <><Text style={s.statsInsightTitle}>Your strongest day was {formatActivityDay(stats.strongestDay.key, true)}.</Text><Text style={s.statsInsightCopy}>{formatCount(stats.strongestDay.words)} words, about {stats.strongestDay.pages.toFixed(1)} pages, with {Math.round(stats.strongestDay.completion)}% of the writing path complete.</Text></> : <><Text style={s.statsInsightTitle}>Your rhythm will reveal itself here.</Text><Text style={s.statsInsightCopy}>Once you have a writing day logged, you’ll see your strongest day and average active time per page.</Text></>}<View style={s.statsInsightMetric}><Text style={s.statsInsightMetricLabel}>AVG ACTIVE TIME / EST. PAGE</Text><Text style={s.statsInsightMetricValue}>{stats.averageMinutesPerPage ? formatDuration(stats.averageMinutesPerPage) : '—'}</Text></View></View>
 
     <Text style={s.preferenceTitle}>{scope === 'overall' ? 'All projects at a glance' : 'Book at a glance'}</Text><View style={s.statsBookCard}><View><Text style={s.statsBookCardLabel}>ESTIMATED MANUSCRIPT PAGES</Text><Text style={s.statsBookCardValue}>{stats.journey.wordCount ? `${(stats.journey.wordCount / 250).toFixed(1)}` : '—'}</Text></View><View style={s.statsBookCardDivider} /><View><Text style={s.statsBookCardLabel}>{scope === 'overall' ? 'WRITING UNITS WITH DRAFTS' : `${stats.journey.blueprint.unitLabelPlural.toUpperCase()} WITH DRAFTS`}</Text><Text style={s.statsBookCardValue}>{stats.journey.completedUnits} / {stats.journey.unitCount}</Text></View></View>
+    {scope === 'project' && <><StatsCategoryCard eyebrow="STRUCTURE" title="Shape of the work" subtitle="See what is drafted, empty, outlined, and still in progress." stats={projectStructureStats} tone="mint" /><StatsCategoryCard eyebrow="GOALS & HABITS" title="Your writing rhythm" subtitle="Goals, schedule adherence, and the patterns behind your pace." stats={projectGoalStats} tone="gold" /><StatsCategoryCard eyebrow="FOCUS" title="Time spent in the work" subtitle="Session patterns from your writing rhythm tools." stats={projectFocusStats} tone="rose" /><StatsCategoryCard eyebrow="CONTENT PROFILE" title="Inside the draft" subtitle="Lightweight signals to help you notice patterns while revising." stats={projectContentStats} /><StatsCategoryCard eyebrow="EXPORT READINESS" title="Ready to share" subtitle="A calm checklist for the pages and writing units that make up the finished object." stats={projectExportStats} tone="mint" /></>}
   </>;
 }
 
@@ -3184,7 +3790,7 @@ export default Sentry.wrap(function App() {
     if (page === 'Journey') return <Journey projects={projects} activeProject={activeProject} onSelectProject={setActiveProject} onUpdateProject={updateProject} onPage={setPage} onBack={() => setPage('Library')} onOpenBookStudio={openBookStudio} />;
     if (page === 'BookStudio') return <BookStudio projects={projects} project={projects.find((project) => project.title === studioRoute.title) ?? projects.find((project) => project.title === activeProject)} initialSection={studioRoute.section} onBack={() => setPage('Library')} onPage={setPage} onSelectProject={setActiveProject} onUpdateProject={updateProject} onOpenBookStudio={openBookStudio} />;
     if (page === 'Profile') return <Profile projects={projects} onLogout={() => { setAccountState('signedOut'); setPage('Library'); }} onDeleteAccount={() => { setProjects([]); setAccountState('deleted'); setPage('Library'); }} />;
-    return <Stats projects={projects} activeProject={activeProject} onSelectProject={setActiveProject} onUpdateProject={updateProject} onPage={setPage} />;
+    return <Stats projects={projects} activeProject={activeProject} onSelectProject={setActiveProject} onPage={setPage} />;
   };
   return <><StatusBar style="dark" /><Ambient><SafeAreaView style={s.safe}>{accountState === 'active' ? <><ScrollView contentContainerStyle={s.content} showsVerticalScrollIndicator={false}>{renderPage()}</ScrollView><Navigation page={page} onPage={setPage} /></> : <ScrollView contentContainerStyle={s.content} showsVerticalScrollIndicator={false}><AccountExit deleted={accountState === 'deleted'} onReturn={returnFromAccount} /></ScrollView>}</SafeAreaView></Ambient></>;
 });
@@ -3220,6 +3826,23 @@ const rhythmS = StyleSheet.create({
   planResearchNoteIcon: { color: C.periwinkle, fontSize: 11, marginRight: 7, marginTop: 1 },
   planResearchNoteText: { flex: 1, color: '#747791', fontSize: 8, lineHeight: 12 },
   writeRhythmResearch: { color: '#989BAF', fontSize: 8, lineHeight: 12, marginTop: 7 },
+  stylePreferencesCard: { marginTop: 17, padding: 15, borderRadius: 22, backgroundColor: '#FFF', borderWidth: 1, borderColor: '#E6E4F1', shadowColor: '#706C98', shadowOpacity: 0.07, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 1 },
+  stylePreferencesHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' },
+  stylePreferencesEyebrow: { color: C.periwinkle, fontSize: 7, letterSpacing: 0.85, fontWeight: '700' },
+  stylePreferencesTitle: { color: C.ink, fontSize: 16, fontWeight: '700', marginTop: 4 },
+  stylePreferencesHint: { color: C.muted, fontSize: 9, lineHeight: 13, marginTop: 4 },
+  stylePreferencesIcon: { color: C.periwinkle, fontSize: 22 },
+  stylePreferencesGrid: { marginTop: 13, flexDirection: 'row', gap: 8 },
+  stylePreferenceTile: { flex: 1, minHeight: 150, padding: 10, borderRadius: 16, borderWidth: 1 },
+  stylePreferenceTilePlan: { backgroundColor: '#F7F5FF', borderColor: '#E4E0FC' },
+  stylePreferenceTileSession: { backgroundColor: '#FFF8EC', borderColor: '#F3E5C4' },
+  stylePreferenceIcon: { width: 31, height: 31, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
+  stylePreferenceIconPlan: { backgroundColor: C.periwinkle },
+  stylePreferenceIconSession: { backgroundColor: C.gold },
+  stylePreferenceIconText: { color: '#FFF', fontSize: 16 },
+  stylePreferenceLabel: { color: C.muted, fontSize: 7, letterSpacing: 0.55, fontWeight: '700', marginTop: 12 },
+  stylePreferenceValue: { color: C.ink, fontSize: 13, lineHeight: 17, fontWeight: '700', marginTop: 5 },
+  stylePreferenceDetail: { color: C.muted, fontSize: 8, lineHeight: 12, marginTop: 5 },
 });
 
 const imagePreviewS = StyleSheet.create({ chapterVisuals: { gap: 9 }, backCover: { marginTop: 20, paddingTop: 13, borderTopWidth: 1, borderTopColor: '#EEE7DD' }, backCoverLabel: { color: C.muted, fontSize: 7, letterSpacing: 0.8, fontWeight: '700' } });
@@ -3252,7 +3875,49 @@ const mediaStyles = StyleSheet.create({
   conditionalStatsCitationText: { color: C.muted, fontSize: 8, lineHeight: 12, marginTop: 4 },
 });
 
+const paginationStyles = StyleSheet.create({
+  achievementPagination: { marginTop: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
+  achievementPaginationButton: { width: 28, height: 28, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F1EEFF', borderWidth: 1, borderColor: '#E3DFFC' },
+  achievementPaginationButtonDisabled: { opacity: 0.35 },
+  achievementPaginationButtonText: { color: C.periwinkle, fontSize: 20, lineHeight: 22, fontWeight: '700' },
+  achievementPaginationLabel: { minWidth: 34, color: C.muted, fontSize: 8, fontWeight: '700', textAlign: 'center' },
+});
+
+const citationStyles = StyleSheet.create({
+  referenceModeToggle: { marginTop: 18, padding: 4, borderRadius: 14, backgroundColor: '#EAE8F8', flexDirection: 'row', gap: 4 },
+  referenceModeOption: { flex: 1, minHeight: 34, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  referenceModeOptionActive: { backgroundColor: '#FFF', shadowColor: '#706C98', shadowOpacity: 0.08, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 1 },
+  referenceModeOptionText: { color: C.muted, fontSize: 9, fontWeight: '700' },
+  referenceModeOptionTextActive: { color: C.periwinkle },
+  citationUrlRow: { marginTop: 7, flexDirection: 'row', alignItems: 'center', gap: 7 },
+  citationUrlInput: { flex: 1, minHeight: 40, paddingHorizontal: 10, borderRadius: 10, backgroundColor: '#FFF', borderWidth: 1, borderColor: '#DDEAF2', color: C.ink, fontSize: 10 },
+  citationLookupButton: { minHeight: 40, paddingHorizontal: 11, borderRadius: 11, backgroundColor: '#4B7B9D', alignItems: 'center', justifyContent: 'center' },
+  citationLookupButtonDisabled: { opacity: 0.55 },
+  citationLookupText: { color: '#FFF', fontSize: 9, fontWeight: '700' },
+  citationLocalNote: { color: '#7D8F9C', fontSize: 8, lineHeight: 12, marginTop: 6 },
+  citationLookupError: { color: '#B45F68', fontSize: 9, lineHeight: 13, marginTop: 8 },
+  citationMetadataCard: { marginTop: 10, padding: 11, borderRadius: 14, backgroundColor: '#EAF7FB', borderWidth: 1, borderColor: '#D4EDF3' },
+  citationMetadataLabel: { color: '#4B7B9D', fontSize: 7, letterSpacing: 0.7, fontWeight: '700' },
+  citationMetadataTitle: { color: C.ink, fontSize: 12, lineHeight: 16, fontWeight: '700', marginTop: 4 },
+  citationMetadataDetail: { color: '#6D8FA5', fontSize: 8, lineHeight: 12, marginTop: 3 },
+  citationManualToggle: { minHeight: 39, marginTop: 12, paddingHorizontal: 11, borderRadius: 12, backgroundColor: '#F8F7FF', borderWidth: 1, borderColor: '#E5E1FA', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  citationManualToggleText: { color: C.periwinkle, fontSize: 9, fontWeight: '700' },
+  citationManualToggleArrow: { color: C.periwinkle, fontSize: 16, fontWeight: '700' },
+  citationManualFields: { marginTop: 2 },
+  citationReviewActions: { marginTop: 9, flexDirection: 'row', alignItems: 'center', gap: 7 },
+  citationReviewEditButton: { minHeight: 34, paddingHorizontal: 10, borderRadius: 10, backgroundColor: '#F3F1FF', alignItems: 'center', justifyContent: 'center' },
+  citationReviewEditText: { color: C.periwinkle, fontSize: 9, fontWeight: '700' },
+  citationReviewSaveButton: { flex: 1, marginTop: 0 },
+  imageCitationReviewCard: { marginTop: 10, padding: 9, borderRadius: 15, backgroundColor: '#EAF7FB', borderWidth: 1, borderColor: '#D4EDF3', flexDirection: 'row', alignItems: 'center' },
+  imageCitationPreview: { width: 66, height: 66, borderRadius: 11, backgroundColor: '#D4EDF3' },
+  imageCitationReviewCopy: { flex: 1, marginLeft: 9 },
+  imageCitationSavedList: { marginTop: 12, padding: 10, borderRadius: 14, backgroundColor: '#F7F5FF', borderWidth: 1, borderColor: '#E6E1FA' },
+  imageCitationSavedRow: { marginTop: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: '#E6E1FA', flexDirection: 'row', alignItems: 'center' },
+  imageCitationSavedThumb: { width: 38, height: 38, borderRadius: 9, backgroundColor: '#E5E1FA' },
+});
+
 const s: any = Object.assign(StyleSheet.create({
+  specializedStatsCardMint: { backgroundColor: '#EFF9F1', borderColor: '#D7EBD9' }, specializedStatsCardRose: { backgroundColor: '#FFF1F0', borderColor: '#F2D6D6' }, chartLegend: { marginTop: 11, flexDirection: 'row', gap: 13 }, chartLegendItem: { flexDirection: 'row', alignItems: 'center', gap: 5 }, chartLegendDot: { width: 8, height: 8, borderRadius: 4 }, barPair: { height: 100, flexDirection: 'row', alignItems: 'flex-end', gap: 2 }, barTime: { width: 7, borderRadius: 5, backgroundColor: '#F2B9A1' },
   journeyNodeStack: { alignItems: 'center' }, journeyMiniDotRow: { minHeight: 27, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }, journeyMiniDot: { width: 21, height: 21, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F1F0F7', borderWidth: 2, borderColor: '#D8D7E5' }, journeyMiniDotComplete: { backgroundColor: '#E8F5E9', borderColor: '#B9DDBE' }, journeyMiniDotCurrent: { backgroundColor: '#FFF1E5', borderColor: '#F2CBB7' }, journeyMiniDotSelected: { borderColor: C.periwinkle, shadowColor: C.periwinkle, shadowOpacity: 0.35, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 2 }, journeyMiniDotText: { color: '#9899AD', fontSize: 7, fontWeight: '700' }, journeyMiniDotTextComplete: { color: '#4D8B59' }, journeyMiniDotLine: { width: 15, height: 2, backgroundColor: '#D8D7E5' }, journeyMiniDotLineComplete: { backgroundColor: '#C6C1F4' }, journeyMiniToBigLine: { width: 15, height: 2, backgroundColor: '#D8D7E5' }, journeyCheckpointParent: { color: '#9A9CB1', fontSize: 8, marginTop: 3 },
   statsScopeToggle: { marginTop: 14, padding: 3, borderRadius: 13, backgroundColor: '#ECEAF5', flexDirection: 'row' }, statsScopeOption: { flex: 1, minHeight: 34, paddingHorizontal: 9, borderRadius: 10, alignItems: 'center', justifyContent: 'center' }, statsScopeOptionActive: { backgroundColor: '#FFF', shadowColor: '#6F6A96', shadowOpacity: 0.09, shadowRadius: 5, shadowOffset: { width: 0, height: 2 }, elevation: 1 }, statsScopeOptionText: { color: C.muted, fontSize: 9, fontWeight: '700' }, statsScopeOptionTextActive: { color: C.ink }, statsProjectPicker: { gap: 7, paddingTop: 10, paddingBottom: 2 }, statsProjectOption: { minWidth: 116, maxWidth: 152, minHeight: 39, paddingHorizontal: 8, borderRadius: 12, flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.55)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.72)' }, statsProjectOptionActive: { backgroundColor: '#EEEDFF', borderColor: '#D6D0FA' }, statsProjectOptionMark: { width: 24, height: 24, borderRadius: 8, alignItems: 'center', justifyContent: 'center' }, statsProjectOptionMarkText: { color: '#FFF', fontSize: 11 }, statsProjectOptionText: { flex: 1, color: C.muted, fontSize: 8, fontWeight: '700', marginLeft: 6 }, statsProjectOptionTextActive: { color: C.ink },
   specializedStatsCard: { marginTop: 22, padding: 15, borderRadius: 22, backgroundColor: '#EEF4FF', borderWidth: 1, borderColor: '#DCE9FA', shadowColor: '#7181A1', shadowOpacity: 0.07, shadowRadius: 11, shadowOffset: { width: 0, height: 5 }, elevation: 2 }, specializedStatsCardWarm: { backgroundColor: '#FFF8EC', borderColor: '#F2E3BE' }, specializedStatsEyebrow: { color: '#4B7B9D', fontSize: 7, letterSpacing: 0.8, fontWeight: '700' }, specializedStatsTitle: { color: C.ink, fontSize: 18, fontWeight: '700', marginTop: 5 }, specializedStatsSubtitle: { color: C.muted, fontSize: 9, lineHeight: 13, marginTop: 4 }, specializedStatsGrid: { marginTop: 13, flexDirection: 'row', flexWrap: 'wrap', gap: 8 }, specializedStat: { width: '48%', minHeight: 71, padding: 9, borderRadius: 14, backgroundColor: 'rgba(255,255,255,0.78)' }, specializedStatLabel: { color: '#6B7894', fontSize: 6, letterSpacing: 0.55, fontWeight: '700' }, specializedStatValue: { color: C.ink, fontSize: 13, fontWeight: '700', marginTop: 7 }, specializedStatDetail: { color: C.muted, fontSize: 7, lineHeight: 10, marginTop: 3 }, achievementSubsectionLabel: { color: '#777291', fontSize: 7, letterSpacing: 0.85, fontWeight: '700', marginTop: 13, marginBottom: 8 }, achievementSummaryGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 }, achievementSummaryItem: { width: '31%', minHeight: 67, padding: 8, borderRadius: 13, backgroundColor: 'rgba(255,255,255,0.72)' }, achievementSummaryValue: { color: C.ink, fontSize: 14, fontWeight: '700' }, achievementSummaryLabel: { color: '#6E6C85', fontSize: 7, lineHeight: 9, fontWeight: '700', marginTop: 5 }, achievementSummaryDetail: { color: '#9693A8', fontSize: 6, lineHeight: 9, marginTop: 2 }, nextAchievement: { marginTop: 11, padding: 10, borderRadius: 14, backgroundColor: '#FFFDF3', borderWidth: 1, borderColor: '#F0E1AD', flexDirection: 'row', alignItems: 'center' }, nextAchievementIcon: { color: '#B58420', fontSize: 17, width: 27, textAlign: 'center' }, nextAchievementCopy: { flex: 1, marginLeft: 5 }, nextAchievementLabel: { color: '#AA7A18', fontSize: 6, letterSpacing: 0.8, fontWeight: '700' }, nextAchievementTitle: { color: C.ink, fontSize: 10, fontWeight: '700', marginTop: 3 }, nextAchievementDetail: { color: C.muted, fontSize: 7, lineHeight: 10, marginTop: 2 }, personalRecordsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 }, personalRecordItem: { width: '48%', minHeight: 64, padding: 9, borderRadius: 13, backgroundColor: 'rgba(255,255,255,0.72)' }, personalRecordLabel: { color: '#777291', fontSize: 6, letterSpacing: 0.55, fontWeight: '700' }, personalRecordValue: { color: C.ink, fontSize: 13, fontWeight: '700', marginTop: 6 }, personalRecordDetail: { color: C.muted, fontSize: 7, lineHeight: 10, marginTop: 2 },
@@ -3329,4 +3994,4 @@ const s: any = Object.assign(StyleSheet.create({
   studioPage: { paddingBottom: 7 }, studioHeader: { minHeight: 57, flexDirection: 'row', alignItems: 'center' }, studioBackButton: { width: 39, height: 39, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.72)' }, studioBackIcon: { color: C.ink, fontSize: 28, lineHeight: 29, marginTop: -2 }, studioHeaderCopy: { flex: 1, marginLeft: 11, marginRight: 8 }, studioOverline: { color: C.muted, fontSize: 7, letterSpacing: 1, fontWeight: '700' }, studioHeaderTitle: { color: C.ink, fontSize: 20, fontWeight: '700', marginTop: 3 }, studioHeaderMeta: { color: C.muted, fontSize: 8, marginTop: 3 }, studioOverflowButton: { width: 39, height: 39, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.72)' }, studioOverflowText: { color: C.muted, fontSize: 14, letterSpacing: 1, marginTop: -7 }, studioTabs: { gap: 7, paddingTop: 10, paddingBottom: 4, paddingRight: 20 }, studioTab: { minWidth: 80, minHeight: 35, paddingHorizontal: 12, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.65)' }, studioTabSelected: { backgroundColor: C.periwinkle }, studioTabText: { color: C.muted, fontSize: 10, fontWeight: '700' }, studioTabTextSelected: { color: '#FFF' }, studioKicker: { color: C.periwinkle, fontSize: 8, letterSpacing: 1, fontWeight: '700' }, studioSummaryCard: { marginTop: 15, padding: 16, borderRadius: 22, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#FFF', shadowColor: '#6B6794', shadowOpacity: 0.1, shadowRadius: 12, shadowOffset: { width: 0, height: 6 }, elevation: 3 }, studioSummaryTitle: { color: C.ink, fontSize: 17, fontWeight: '700', marginTop: 5 }, studioSummaryCopy: { color: C.muted, fontSize: 9, marginTop: 5 }, studioStatusDot: { width: 35, height: 35, borderRadius: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFF1D0' }, studioStatusDotFinished: { backgroundColor: '#E9F7EB' }, studioStatusDotText: { color: '#A97819', fontSize: 20, fontWeight: '700' }, studioAccordion: { marginTop: 10, borderRadius: 19, backgroundColor: 'rgba(255,255,255,0.8)', borderWidth: 1, borderColor: '#ECEBF3' }, studioAccordionHeader: { minHeight: 66, padding: 12, flexDirection: 'row', alignItems: 'center' }, studioAccordionIcon: { width: 27, height: 27, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F0EEFF' }, studioAccordionIconText: { color: C.periwinkle, fontSize: 17, fontWeight: '700' }, studioAccordionCopy: { flex: 1, marginLeft: 10 }, studioAccordionTitle: { color: C.ink, fontSize: 13, fontWeight: '700' }, studioAccordionHint: { color: C.muted, fontSize: 9, marginTop: 3 }, studioAccordionChevron: { color: C.periwinkle, fontSize: 18, marginLeft: 8 }, studioAccordionBody: { paddingHorizontal: 12, paddingBottom: 12, borderTopWidth: 1, borderTopColor: '#EEEEF4' }, studioOrderRow: { minHeight: 53, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#F0EFF5', flexDirection: 'row', alignItems: 'center', gap: 5 }, studioOrderNumber: { width: 27, height: 27, borderRadius: 9, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F0EEFF' }, studioOrderNumberText: { color: C.periwinkle, fontSize: 8, fontWeight: '700' }, studioOrderCopy: { flex: 1, minWidth: 0 }, studioOrderTitle: { color: C.ink, fontSize: 11, fontWeight: '700' }, studioOrderMeta: { color: C.muted, fontSize: 8, marginTop: 3 }, studioMoveButton: { width: 26, height: 26, borderRadius: 9, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F4F2FF' }, studioMoveDisabled: { opacity: 0.3 }, studioMoveText: { color: C.periwinkle, fontSize: 14, fontWeight: '700' }, studioOpenWrite: { minHeight: 27, paddingHorizontal: 7, borderRadius: 9, backgroundColor: '#FFF3E9', alignItems: 'center', justifyContent: 'center' }, studioOpenWriteText: { color: '#A97819', fontSize: 8, fontWeight: '700' }, studioMatterRow: { paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#F0EFF5', flexDirection: 'row', alignItems: 'flex-start' }, studioCheck: { width: 23, height: 23, borderRadius: 8, borderWidth: 1.5, borderColor: '#D2D2DF', alignItems: 'center', justifyContent: 'center' }, studioCheckOn: { backgroundColor: C.periwinkle, borderColor: C.periwinkle }, studioCheckText: { color: '#FFF', fontSize: 12, fontWeight: '700' }, studioMatterCopy: { flex: 1, marginLeft: 10 }, studioMatterTitle: { color: C.ink, fontSize: 11, fontWeight: '700' }, studioMatterMeta: { color: C.muted, fontSize: 8, marginTop: 3 }, studioMatterInput: { minHeight: 51, marginTop: 7, padding: 8, borderRadius: 10, borderWidth: 1, borderColor: '#E2E1EC', color: C.ink, fontSize: 10, lineHeight: 15, textAlignVertical: 'top', backgroundColor: '#FFF' }, studioManuscriptRow: { minHeight: 53, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#F0EFF5', flexDirection: 'row', alignItems: 'center' }, studioManuscriptDot: { width: 27, height: 27, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F2F1F7' }, studioManuscriptDotComplete: { backgroundColor: '#E9F7EB' }, studioManuscriptDotText: { color: C.muted, fontSize: 15, fontWeight: '700' }, studioControlRow: { minHeight: 51, borderBottomWidth: 1, borderBottomColor: '#F0EFF5', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, studioControlLabel: { color: C.ink, fontSize: 10, fontWeight: '700' }, studioControlOptions: { flexDirection: 'row', gap: 6 }, studioOption: { minHeight: 30, paddingHorizontal: 9, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F2F1F7' }, studioOptionSelected: { backgroundColor: '#EEEDFF', borderWidth: 1, borderColor: C.periwinkle }, studioOptionText: { color: C.muted, fontSize: 9, fontWeight: '700' }, studioPrimaryButton: { minHeight: 49, marginTop: 16, paddingHorizontal: 15, borderRadius: 15, backgroundColor: C.periwinkle, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, studioPrimaryButtonText: { color: '#FFF', fontSize: 11, fontWeight: '700' }, studioPrimaryButtonArrow: { color: '#FFF', fontSize: 19 }, studioStopButton: { backgroundColor: C.coral }, studioMenuShade: { flex: 1, backgroundColor: 'rgba(29,33,69,0.22)', paddingTop: 75, paddingHorizontal: 20, alignItems: 'flex-end' }, studioMenu: { width: 260, padding: 13, borderRadius: 21, backgroundColor: '#FBFAFF' }, studioPickerShade: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(32,41,84,0.22)' }, studioPickerDismiss: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 }, studioPickerSheet: { padding: 20, paddingBottom: 25, borderTopLeftRadius: 29, borderTopRightRadius: 29, backgroundColor: '#FBFAFF' }, studioPickerOverline: { color: C.periwinkle, fontSize: 8, letterSpacing: 1, fontWeight: '700' }, studioPickerTitle: { color: C.ink, fontSize: 22, fontWeight: '700', marginTop: 5, marginBottom: 8 }, studioPickerRow: { minHeight: 57, marginTop: 8, padding: 9, borderRadius: 16, flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF', borderWidth: 1, borderColor: '#ECEBF3' }, studioPickerRowSelected: { backgroundColor: '#F3F1FF', borderColor: '#D9D2FA' }, studioPickerMark: { width: 36, height: 36, borderRadius: 12, alignItems: 'center', justifyContent: 'center' }, studioPickerMarkText: { color: '#FFF', fontSize: 16 }, studioPickerCopy: { flex: 1, marginLeft: 9 }, studioPickerBookTitle: { color: C.ink, fontSize: 11, fontWeight: '700' }, studioPickerBookMeta: { color: C.muted, fontSize: 8, marginTop: 3 }, studioPickerCheck: { color: C.periwinkle, fontSize: 17, fontWeight: '700' }, studioError: { minHeight: 500, alignItems: 'center', justifyContent: 'center', padding: 24 }, studioErrorIcon: { color: C.periwinkle, fontSize: 29 }, studioErrorTitle: { color: C.ink, fontSize: 22, fontWeight: '700', marginTop: 10 }, studioErrorCopy: { color: C.muted, fontSize: 11, textAlign: 'center', marginTop: 7, lineHeight: 17 },
   readerToolbar: { marginTop: 15, padding: 15, borderRadius: 20, backgroundColor: '#FFF', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, readerToolbarTitle: { color: C.ink, fontSize: 16, fontWeight: '700', marginTop: 5 }, readerListenButton: { minHeight: 35, paddingHorizontal: 10, borderRadius: 12, backgroundColor: '#FFF3E9', alignItems: 'center', justifyContent: 'center' }, readerListenText: { color: '#A97819', fontSize: 9, fontWeight: '700' }, readerToc: { marginTop: 11, padding: 13, borderRadius: 20, backgroundColor: '#F2F0FF' }, readerTocTitle: { color: C.ink, fontSize: 12, fontWeight: '700', marginBottom: 5 }, readerTocRow: { minHeight: 32, paddingHorizontal: 7, borderRadius: 9, flexDirection: 'row', alignItems: 'center' }, readerTocRowSelected: { backgroundColor: '#FFF' }, readerTocNumber: { color: C.periwinkle, width: 23, fontSize: 8, fontWeight: '700' }, readerTocLabel: { flex: 1, color: C.ink, fontSize: 9 }, readerTocState: { color: C.muted, fontSize: 10 }, readerBook: { marginTop: 14, padding: 18, borderRadius: 23, backgroundColor: '#FFFDF9', shadowColor: '#81798C', shadowOpacity: 0.1, shadowRadius: 15, shadowOffset: { width: 0, height: 7 }, elevation: 3 }, readerTitlePage: { minHeight: 180, alignItems: 'center', justifyContent: 'center', borderBottomWidth: 1, borderBottomColor: '#EEE7DD' }, readerTitleKicker: { color: C.coral, fontSize: 8, letterSpacing: 1.2, fontWeight: '700' }, readerBookTitle: { maxWidth: 275, color: C.ink, fontSize: 31, lineHeight: 36, fontWeight: '700', textAlign: 'center', marginTop: 13 }, readerBookTitleModern: { letterSpacing: 1, textTransform: 'uppercase' }, readerBookStatus: { color: C.muted, fontSize: 9, marginTop: 9 }, readerMatter: { paddingVertical: 24, borderBottomWidth: 1, borderBottomColor: '#EEE7DD' }, readerMatterTitle: { color: C.ink, fontSize: 15, fontWeight: '700', textAlign: 'center', marginBottom: 10 }, readerChapter: { paddingTop: 29, paddingBottom: 8 }, readerChapterTitle: { color: C.ink, fontSize: 21, lineHeight: 27, fontWeight: '700', marginBottom: 14 }, readerChapterTitleModern: { color: C.periwinkle, letterSpacing: 0.7, textTransform: 'uppercase', fontSize: 17 }, readerBody: { color: '#46465C', fontSize: 16, lineHeight: 25 }, readerMissing: { padding: 15, borderRadius: 15, backgroundColor: '#F5F2FF', alignItems: 'center' }, readerMissingIcon: { color: C.periwinkle, fontSize: 22 }, readerMissingTitle: { color: C.ink, fontSize: 12, fontWeight: '700', marginTop: 7 }, readerMissingCopy: { color: C.muted, fontSize: 9, lineHeight: 14, textAlign: 'center', marginTop: 4 }, readerWriteButton: { minHeight: 33, marginTop: 11, paddingHorizontal: 10, borderRadius: 10, backgroundColor: C.periwinkle, alignItems: 'center', justifyContent: 'center' }, readerWriteButtonText: { color: '#FFF', fontSize: 9, fontWeight: '700' }, listenHero: { marginTop: 15, padding: 17, borderRadius: 22, backgroundColor: '#F1F0FF', flexDirection: 'row', alignItems: 'center' }, listenOrb: { width: 55, height: 55, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: C.periwinkle }, listenOrbText: { color: '#FFF', fontSize: 25 }, listenHeroCopy: { flex: 1, marginLeft: 13 }, listenTitle: { color: C.ink, fontSize: 19, fontWeight: '700', marginTop: 5 }, listenCopy: { color: C.muted, fontSize: 10, lineHeight: 15, marginTop: 5 }, listenControls: { marginTop: 2 }, listenNote: { color: '#9A9CB1', fontSize: 8, textAlign: 'center', marginTop: 7 }, studioSectionTitle: { color: C.ink, fontSize: 16, fontWeight: '700', marginTop: 23, marginBottom: 9 }, listenRow: { minHeight: 61, padding: 10, marginBottom: 7, borderRadius: 16, backgroundColor: '#FFF', flexDirection: 'row', alignItems: 'center' }, listenRowIcon: { width: 33, height: 33, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFF3E9' }, listenRowIconText: { color: '#A97819', fontSize: 15 }, listenRowButton: { minHeight: 30, paddingHorizontal: 9, borderRadius: 10, backgroundColor: '#EEEDFF', justifyContent: 'center' }, listenRowButtonText: { color: C.periwinkle, fontSize: 8, fontWeight: '700' }, exportHero: { marginTop: 15, padding: 18, borderRadius: 22, backgroundColor: '#EAF4FF' }, exportTitle: { color: C.ink, fontSize: 24, lineHeight: 29, fontWeight: '700', marginTop: 6 }, exportCopy: { color: C.muted, fontSize: 11, lineHeight: 17, marginTop: 8 }, exportStats: { marginTop: 11, padding: 17, borderRadius: 19, backgroundColor: '#FFF', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-around' }, exportStatValue: { color: C.ink, fontSize: 22, fontWeight: '700', textAlign: 'center' }, exportStatLabel: { color: C.muted, fontSize: 8, letterSpacing: 0.7, fontWeight: '700', marginTop: 4, textAlign: 'center' }, exportStatDivider: { width: 1, height: 34, backgroundColor: '#E9E8F0' }, exportFootnote: { color: '#9A9CB1', fontSize: 9, lineHeight: 14, textAlign: 'center', marginTop: 14, paddingHorizontal: 12 },
   navShell: { position: 'absolute', left: 13, right: 13, bottom: 12, height: 67, paddingHorizontal: 4, backgroundColor: 'rgba(255,255,255,0.94)', borderRadius: 24, flexDirection: 'row', justifyContent: 'space-around', alignItems: 'center', shadowColor: '#5F5C8B', shadowOpacity: 0.16, shadowRadius: 18, shadowOffset: { width: 0, height: 8 }, elevation: 7 }, navItem: { width: 45, alignItems: 'center' }, navIcon: { height: 26, color: '#A3A6C1', fontSize: 18 }, navIconActive: { color: C.periwinkle }, navLabel: { color: '#A3A6C1', fontSize: 8 }, navLabelActive: { color: C.ink, fontWeight: '700' },
-}), mediaStyles);
+}), mediaStyles, paginationStyles, citationStyles);
