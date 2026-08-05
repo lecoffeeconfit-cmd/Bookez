@@ -11,7 +11,7 @@ if (!supabaseUrl || !supabasePublishableKey) {
 }
 
 export const bookezRedirectUrl = 'bookez://auth/callback';
-export const bookezEmailConfirmationRedirectUrl = `${supabaseUrl.replace(/\/$/, '')}/functions/v1/bookez-email-confirmed`;
+export const bookezEmailConfirmationRedirectUrl = 'https://bookez-email-confirmation.lecoffeeconfit888.chatgpt.site';
 
 export const supabase = createClient<Database>(supabaseUrl, supabasePublishableKey, {
   db: { schema: 'bookez' },
