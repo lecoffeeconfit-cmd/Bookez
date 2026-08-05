@@ -3,10 +3,15 @@ import { LinearGradient } from 'expo-linear-gradient';
 import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Speech from 'expo-speech';
+import * as Haptics from 'expo-haptics';
+import * as Linking from 'expo-linking';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Animated, Image, Modal, Pressable, SafeAreaView, ScrollView, Share, StyleSheet, Switch, Text, TextInput, TextInputProps, View, useWindowDimensions } from 'react-native';
+import { AccessibilityInfo, ActivityIndicator, Alert, Animated, AppState, Image, KeyboardAvoidingView, Modal, Platform, Pressable, SafeAreaView, ScrollView, Share, StyleSheet, Text, TextInput, TextInputProps, View, useWindowDimensions } from 'react-native';
 import * as Sentry from '@sentry/react-native';
+import { supabase } from './src/lib/supabase';
+import { deleteBookezData, ensureBookezProfile, handleBookezAuthUrl, resendSignupConfirmation, sendPasswordReset, signInWithEmail, signOutBookez, signUpWithEmail } from './src/lib/bookez-auth';
+import { clearBookezLocalSyncData, commitBookezProjectCursor, flushBookezQueue, getBookezStorageSummary, getBookezSyncSnapshot, keepBookezLocalConflict, loadBookezProjectChapters, pullBookezProjectSummaries, saveBookezChapter, saveBookezPlanSettings, saveBookezProject } from './src/lib/bookez-sync';
 
 const sentryEnvironment = __DEV__ ? 'development' : 'production';
 const sentryDsn = process.env.EXPO_PUBLIC_SENTRY_DSN ?? 'https://497d40f44bc1b5561701ddc89e23fa99@o4511657628008448.ingest.us.sentry.io/4511850507075584';
@@ -50,7 +55,95 @@ const C = {
   sage: '#A7D4AD', peach: '#FFC09D', coral: '#F78385', gold: '#F5C75C', paper: '#F8F8FF', white: '#FFFFFF',
 };
 
+type SwitchProps = {
+  value: boolean;
+  onValueChange: (value: boolean) => void;
+  accessibilityLabel?: string;
+  trackColor?: { false?: string; true?: string };
+  thumbColor?: string;
+};
+
+function Switch({ value, onValueChange, accessibilityLabel, trackColor, thumbColor }: SwitchProps) {
+  return <Pressable onPress={() => onValueChange(!value)} hitSlop={4} style={[switchS.track, { backgroundColor: value ? trackColor?.true ?? '#B8B4F2' : trackColor?.false ?? '#D7D9E6' }]} accessibilityRole="switch" accessibilityLabel={accessibilityLabel} accessibilityState={{ checked: value }}><View style={[switchS.thumb, value && switchS.thumbOn, { backgroundColor: thumbColor ?? (value ? C.periwinkle : '#FFF') }]} /></Pressable>;
+}
+
+const switchS = StyleSheet.create({
+  track: { width: 54, height: 30, padding: 3, borderRadius: 15, justifyContent: 'center' },
+  thumb: { width: 24, height: 24, borderRadius: 12, shadowColor: '#68648F', shadowOpacity: 0.16, shadowRadius: 4, shadowOffset: { width: 0, height: 2 }, elevation: 2 },
+  thumbOn: { alignSelf: 'flex-end' },
+});
+
+const syncS = StyleSheet.create({
+  card: { padding: 14, borderRadius: 20, backgroundColor: '#F7F6FF', borderWidth: 1, borderColor: '#E7E4F7' },
+  cardHeader: { flexDirection: 'row', alignItems: 'flex-start' },
+  cardIcon: { width: 37, height: 37, borderRadius: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: '#E7F3FF' },
+  cardIconText: { color: '#4B7B9D', fontSize: 18 },
+  cardHeaderCopy: { flex: 1, marginLeft: 10 },
+  cardKicker: { color: C.periwinkle, fontSize: 7, letterSpacing: 0.85, fontWeight: '800' },
+  cardTitle: { color: C.ink, fontSize: 15, fontWeight: '800', marginTop: 4 },
+  cardDescription: { color: C.muted, fontSize: 9, lineHeight: 14, marginTop: 5 },
+  backupToggleRow: { marginTop: 14, paddingTop: 12, borderTopWidth: 1, borderTopColor: '#E7E4F1', flexDirection: 'row', alignItems: 'center' },
+  backupToggleCopy: { flex: 1, marginRight: 12 },
+  backupToggleTitle: { color: C.ink, fontSize: 10, fontWeight: '800' },
+  backupToggleDescription: { color: C.muted, fontSize: 8, lineHeight: 12, marginTop: 3 },
+  storagePreview: { marginTop: 14, padding: 10, borderRadius: 14, flexDirection: 'row', backgroundColor: '#FFF', borderWidth: 1, borderColor: '#E8E6F2' },
+  storagePreviewItem: { flex: 1, minWidth: 0 },
+  storagePreviewDivider: { width: 1, marginHorizontal: 10, backgroundColor: '#E8E6F2' },
+  storagePreviewLabel: { color: '#8A8CA4', fontSize: 6, letterSpacing: 0.65, fontWeight: '800' },
+  storagePreviewValue: { color: C.ink, fontSize: 11, fontWeight: '800', marginTop: 5 },
+  storagePreviewMeta: { color: C.muted, fontSize: 7, lineHeight: 11, marginTop: 3 },
+  actionRow: { flexDirection: 'row', gap: 8, paddingVertical: 12 },
+  secondaryAction: { flex: 1, minHeight: 38, paddingHorizontal: 10, borderRadius: 12, backgroundColor: '#FFF', borderWidth: 1, borderColor: '#DED9F5', flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
+  secondaryActionText: { color: C.ink, fontSize: 9, fontWeight: '800' },
+  secondaryActionArrow: { color: C.periwinkle, fontSize: 16, marginLeft: 6 },
+  nowButton: { minHeight: 38, paddingHorizontal: 15, borderRadius: 12, backgroundColor: C.periwinkle, alignItems: 'center', justifyContent: 'center' },
+  nowButtonDisabled: { opacity: 0.45 },
+  nowButtonText: { color: '#FFF', fontSize: 10, fontWeight: '700' },
+  accountButton: { flex: 1, minHeight: 38, paddingHorizontal: 12, borderRadius: 12, backgroundColor: '#F1F0FC', flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
+  accountButtonText: { color: C.ink, fontSize: 10, fontWeight: '700' },
+  accountArrow: { color: C.periwinkle, fontSize: 17, marginLeft: 7 },
+  modalShade: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(32,41,84,0.25)' },
+  modalDismiss: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 },
+  storageSheet: { maxHeight: '86%', padding: 20, paddingBottom: 28, borderTopLeftRadius: 29, borderTopRightRadius: 29, backgroundColor: '#FBFAFF' },
+  storageHeader: { flexDirection: 'row', alignItems: 'flex-start' },
+  storageHeaderCopy: { flex: 1 },
+  storageTitle: { color: C.ink, fontSize: 23, lineHeight: 28, fontWeight: '800', marginTop: 5 },
+  storageClose: { width: 34, height: 34, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F0EFF7' },
+  storageCloseText: { color: C.ink, fontSize: 22, lineHeight: 23 },
+  storageDescription: { color: C.muted, fontSize: 10, lineHeight: 15, marginTop: 9 },
+  comparisonRow: { marginTop: 16, flexDirection: 'row', gap: 9 },
+  comparisonCard: { flex: 1, minHeight: 170, padding: 12, borderRadius: 17, backgroundColor: '#F4F8FF', borderWidth: 1, borderColor: '#DDECF7' },
+  comparisonCardCloud: { backgroundColor: '#F4F1FF', borderColor: '#E4DFFC' },
+  comparisonIcon: { width: 30, height: 30, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: '#DDEEFF' },
+  comparisonIconCloud: { backgroundColor: '#E4DFFC' },
+  comparisonIconText: { color: '#4B7B9D', fontSize: 16 },
+  comparisonIconTextCloud: { color: C.periwinkle },
+  comparisonLabel: { color: '#7F829E', fontSize: 7, letterSpacing: 0.7, fontWeight: '800', marginTop: 11 },
+  comparisonValue: { color: C.ink, fontSize: 26, lineHeight: 29, fontWeight: '800', marginTop: 5 },
+  comparisonMeta: { color: C.muted, fontSize: 9, fontWeight: '700', marginTop: -1 },
+  comparisonDetail: { color: C.muted, fontSize: 8, lineHeight: 12, marginTop: 9 },
+  comparisonStatus: { color: '#5C7891', fontSize: 7, lineHeight: 10, marginTop: 9 },
+  loadingText: { color: C.periwinkle, fontSize: 10, fontWeight: '700', marginTop: 22 },
+  cloudEmptyText: { color: C.muted, fontSize: 9, lineHeight: 13, marginTop: 18 },
+  storageError: { color: '#C96567', fontSize: 9, lineHeight: 13, marginTop: 10 },
+  storageNote: { marginTop: 13, padding: 11, borderRadius: 13, flexDirection: 'row', alignItems: 'flex-start', backgroundColor: '#FFF8EA', borderWidth: 1, borderColor: '#F2E1BA' },
+  storageNoteIcon: { width: 16, height: 16, borderRadius: 8, textAlign: 'center', color: '#A97819', fontSize: 10, lineHeight: 16, fontWeight: '800', marginRight: 8, backgroundColor: '#FBE7B4' },
+  storageNoteText: { flex: 1, color: '#8A6B2D', fontSize: 9, lineHeight: 13 },
+  storageActions: { flexDirection: 'row', gap: 8, marginTop: 14 },
+  refreshButton: { flex: 1, minHeight: 44, paddingHorizontal: 10, borderRadius: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F0EFF9', borderWidth: 1, borderColor: '#DED9F5' },
+  refreshButtonText: { color: C.ink, fontSize: 9, fontWeight: '800', textAlign: 'center' },
+  modalSyncButton: { flex: 1, minHeight: 44, paddingHorizontal: 12, borderRadius: 13, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: C.periwinkle },
+  modalSyncButtonText: { color: '#FFF', fontSize: 9, fontWeight: '800' },
+  modalSyncButtonArrow: { color: '#FFF', fontSize: 16, marginLeft: 7 },
+  doneButton: { minHeight: 42, marginTop: 7, alignItems: 'center', justifyContent: 'center' },
+  doneButtonText: { color: C.muted, fontSize: 10, fontWeight: '800' },
+});
+
 const projectStorageKey = 'bookez.projects.v1';
+const localProjectBackupKey = (ownerId: string) => `bookez.projects.backup.${ownerId}`;
+const createLocalUuid = () => 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (character) => { const random = Math.random() * 16 | 0; const value = character === 'x' ? random : (random & 0x3 | 0x8); return value.toString(16); });
+const stableUuidFrom = (seed: string) => { let hash = 2166136261; for (let index = 0; index < seed.length; index += 1) hash = Math.imul(hash ^ seed.charCodeAt(index), 16777619); const hex = Math.abs(hash).toString(16).padStart(8, '0').repeat(4).slice(0, 32); return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-${(parseInt(hex.slice(16, 17), 16) & 0x3 | 0x8).toString(16)}${hex.slice(17, 20)}-${hex.slice(20)}`; };
+const cloudPlanSnapshot = (plan: ProjectPlan) => { const { drafts: _drafts, ...rest } = plan; return rest; };
 
 type InputMode = 'dictation' | 'writing';
 type DictationInputProps = TextInputProps & { grow?: boolean; onInputMode?: (mode: InputMode) => void };
@@ -109,7 +202,9 @@ type ProjectPlan = {
   writingPlanCreated?: boolean;
   writingPlanCreatedAt?: number;
   writingPlanPaused?: boolean;
+  journeyCelebrations?: Record<string, number>;
   activity?: Record<string, DailyWritingActivity>;
+  chapterRevisions?: Record<string, number>;
 };
 
 type ImageMode = 'NONE' | 'OPTIONAL' | 'FREQUENT' | 'IMAGE_LED';
@@ -282,7 +377,7 @@ type BookStudioState = {
   appearance: BookStudioAppearance;
   exportedAt?: number;
 };
-type Project = { title: string; color: string; mark: string; type: string; pageGoal: string; unitGoal: string; plan: ProjectPlan; updatedAt?: number; archived?: boolean; studio?: BookStudioState; images?: BookezImage[]; imageEnabled?: boolean };
+type Project = { title: string; color: string; mark: string; type: string; pageGoal: string; unitGoal: string; plan: ProjectPlan; cloudId?: string; cloudRevision?: number; updatedAt?: number; archived?: boolean; deletedAt?: number; studio?: BookStudioState; images?: BookezImage[]; imageEnabled?: boolean };
 
 function getReferenceCitations(plan: ProjectPlan, images: BookezImage[] = []) {
   return [...(plan.referenceEntries ?? []).map((entry) => entry.citation), ...images.map((image) => image.imageCitation?.citation).filter((citation): citation is string => Boolean(citation))];
@@ -1046,7 +1141,7 @@ function Library({ projects, activeProject, onPage, onSelectProject, onProjectsC
   const [focusProjectTitle, setFocusProjectTitle] = useState<string | null>(null);
   const [focusPickerOpen, setFocusPickerOpen] = useState(false);
 
-  const activeBooks = projects.filter((project) => !project.archived);
+  const activeBooks = projects.filter((project) => !project.archived && !project.deletedAt);
   const closestProject = [...activeBooks].sort((a, b) => {
     const progressDifference = getJourneySnapshot(b).progressPercent - getJourneySnapshot(a).progressPercent;
     return progressDifference || (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
@@ -1063,7 +1158,7 @@ function Library({ projects, activeProject, onPage, onSelectProject, onProjectsC
 
   const createProject = () => {
     const name = projectName.trim() || `Untitled ${selectedType.name}`;
-    onProjectsChange([{ title: name, color: selectedType.color, mark: selectedType.icon, type: selectedType.name, pageGoal: planBlueprints[selectedType.name].defaultPages, unitGoal: planBlueprints[selectedType.name].defaultUnits, plan: defaultPlanFor(selectedType.name), updatedAt: Date.now() }, ...projects]);
+    onProjectsChange([{ title: name, color: selectedType.color, mark: selectedType.icon, type: selectedType.name, pageGoal: planBlueprints[selectedType.name].defaultPages, unitGoal: planBlueprints[selectedType.name].defaultUnits, plan: { ...defaultPlanFor(selectedType.name), chapterRevisions: {} }, cloudId: createLocalUuid(), updatedAt: Date.now() }, ...projects]);
     onSelectProject(name);
     setProjectName('');
     setComposerOpen(false);
@@ -1072,11 +1167,11 @@ function Library({ projects, activeProject, onPage, onSelectProject, onProjectsC
   const selectAndOpen = (project: Project, nextPage: Page) => { onSelectProject(project.title); setMenuProject(null); onPage(nextPage); };
   const duplicateProject = (project: Project) => {
     const title = `${project.title} Copy`;
-    const copy: Project = { ...project, title, updatedAt: Date.now(), archived: false, plan: { ...project.plan, structure: { ...project.plan.structure }, plotNotes: { ...project.plan.plotNotes }, unitIdeas: [...project.plan.unitIdeas], partNotes: { ...project.plan.partNotes }, chapterEnds: project.plan.chapterEnds ? { ...project.plan.chapterEnds } : {}, referenceEntries: project.plan.referenceEntries ? project.plan.referenceEntries.map((entry) => ({ ...entry })) : [], drafts: { ...project.plan.drafts }, activity: project.plan.activity ? { ...project.plan.activity } : {} }, studio: project.studio ? { ...project.studio, frontMatterIncluded: { ...project.studio.frontMatterIncluded }, frontMatterText: { ...project.studio.frontMatterText }, backMatterIncluded: { ...project.studio.backMatterIncluded }, backMatterText: { ...project.studio.backMatterText }, chapterOrder: [...project.studio.chapterOrder], appearance: { ...project.studio.appearance } } : undefined };
+const copy: Project = { ...project, cloudId: createLocalUuid(), cloudRevision: 0, title, updatedAt: Date.now(), archived: false, deletedAt: undefined, plan: { ...project.plan, structure: { ...project.plan.structure }, plotNotes: { ...project.plan.plotNotes }, unitIdeas: [...project.plan.unitIdeas], partNotes: { ...project.plan.partNotes }, chapterEnds: project.plan.chapterEnds ? { ...project.plan.chapterEnds } : {}, referenceEntries: project.plan.referenceEntries ? project.plan.referenceEntries.map((entry) => ({ ...entry })) : [], drafts: { ...project.plan.drafts }, journeyCelebrations: project.plan.journeyCelebrations ? { ...project.plan.journeyCelebrations } : {}, activity: project.plan.activity ? { ...project.plan.activity } : {}, chapterRevisions: {} }, studio: project.studio ? { ...project.studio, frontMatterIncluded: { ...project.studio.frontMatterIncluded }, frontMatterText: { ...project.studio.frontMatterText }, backMatterIncluded: { ...project.studio.backMatterIncluded }, backMatterText: { ...project.studio.backMatterText }, chapterOrder: [...project.studio.chapterOrder], appearance: { ...project.studio.appearance } } : undefined };
     onProjectsChange([copy, ...projects]); onSelectProject(title); setMenuProject(null);
   };
   const saveRename = () => { if (!renameProject) return; const nextTitle = renameValue.trim(); if (!nextTitle || nextTitle === renameProject.title || projects.some((project) => project.title === nextTitle)) return; onProjectsChange(projects.map((project) => project.title === renameProject.title ? { ...project, title: nextTitle, updatedAt: Date.now() } : project)); if (activeProject === renameProject.title) onSelectProject(nextTitle); setRenameProject(null); setRenameValue(''); };
-  const confirmDelete = (project: Project) => Alert.alert(`Delete “${project.title}”?`, 'This permanently removes this book from the current Bookez session.', [{ text: 'Cancel', style: 'cancel' }, { text: 'Delete', style: 'destructive', onPress: () => { onProjectsChange(projects.filter((item) => item.title !== project.title)); if (activeProject === project.title && projects.some((item) => item.title !== project.title)) onSelectProject(projects.find((item) => item.title !== project.title)!.title); } }]);
+  const confirmDelete = (project: Project) => Alert.alert(`Delete “${project.title}”?`, 'This hides the book and queues a secure cloud deletion. You can keep writing offline while it waits to sync.', [{ text: 'Cancel', style: 'cancel' }, { text: 'Delete', style: 'destructive', onPress: () => { const deletedAt = Date.now(); const remaining = projects.filter((item) => item.title !== project.title && !item.deletedAt); onProjectsChange(projects.map((item) => item.title === project.title ? { ...item, deletedAt, archived: true, updatedAt: deletedAt } : item)); if (activeProject === project.title && remaining[0]) onSelectProject(remaining[0].title); } }]);
   const renderProjectCard = (project: Project) => {
     const projectSnapshot = getJourneySnapshot(project);
     const currentPart = projectSnapshot.nextPart?.title ?? (projectSnapshot.parts[projectSnapshot.parts.length - 1]?.title ?? 'No section selected');
@@ -1520,16 +1615,23 @@ function Plan({ projects, activeProject, onSelectProject, onUpdateProject, onPag
   </>;
 }
 
-type WritePart = { key: string; title: string; helper: string; kind: 'structure' | 'unit'; category: StructureCategory; unitIndex?: number };
+type WritePart = { key: string; title: string; helper: string; kind: 'structure' | 'unit'; category: StructureCategory; required: boolean; unitIndex?: number };
 
 const compactNote = (value: string) => value.trim().replace(/\s+/g, ' ').length > 150 ? `${value.trim().replace(/\s+/g, ' ').slice(0, 147)}…` : value.trim().replace(/\s+/g, ' ');
 
 function getWriteParts(project: Project, blueprint: PlanBlueprint): WritePart[] {
-  const structureParts = getStructureItems(project.type, blueprint).filter((item) => isStructureEnabled(project.plan.structure, item, blueprint)).map((item) => ({ key: `structure:${item.key ?? structureKeyFor(item.label)}`, title: item.label, helper: item.helper, kind: 'structure' as const, category: item.category ?? 'body' as const }));
+  const structureParts = getStructureItems(project.type, blueprint).filter((item) => isStructureEnabled(project.plan.structure, item, blueprint)).map((item) => ({
+    key: `structure:${item.key ?? structureKeyFor(item.label)}`,
+    title: item.label,
+    helper: item.helper,
+    kind: 'structure' as const,
+    category: item.category ?? 'body' as const,
+    required: item.recommended !== false && item.recommendation !== 'optional' && item.recommendation !== 'whenRelevant',
+  }));
   const unitCount = Math.max(Number.parseInt(project.unitGoal, 10) || 0, 0);
-  const unitParts = Array.from({ length: unitCount }, (_, index) => ({ key: `unit:${index}`, title: `${blueprint.unitLabel[0].toUpperCase() + blueprint.unitLabel.slice(1)} ${index + 1}`, helper: `Draft the part that belongs in this ${blueprint.unitLabel}.`, kind: 'unit' as const, category: 'body' as const, unitIndex: index }));
+  const unitParts = Array.from({ length: unitCount }, (_, index) => ({ key: `unit:${index}`, title: `${blueprint.unitLabel[0].toUpperCase() + blueprint.unitLabel.slice(1)} ${index + 1}`, helper: `Draft the part that belongs in this ${blueprint.unitLabel}.`, kind: 'unit' as const, category: 'body' as const, required: true, unitIndex: index }));
   const plannedParts = [...structureParts, ...unitParts];
-  return plannedParts.length ? plannedParts : [{ key: 'freewrite:0', title: 'Free writing', helper: 'Begin anywhere. You can shape this into parts later.', kind: 'structure' as const, category: 'body' as const }];
+  return plannedParts.length ? plannedParts : [{ key: 'freewrite:0', title: 'Free writing', helper: 'Begin anywhere. You can shape this into parts later.', kind: 'structure' as const, category: 'body' as const, required: true }];
 }
 
 type AssembledSection = { id: string; label: string; content: string; included: boolean; complete: boolean; kind: 'front' | 'back' };
@@ -1593,7 +1695,10 @@ function assembleBook(project: Project, studio: BookStudioState): AssembledBook 
     return { id: item.id, label: item.label, kind: 'back' as const, included: Boolean(studio.backMatterIncluded[item.id]), complete: Boolean(content), content };
   });
   const totalWords = chapters.reduce((total, chapter) => total + chapter.words, 0);
-  const status = totalWords === 0 ? 'draft' : project.plan.writeIndex >= parts.length && parts.length > 0 ? 'finished' : 'review';
+  const requiredParts = parts.filter((part) => part.required);
+  const lastRequiredPartIndex = parts.reduce((lastIndex, part, index) => part.required ? index : lastIndex, -1);
+  const draftComplete = requiredParts.length > 0 && requiredParts.every((part) => Boolean(project.plan.drafts[part.key]?.trim()));
+  const status = totalWords === 0 ? 'draft' : draftComplete && project.plan.writeIndex > lastRequiredPartIndex ? 'finished' : 'review';
   return { bookId: project.title, title: project.title, status, frontMatter, chapters, backMatter, images, totalWords, generatedAt: new Date().toISOString(), sourceRevision: String(project.updatedAt ?? totalWords) };
 }
 
@@ -1610,13 +1715,16 @@ const splitSpeechText = (value: string) => {
 };
 
 type JourneyStatus = 'complete' | 'current' | 'future' | 'locked';
-type JourneyMiniCheckpoint = { id: string; title: string; completed: boolean; description?: string; partKey?: string };
+type JourneyMiniCheckpoint = { id: string; title: string; completed: boolean; description?: string; estimatedTime?: string; partKey?: string };
 type JourneyMilestone = { id: string; title: string; detail: string; icon: string; status: JourneyStatus; kind: 'area' | 'step'; miniCheckpoints: JourneyMiniCheckpoint[] };
 
 type JourneySnapshot = {
   blueprint: PlanBlueprint;
   parts: WritePart[];
   draftedParts: number;
+  requiredPartCount: number;
+  requiredDraftedPartKeys: string[];
+  lastRequiredPartIndex: number;
   draftedPartKeys: string[];
   writeIndex: number;
   completedUnits: number;
@@ -1703,8 +1811,10 @@ function getJourneySnapshot(project: Project): JourneySnapshot {
   const plan = project.plan ?? defaultPlanFor(project.type);
   const parts = getWriteParts({ ...project, plan }, blueprint);
   const unitCount = Math.max(Number.parseInt(project.unitGoal, 10) || 0, 0);
-  const draftedParts = parts.filter((part) => Boolean(plan.drafts[part.key]?.trim())).length;
   const draftedPartKeys = parts.filter((part) => Boolean(plan.drafts[part.key]?.trim())).map((part) => part.key);
+  const requiredParts = parts.filter((part) => part.required);
+  const requiredDraftedPartKeys = requiredParts.filter((part) => Boolean(plan.drafts[part.key]?.trim())).map((part) => part.key);
+  const draftedParts = requiredDraftedPartKeys.length;
   const structureParts = parts.filter((part) => part.kind === 'structure');
   const unitParts = parts.filter((part) => part.kind === 'unit');
   const completedUnits = parts.filter((part) => part.kind === 'unit' && Boolean(plan.drafts[part.key]?.trim())).length;
@@ -1714,22 +1824,23 @@ function getJourneySnapshot(project: Project): JourneySnapshot {
   const targetPages = Math.max(Number.parseInt(project.pageGoal, 10) || 0, 0);
   const targetWords = Math.max(Number.parseInt((plan.targetWords ?? '').replace(/,/g, ''), 10) || targetPages * 250, 0);
   const ideaReady = Boolean(plan.idea.trim());
-  const foundationReady = targetPages > 0 && unitCount > 0 && selectedStructureCount > 0;
+  const foundationReady = targetPages > 0 && unitCount > 0 && requiredParts.some((part) => part.kind === 'structure') && selectedStructureCount > 0;
   const outlineReady = foundationReady && Boolean(
     plan.plotThread.trim() || plan.people.trim() || Object.values(plan.plotNotes).some((note) => note.trim()) || plan.unitIdeas.some((idea) => idea.trim()),
   );
   const firstDraftStarted = draftedParts > 0;
-  const halfwayReady = parts.length > 0 && draftedParts >= Math.ceil(parts.length / 2);
-  const draftComplete = parts.length > 0 && draftedParts === parts.length;
-  const manuscriptComplete = draftComplete && plan.writeIndex >= parts.length;
-  const progressItems = [ideaReady, foundationReady, outlineReady, firstDraftStarted, halfwayReady, draftComplete, manuscriptComplete, Boolean(project.studio?.exportedAt)];
-  const currentMilestoneIndex = Boolean(project.studio?.exportedAt) ? 7 : manuscriptComplete ? 6 : draftComplete ? 5 : halfwayReady ? 4 : firstDraftStarted ? 3 : outlineReady ? 2 : foundationReady ? 1 : 0;
+  const lastRequiredPartIndex = parts.reduce((lastIndex, part, index) => part.required ? index : lastIndex, -1);
+  const halfwayReady = requiredParts.length > 0 && draftedParts >= Math.ceil(requiredParts.length / 2);
+  const draftComplete = requiredParts.length > 0 && draftedParts === requiredParts.length;
+  const manuscriptComplete = draftComplete && plan.writeIndex > lastRequiredPartIndex;
+  const progressItems = [ideaReady, foundationReady, outlineReady, firstDraftStarted, halfwayReady, draftComplete, manuscriptComplete];
+  const currentMilestoneIndex = manuscriptComplete ? 6 : draftComplete ? 5 : halfwayReady ? 4 : firstDraftStarted ? 3 : outlineReady ? 2 : foundationReady ? 1 : 0;
   const progressPercent = Math.round((progressItems.filter(Boolean).length / progressItems.length) * 100);
   const stage = manuscriptComplete ? 'Finished manuscript' : draftComplete ? 'Review & polish' : firstDraftStarted ? 'First draft' : outlineReady ? 'Ready to write' : foundationReady ? 'Book foundation' : ideaReady ? 'Book foundation' : 'Book idea';
   const completionEstimate = getJourneyCompletionEstimate(plan, wordCount, targetWords);
 
   return {
-    blueprint, parts, draftedParts, draftedPartKeys, writeIndex: plan.writeIndex, completedUnits, unitCount, selectedStructureCount, wordCount, targetWords,
+    blueprint, parts, draftedParts, draftedPartKeys, requiredPartCount: requiredParts.length, requiredDraftedPartKeys, lastRequiredPartIndex, writeIndex: plan.writeIndex, completedUnits, unitCount, selectedStructureCount, wordCount, targetWords,
     ideaReady, foundationReady, outlineReady, firstDraftStarted, halfwayReady, draftComplete, manuscriptComplete,
     currentMilestoneIndex, progressPercent, stage, estimateLabel: completionEstimate.label, estimateDetail: completionEstimate.detail, exported: Boolean(project.studio?.exportedAt), nextPart: parts.find((part) => !plan.drafts[part.key]?.trim()) ?? parts[0],
   };
@@ -1740,13 +1851,12 @@ function getJourneyMilestones(snapshot: JourneySnapshot): JourneyMilestone[] {
   const drafts: JourneyDraft[] = [];
   const addCheckpoint = (id: string, title: string, detail: string, icon: string, completed: boolean, miniCheckpoints: JourneyMiniCheckpoint[]) => drafts.push({ id, title, detail, icon, kind: 'area', completed, miniCheckpoints });
   const hasOutlineNotes = Boolean(snapshot.outlineReady);
-  const chapterProgressCheckpoints = (prefix: string, targetParts = snapshot.parts.length) => {
-    const count = Math.min(60, Math.max(3, targetParts || snapshot.parts.length || 3));
-    const target = Math.max(1, targetParts);
-    return Array.from({ length: count }, (_, index) => {
-      const threshold = Math.max(1, Math.ceil(((index + 1) * target) / count));
-      const part = snapshot.parts[threshold - 1];
-      return { id: prefix + '-' + (index + 1), title: part?.title ?? `Part ${threshold}`, description: part ? `Complete the first draft of ${part.title}.` : `Draft part ${threshold} to keep moving.`, partKey: part?.key, completed: snapshot.draftedParts >= threshold };
+  const chapterProgressCheckpoints = (prefix: string, targetParts = snapshot.requiredPartCount) => {
+    const draftableParts = snapshot.parts.filter((part) => part.required);
+    const target = Math.max(1, Math.min(targetParts, draftableParts.length || 1));
+    return Array.from({ length: target }, (_, index) => {
+      const part = draftableParts[index];
+      return { id: prefix + '-' + (index + 1), title: part?.title ?? `Part ${index + 1}`, description: part ? `Complete the first draft of ${part.title}.` : `Draft part ${index + 1} to keep moving.`, estimatedTime: 'About 20 minutes', partKey: part?.key, completed: Boolean(part && snapshot.requiredDraftedPartKeys.includes(part.key)) };
     });
   };
 
@@ -1763,20 +1873,15 @@ function getJourneyMilestones(snapshot: JourneySnapshot): JourneyMilestone[] {
     { id: 'part-ideas', title: 'At least one part has a note', completed: snapshot.outlineReady },
     { id: 'opening-direction', title: 'The opening has a direction', completed: snapshot.outlineReady },
   ]);
-  addCheckpoint('first-draft', 'First draft underway', snapshot.firstDraftStarted ? `${snapshot.draftedParts} of ${snapshot.parts.length} parts have words in them.` : 'Open the manuscript and make the first part real.', '✎', snapshot.firstDraftStarted, chapterProgressCheckpoints('chapter-progress'));
-  addCheckpoint('halfway-point', 'Halfway drafted', snapshot.halfwayReady ? 'The middle of the route is behind you.' : `Keep going until ${Math.ceil(snapshot.parts.length / 2) || 'the first'} parts have a draft.`, '◌', snapshot.halfwayReady, chapterProgressCheckpoints('chapter-progress-halfway', Math.max(1, Math.ceil(snapshot.parts.length / 2))));
-  addCheckpoint('draft-complete', 'First draft complete', snapshot.draftComplete ? 'Every selected part has a draft.' : `${snapshot.draftedParts} of ${snapshot.parts.length} parts are drafted.`, '✓', snapshot.draftComplete, chapterProgressCheckpoints('chapter-progress-complete'));
-  addCheckpoint('manuscript-complete', 'Manuscript complete', snapshot.manuscriptComplete ? 'You reached the end of the writing path.' : 'Move through the completed draft and make the last pass.', '✧', snapshot.manuscriptComplete, [
+  addCheckpoint('first-draft', 'First draft underway', snapshot.firstDraftStarted ? `${snapshot.draftedParts} of ${snapshot.requiredPartCount} required parts have words in them.` : 'Open the manuscript and make the first part real.', '✎', snapshot.firstDraftStarted, chapterProgressCheckpoints('chapter-progress'));
+  addCheckpoint('halfway-point', 'Halfway drafted', snapshot.halfwayReady ? 'The middle of the route is behind you.' : `Keep going until ${Math.ceil(snapshot.requiredPartCount / 2) || 'the first'} required parts have a draft.`, '◌', snapshot.halfwayReady, chapterProgressCheckpoints('chapter-progress-halfway', Math.max(1, Math.ceil(snapshot.requiredPartCount / 2))));
+  addCheckpoint('draft-complete', 'First draft complete', snapshot.draftComplete ? 'Every required writing part has a draft.' : `${snapshot.draftedParts} of ${snapshot.requiredPartCount} required parts are drafted.`, '✓', snapshot.draftComplete, chapterProgressCheckpoints('chapter-progress-complete'));
+  addCheckpoint('manuscript-complete', 'FINAL MANUSCRIPT COMPLETE', snapshot.manuscriptComplete ? 'You reached the end of the writing path.' : 'Move through the completed draft and make the last pass.', '✧', snapshot.manuscriptComplete, [
     { id: 'full-draft', title: 'The full draft is assembled', completed: snapshot.draftComplete },
     { id: 'review', title: 'The manuscript is ready to share', completed: snapshot.manuscriptComplete },
   ]);
-  addCheckpoint('book-exported', 'Book shared', snapshot.exported ? 'The assembled book has been shared from Book Studio.' : 'Share the assembled manuscript when it feels ready.', '↗', snapshot.exported, [
-    { id: 'studio', title: 'Book Studio is ready', completed: snapshot.manuscriptComplete },
-    { id: 'export', title: 'A finished book is exported', completed: snapshot.exported },
-  ]);
-
   const currentIndex = drafts.findIndex((milestone) => !milestone.completed);
-  return drafts.map(({ completed, ...milestone }, index) => ({ ...milestone, status: completed ? 'complete' : index === currentIndex ? 'current' : milestone.id === 'book-exported' && !snapshot.manuscriptComplete ? 'locked' : 'future' }));
+  return drafts.map(({ completed, ...milestone }, index) => ({ ...milestone, status: completed ? 'complete' : index === currentIndex ? 'current' : milestone.id === 'manuscript-complete' ? 'locked' : 'future' }));
 }
 
 type JourneyNextStep = { title: string; time: string };
@@ -1788,8 +1893,7 @@ function getJourneyNextStep(snapshot: JourneySnapshot, milestone: JourneyMilesto
   if (milestone.id === 'first-draft') return { title: 'Write the opening section', time: 'About 15 minutes' };
   if (milestone.id === 'halfway-point') return { title: snapshot.nextPart ? `Write ${snapshot.nextPart.title}` : 'Write the next section', time: 'About 20 minutes' };
   if (milestone.id === 'draft-complete') return { title: 'Read through the full draft once', time: 'About 20 minutes' };
-  if (milestone.id === 'manuscript-complete') return { title: 'Choose one polish pass to make', time: 'About 10 minutes' };
-  if (milestone.id === 'book-exported') return { title: 'Open Book Studio to export', time: 'About 5 minutes' };
+  if (milestone.id === 'manuscript-complete') return snapshot.manuscriptComplete ? { title: 'Your manuscript is complete', time: 'Ready to celebrate' } : { title: 'Choose one polish pass to make', time: 'About 10 minutes' };
   return { title: milestone.title, time: 'About 5 minutes' };
 }
 
@@ -1799,25 +1903,25 @@ function getJourneyCheckpointProgress(snapshot: JourneySnapshot, milestone: Jour
   if (milestone.id === 'book-started') return { progress: 0, estimateLabel: 'About 5 minutes', estimateDetail: 'Capture the book’s promise to begin this path.' };
   if (milestone.id === 'book-foundation') return { progress: 0, estimateLabel: 'About 10 minutes', estimateDetail: 'Choose the scope and writing pieces that will carry the book.' };
   if (milestone.id === 'outline') return { progress: snapshot.foundationReady ? 50 : 0, estimateLabel: 'About 10 minutes', estimateDetail: 'A throughline, note, or part idea will make the outline ready.' };
-  if (milestone.id === 'first-draft') return { progress: snapshot.parts.length ? Math.min(99, Math.round((snapshot.draftedParts / snapshot.parts.length) * 100)) : 0, estimateLabel: finishEstimate.label, estimateDetail: finishEstimate.detail };
-  if (milestone.id === 'halfway-point') return { progress: snapshot.parts.length ? Math.min(99, Math.round((snapshot.draftedParts / Math.max(1, Math.ceil(snapshot.parts.length / 2))) * 100)) : 0, estimateLabel: finishEstimate.label, estimateDetail: finishEstimate.detail };
-  if (milestone.id === 'draft-complete') return { progress: snapshot.parts.length ? Math.min(99, Math.round((snapshot.draftedParts / snapshot.parts.length) * 100)) : 0, estimateLabel: finishEstimate.label, estimateDetail: finishEstimate.detail };
-  if (milestone.id === 'manuscript-complete') return { progress: snapshot.parts.length ? Math.min(99, Math.round((snapshot.writeIndex / snapshot.parts.length) * 100)) : 0, estimateLabel: snapshot.draftComplete ? 'About 10 minutes' : finishEstimate.label, estimateDetail: snapshot.draftComplete ? 'Read through the assembled draft and make the final pass.' : finishEstimate.detail };
-  return { progress: snapshot.manuscriptComplete ? 50 : 0, estimateLabel: snapshot.manuscriptComplete ? 'About 5 minutes' : 'After manuscript completion', estimateDetail: snapshot.manuscriptComplete ? 'Open Book Studio and share the finished book.' : 'This checkpoint unlocks when the manuscript is complete.' };
+  if (milestone.id === 'first-draft') return { progress: snapshot.requiredPartCount ? Math.min(99, Math.round((snapshot.draftedParts / snapshot.requiredPartCount) * 100)) : 0, estimateLabel: finishEstimate.label, estimateDetail: finishEstimate.detail };
+  if (milestone.id === 'halfway-point') return { progress: snapshot.requiredPartCount ? Math.min(99, Math.round((snapshot.draftedParts / Math.max(1, Math.ceil(snapshot.requiredPartCount / 2))) * 100)) : 0, estimateLabel: finishEstimate.label, estimateDetail: finishEstimate.detail };
+  if (milestone.id === 'draft-complete') return { progress: snapshot.requiredPartCount ? Math.min(99, Math.round((snapshot.draftedParts / snapshot.requiredPartCount) * 100)) : 0, estimateLabel: finishEstimate.label, estimateDetail: finishEstimate.detail };
+  if (milestone.id === 'manuscript-complete') return { progress: snapshot.lastRequiredPartIndex >= 0 ? Math.min(99, Math.round((snapshot.writeIndex / (snapshot.lastRequiredPartIndex + 1)) * 100)) : 0, estimateLabel: snapshot.draftComplete ? 'About 10 minutes' : finishEstimate.label, estimateDetail: snapshot.draftComplete ? 'Read through the assembled draft and make the final pass.' : finishEstimate.detail };
+  return { progress: snapshot.manuscriptComplete ? 50 : 0, estimateLabel: snapshot.manuscriptComplete ? 'About 5 minutes' : 'After manuscript completion', estimateDetail: snapshot.manuscriptComplete ? 'Open Book Studio when you are ready to shape the finished book.' : 'This checkpoint unlocks when the manuscript is complete.' };
 }
 
 function getJourneyMiniCheckpointProgress(snapshot: JourneySnapshot, milestone: JourneyMilestone, checkpoint: JourneyMiniCheckpoint, plan: ProjectPlan) {
   if (checkpoint.completed) return { progress: 100, estimateLabel: 'Complete', estimateDetail: `This step is complete within “${milestone.title}”.` };
   const finishEstimate = getJourneyCompletionEstimate(plan, snapshot.wordCount, snapshot.targetWords);
-  const draftedPercent = snapshot.parts.length ? Math.round((snapshot.draftedParts / snapshot.parts.length) * 100) : 0;
+  const draftedPercent = snapshot.requiredPartCount ? Math.round((snapshot.draftedParts / snapshot.requiredPartCount) * 100) : 0;
   const progressForDraft = (threshold = 100) => Math.min(99, Math.round((draftedPercent / threshold) * 100));
   if (checkpoint.id.startsWith('chapter-progress-')) {
     const checkpointNumber = Number.parseInt(checkpoint.id.split('-').pop() ?? '1', 10) || 1;
-    const targetParts = milestone.id === 'halfway-point' ? Math.max(1, Math.ceil(snapshot.parts.length / 2)) : Math.max(1, snapshot.parts.length);
-    const checkpointCount = Math.min(60, Math.max(3, targetParts || snapshot.parts.length || 3));
+    const targetParts = milestone.id === 'halfway-point' ? Math.max(1, Math.ceil(snapshot.requiredPartCount / 2)) : Math.max(1, snapshot.requiredPartCount);
+    const checkpointCount = Math.max(1, targetParts);
     const threshold = Math.max(1, Math.ceil((checkpointNumber * targetParts) / checkpointCount));
     const progress = snapshot.draftedParts >= threshold ? 100 : Math.min(99, Math.round((snapshot.draftedParts / threshold) * 100));
-    return { progress, estimateLabel: progress === 100 ? 'Complete' : finishEstimate.label, estimateDetail: progress === 100 ? 'This drafting step is complete.' : 'Draft ' + threshold + ' of ' + Math.max(1, snapshot.parts.length) + ' planned parts to reach this dot.' };
+    return { progress, estimateLabel: progress === 100 ? 'Complete' : finishEstimate.label, estimateDetail: progress === 100 ? 'This drafting step is complete.' : 'Draft ' + threshold + ' of ' + Math.max(1, snapshot.requiredPartCount) + ' required parts to reach this dot.' };
   }
   if (checkpoint.id === 'idea') return { progress: 0, estimateLabel: 'About 5 minutes', estimateDetail: 'Write one sentence that names the promise, problem, or feeling this project will carry.' };
   if (checkpoint.id === 'project-shape') return { progress: snapshot.foundationReady ? 100 : snapshot.ideaReady ? 50 : 0, estimateLabel: 'About 10 minutes', estimateDetail: 'Choose the project’s scale and the pieces that will give it a clear shape.' };
@@ -1829,12 +1933,56 @@ function getJourneyMiniCheckpointProgress(snapshot: JourneySnapshot, milestone: 
   if (checkpoint.id === 'quarter') return { progress: progressForDraft(25), estimateLabel: finishEstimate.label, estimateDetail: `Draft about a quarter of the planned writing units. ${finishEstimate.detail}` };
   if (checkpoint.id === 'middle') return { progress: progressForDraft(50), estimateLabel: finishEstimate.label, estimateDetail: `Keep drafting until about half of the planned writing units have words. ${finishEstimate.detail}` };
   if (checkpoint.id === 'momentum') return { progress: progressForDraft(60), estimateLabel: finishEstimate.label, estimateDetail: 'Build a little more momentum by reaching roughly 60% drafted.' };
-  if (checkpoint.id === 'all-parts' || checkpoint.id === 'last-page') return { progress: progressForDraft(), estimateLabel: finishEstimate.label, estimateDetail: `${snapshot.draftedParts} of ${snapshot.parts.length} planned parts have words.` };
-  if (checkpoint.id === 'full-draft') return { progress: snapshot.draftComplete ? 100 : progressForDraft(), estimateLabel: finishEstimate.label, estimateDetail: 'Complete every selected part so the full draft is assembled.' };
-  if (checkpoint.id === 'review') return { progress: snapshot.manuscriptComplete ? 100 : snapshot.draftComplete ? 50 : 0, estimateLabel: snapshot.draftComplete ? 'About 10 minutes' : finishEstimate.label, estimateDetail: snapshot.draftComplete ? 'Read through the assembled draft and make one final pass.' : 'This step opens when every selected part has a draft.' };
-  if (checkpoint.id === 'studio') return { progress: snapshot.manuscriptComplete ? 100 : 0, estimateLabel: snapshot.manuscriptComplete ? 'About 5 minutes' : 'After manuscript completion', estimateDetail: 'Open Book Studio once the manuscript is complete.' };
-  if (checkpoint.id === 'export') return { progress: snapshot.exported ? 100 : snapshot.manuscriptComplete ? 50 : 0, estimateLabel: snapshot.manuscriptComplete ? 'About 5 minutes' : 'After manuscript completion', estimateDetail: snapshot.manuscriptComplete ? 'Choose a format and share the assembled book from Book Studio.' : 'Finish and review the manuscript before exporting.' };
+  if (checkpoint.id === 'all-parts' || checkpoint.id === 'last-page') return { progress: progressForDraft(), estimateLabel: finishEstimate.label, estimateDetail: `${snapshot.draftedParts} of ${snapshot.requiredPartCount} required parts have words.` };
+  if (checkpoint.id === 'full-draft') return { progress: snapshot.draftComplete ? 100 : progressForDraft(), estimateLabel: finishEstimate.label, estimateDetail: 'Complete every required writing part so the full draft is assembled.' };
+  if (checkpoint.id === 'review') return { progress: snapshot.manuscriptComplete ? 100 : snapshot.draftComplete ? 50 : 0, estimateLabel: snapshot.draftComplete ? 'About 10 minutes' : finishEstimate.label, estimateDetail: snapshot.draftComplete ? 'Read through the assembled draft and make one final pass.' : 'This step opens when every required part has a draft.' };
   return { progress: 0, estimateLabel: 'About 5 minutes', estimateDetail: `Continue the steps inside “${milestone.title}”.` };
+}
+
+type JourneyCelebrationKind = 'mini' | 'planning' | 'chapter' | 'section' | 'halfway' | 'draft' | 'final';
+type JourneyCelebration = { key: string; kind: JourneyCelebrationKind; title: string; detail: string; icon: string; stats: string[]; actionLabel?: string };
+
+const journeyHaptic = async (kind: JourneyCelebrationKind) => {
+  try {
+    if (kind === 'mini') await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    else if (kind === 'final') await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    else await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+  } catch {
+    // Haptics are optional and unsupported platforms should remain fully usable.
+  }
+};
+
+function JourneyBookVisual({ snapshot }: { snapshot: JourneySnapshot }) {
+  const completed = snapshot.progressPercent >= 100;
+  const planning = snapshot.outlineReady && !snapshot.firstDraftStarted;
+  const writing = snapshot.firstDraftStarted && !snapshot.draftComplete;
+  return <View style={[journeyEnhancementS.bookVisual, completed && journeyEnhancementS.bookVisualComplete]} accessibilityLabel={`${completed ? 'Finished book' : planning ? 'Book outline' : writing ? 'Manuscript in progress' : 'Blank manuscript'} visual`}><View style={[journeyEnhancementS.bookPage, completed && journeyEnhancementS.bookPageComplete]} /><View style={[journeyEnhancementS.bookPage, journeyEnhancementS.bookPageBack, planning && journeyEnhancementS.bookPagePlanning, writing && journeyEnhancementS.bookPageWriting]} /><View style={[journeyEnhancementS.bookCover, completed && journeyEnhancementS.bookCoverComplete]}><Text style={journeyEnhancementS.bookVisualMark}>{completed ? '✦' : planning ? '⌁' : writing ? '✎' : '○'}</Text></View><View style={journeyEnhancementS.bookVisualProgress}><View style={[journeyEnhancementS.bookVisualProgressFill, { width: `${Math.max(8, snapshot.progressPercent)}%` }]} /></View></View>;
+}
+
+function JourneyCelebration({ celebration, reduceMotion, onDismiss, onPrimary }: { celebration: JourneyCelebration; reduceMotion: boolean; onDismiss: () => void; onPrimary?: () => void }) {
+  const animation = useRef(new Animated.Value(0)).current;
+  const particleValues = useRef(Array.from({ length: 8 }, () => new Animated.Value(0))).current;
+  const isFinal = celebration.kind === 'final';
+  const isMini = celebration.kind === 'mini';
+  const particleOffsets = [-62, -43, -26, -8, 12, 29, 46, 64];
+  useEffect(() => {
+    animation.setValue(0);
+    particleValues.forEach((value) => value.setValue(0));
+    if (reduceMotion) { animation.setValue(1); return undefined; }
+    const duration = isMini ? 560 : isFinal ? 2400 : 1300;
+    const main = Animated.timing(animation, { toValue: 1, duration, useNativeDriver: true });
+    const particles = Animated.stagger(45, particleValues.map((value, index) => Animated.timing(value, { toValue: 1, duration: isFinal ? 1200 : 700, delay: Math.abs(index - 3) * 35, useNativeDriver: true })));
+    Animated.parallel([main, particles]).start();
+    return () => { main.stop(); particles.stop(); };
+  }, [animation, isFinal, isMini, particleValues, reduceMotion, celebration.key]);
+
+  const accentStyle = celebration.kind === 'planning' ? journeyEnhancementS.celebrationPlanning : celebration.kind === 'chapter' ? journeyEnhancementS.celebrationChapter : celebration.kind === 'draft' ? journeyEnhancementS.celebrationDraft : isFinal ? journeyEnhancementS.celebrationFinal : journeyEnhancementS.celebrationDefault;
+  return <Animated.View style={[journeyEnhancementS.celebration, accentStyle, isFinal && journeyEnhancementS.celebrationFinalLayout, isMini && journeyEnhancementS.celebrationMini, { opacity: animation, transform: [{ translateY: animation.interpolate({ inputRange: [0, 1], outputRange: [8, 0] }) }, { scale: animation.interpolate({ inputRange: [0, 1], outputRange: [0.97, 1] }) }] }]}>
+    {!reduceMotion && particleValues.map((value, index) => <Animated.Text key={index} style={[journeyEnhancementS.celebrationParticle, { left: `${50 + particleOffsets[index] / 2}%`, opacity: value, transform: [{ translateY: value.interpolate({ inputRange: [0, 1], outputRange: [8, -18 - (index % 3) * 8] }) }, { translateX: value.interpolate({ inputRange: [0, 1], outputRange: [0, (index % 2 ? 1 : -1) * (8 + (index % 3) * 4)] }) }, { scale: value.interpolate({ inputRange: [0, 1], outputRange: [0.4, 1] }) }] }]}>✦</Animated.Text>)}
+    <View style={[journeyEnhancementS.celebrationIcon, isFinal && journeyEnhancementS.celebrationIconFinal]}><Text style={journeyEnhancementS.celebrationIconText}>{celebration.icon}</Text></View>
+    <View style={journeyEnhancementS.celebrationCopy}><Text style={journeyEnhancementS.celebrationEyebrow}>{isFinal ? 'JOURNEY COMPLETE' : celebration.kind === 'mini' ? 'STEP COMPLETE' : 'MILESTONE REACHED'}</Text><Text style={journeyEnhancementS.celebrationTitle}>{celebration.title}</Text><Text style={journeyEnhancementS.celebrationDetail}>{celebration.detail}</Text>{celebration.stats.length > 0 && <View style={journeyEnhancementS.celebrationStats}>{celebration.stats.map((stat) => <Text key={stat} style={journeyEnhancementS.celebrationStat}>{stat}</Text>)}</View>}</View>
+    <View style={journeyEnhancementS.celebrationActions}>{celebration.actionLabel && <Pressable onPress={onPrimary} style={[journeyEnhancementS.celebrationAction, isFinal && journeyEnhancementS.celebrationActionFinal]}><Text style={journeyEnhancementS.celebrationActionText}>{celebration.actionLabel}</Text><Text style={journeyEnhancementS.celebrationActionArrow}>→</Text></Pressable>}<Pressable onPress={onDismiss} style={journeyEnhancementS.celebrationDismiss}><Text style={journeyEnhancementS.celebrationDismissText}>{isFinal ? 'Dismiss' : 'Got it'}</Text></Pressable></View>
+  </Animated.View>;
 }
 
 type JourneyPoint = { x: number; y: number };
@@ -1845,40 +1993,88 @@ type JourneyLayout = {
   miniSteps: { point: JourneyPoint; milestoneId: string; checkpoint: JourneyMiniCheckpoint; index: number }[];
 };
 
-const interpolateJourneyPoint = (start: JourneyPoint, end: JourneyPoint, progress: number): JourneyPoint => ({
-  x: start.x + (end.x - start.x) * progress,
-  y: start.y + (end.y - start.y) * progress,
-});
-
 function buildJourneyLayout(milestones: JourneyMilestone[], width: number, milestoneProgress: number[]): JourneyLayout {
   const mapWidth = Math.max(240, width);
   const center = mapWidth / 2;
-  const curve = Math.min(58, mapWidth * 0.18);
+  const side = Math.min(82, Math.max(48, mapWidth * 0.24));
   const milestonePoints: JourneyPoint[] = [];
+  const sectionPoints: JourneyPoint[][] = [];
+  const miniSteps: JourneyLayout['miniSteps'] = [];
   let y = 58;
+  const majorX = [0.16, -0.18, 0.28, -0.3, 0.2, -0.24];
+
+  const distributeRuns = (stepCount: number) => {
+    if (stepCount <= 0) return [];
+    let runCount = Math.max(1, Math.round(stepCount / 5));
+    while (runCount > 1 && Math.ceil(stepCount / runCount) < 3) runCount -= 1;
+    while (Math.ceil(stepCount / runCount) > 6) runCount += 1;
+    const baseSize = Math.floor(stepCount / runCount);
+    const remainder = stepCount % runCount;
+    return Array.from({ length: runCount }, (_, index) => baseSize + (index < remainder ? 1 : 0));
+  };
 
   milestones.forEach((milestone, index) => {
-    milestonePoints.push({ x: center + (index % 2 === 0 ? -curve : curve), y });
-    const childCount = milestone.miniCheckpoints.length;
-    y += 230 + Math.max(0, childCount - 3) * 44;
+    const majorPoint = { x: Math.max(44, Math.min(mapWidth - 44, center + side * majorX[index % majorX.length])), y };
+    milestonePoints.push(majorPoint);
+    const points = [majorPoint];
+    const verticalStep = milestone.miniCheckpoints.length > 18 ? 56 : 66;
+    const runs = distributeRuns(milestone.miniCheckpoints.length);
+    let checkpointIndex = 0;
+    let runStartX = majorPoint.x;
+    runs.forEach((runSize, runIndex) => {
+      const direction = runIndex % 2 === 0 ? (runStartX <= center ? 1 : -1) : (runStartX <= center ? -1 : 1);
+      const targetX = center + direction * side * (0.72 + (((index + runIndex) % 3) - 1) * 0.08);
+      for (let localIndex = 0; localIndex < runSize; localIndex += 1) {
+        const progress = (localIndex + 1) / (runSize + 1);
+        const organicOffset = ((((checkpointIndex + 1) * 7) + (index * 5)) % 5 - 2) * 3;
+        const point = {
+          x: Math.max(24, Math.min(mapWidth - 24, runStartX + (targetX - runStartX) * progress + organicOffset)),
+          y: y + verticalStep * (checkpointIndex + 1),
+        };
+        const checkpoint = milestone.miniCheckpoints[checkpointIndex];
+        points.push(point);
+        miniSteps.push({ point, milestoneId: milestone.id, checkpoint, index: checkpointIndex });
+        checkpointIndex += 1;
+      }
+      runStartX = targetX;
+    });
+    const nextY = y + verticalStep * (milestone.miniCheckpoints.length + 1);
+    sectionPoints.push(points);
+    y = nextY;
   });
 
-  const segments = milestones.map((_, index) => {
-    const start = milestonePoints[index];
-    const end = index < milestonePoints.length - 1 ? milestonePoints[index + 1] : { x: center, y: start.y + 178 };
-    return { start, end, progress: Math.max(0, Math.min(100, milestoneProgress[index] ?? 0)) };
-  });
-  const miniSteps = segments.flatMap((segment, segmentIndex) => {
-    const milestone = milestones[segmentIndex];
-    return milestone.miniCheckpoints.map((checkpoint, index) => ({
-      point: interpolateJourneyPoint(segment.start, segment.end, (index + 1) / (milestone.miniCheckpoints.length + 1)),
-      milestoneId: milestone.id,
-      checkpoint,
-      index,
-    }));
+  const catmullRomPoint = (before: JourneyPoint, start: JourneyPoint, end: JourneyPoint, after: JourneyPoint, progress: number): JourneyPoint => {
+    const t2 = progress * progress;
+    const t3 = t2 * progress;
+    return {
+      x: 0.5 * ((2 * start.x) + (-before.x + end.x) * progress + (2 * before.x - 5 * start.x + 4 * end.x - after.x) * t2 + (-before.x + 3 * start.x - 3 * end.x + after.x) * t3),
+      y: 0.5 * ((2 * start.y) + (-before.y + end.y) * progress + (2 * before.y - 5 * start.y + 4 * end.y - after.y) * t2 + (-before.y + 3 * start.y - 3 * end.y + after.y) * t3),
+    };
+  };
+
+  const segments: JourneyLayout['segments'] = [];
+  sectionPoints.forEach((points, sectionIndex) => {
+    const end = sectionIndex < milestonePoints.length - 1 ? milestonePoints[sectionIndex + 1] : { x: center, y: points[points.length - 1].y + 88 };
+    const routePoints = [...points, end];
+    const sectionProgress = Math.max(0, Math.min(100, milestoneProgress[sectionIndex] ?? 0));
+    const spanCount = Math.max(1, routePoints.length - 1);
+    const samplesPerSpan = 5;
+    for (let spanIndex = 0; spanIndex < spanCount; spanIndex += 1) {
+      for (let sampleIndex = 0; sampleIndex < samplesPerSpan; sampleIndex += 1) {
+        const startProgress = sampleIndex / samplesPerSpan;
+        const endProgress = (sampleIndex + 1) / samplesPerSpan;
+        const pointAt = (progress: number) => catmullRomPoint(routePoints[Math.max(0, spanIndex - 1)], routePoints[spanIndex], routePoints[spanIndex + 1], routePoints[Math.min(routePoints.length - 1, spanIndex + 2)], progress);
+        const start = pointAt(startProgress);
+        const endPoint = pointAt(endProgress);
+        const edgeStart = ((spanIndex + startProgress) / spanCount) * 100;
+        const edgeEnd = ((spanIndex + endProgress) / spanCount) * 100;
+        const edgeProgress = edgeEnd <= sectionProgress ? 100 : edgeStart >= sectionProgress ? 0 : ((sectionProgress - edgeStart) / (edgeEnd - edgeStart)) * 100;
+        segments.push({ start, end: endPoint, progress: edgeProgress });
+      }
+    }
   });
 
-  return { height: Math.max(320, (segments[segments.length - 1]?.end.y ?? y) + 90), milestonePoints, segments, miniSteps };
+  return { height: Math.max(420, (segments[segments.length - 1]?.end.y ?? y) + 90), milestonePoints, segments, miniSteps };
 }
 
 type JourneyTodayPlan = {
@@ -2098,7 +2294,7 @@ function getProjectMilestones(project: Project): Achievement[] {
     { id: 'seventy-five-percent', title: '75% of manuscript completed', detail: completionDetail(75), icon: '75', completed: wordCompletion >= 75 },
     { id: 'one-thousand', title: 'First 1,000 words', detail: snapshot.wordCount >= 1000 ? 'The project has its first substantial foothold.' : `${formatCount(Math.max(0, 1000 - snapshot.wordCount))} words until this marker.`, icon: '1K', completed: snapshot.wordCount >= 1000 },
     { id: 'ten-thousand', title: '10,000 words in this project', detail: snapshot.wordCount >= 10000 ? 'A meaningful body of work is taking shape.' : `${formatCount(Math.max(0, 10000 - snapshot.wordCount))} words until this marker.`, icon: '✧', completed: snapshot.wordCount >= 10000 },
-    { id: 'first-draft', title: 'First draft completed', detail: snapshot.draftComplete ? 'Every selected part has a draft.' : `${snapshot.draftedParts} of ${snapshot.parts.length} parts are drafted.`, icon: '✓', completed: snapshot.draftComplete },
+    { id: 'first-draft', title: 'First draft completed', detail: snapshot.draftComplete ? 'Every required part has a draft.' : `${snapshot.draftedParts} of ${snapshot.requiredPartCount} required parts are drafted.`, icon: '✓', completed: snapshot.draftComplete },
     { id: 'revision', title: 'Revision completed', detail: snapshot.manuscriptComplete ? 'You reached the end of the writing path.' : 'Read through the full draft and make the last pass.', icon: '✦', completed: snapshot.manuscriptComplete },
     { id: 'exported', title: 'Book exported', detail: snapshot.exported ? 'The assembled book has been shared from Book Studio.' : 'Share the assembled manuscript when it feels ready.', icon: '↗', completed: snapshot.exported },
   ];
@@ -2385,7 +2581,7 @@ function getProjectProgressStats(project: Project): SpecializedStat[] {
   const targetPages = snapshot.targetWords ? Math.max(1, Math.round(snapshot.targetWords / 250)) : 0;
   const currentPages = Math.round(snapshot.wordCount / 250);
   const remainingWords = Math.max(0, snapshot.targetWords - snapshot.wordCount);
-  const stageProgress = snapshot.manuscriptComplete ? 100 : snapshot.draftComplete ? (snapshot.parts.length ? Math.round((snapshot.writeIndex / snapshot.parts.length) * 100) : 0) : snapshot.firstDraftStarted ? (snapshot.parts.length ? Math.round((snapshot.draftedParts / snapshot.parts.length) * 100) : 0) : snapshot.outlineReady ? 100 : snapshot.foundationReady ? 60 : snapshot.ideaReady ? 30 : 0;
+  const stageProgress = snapshot.manuscriptComplete ? 100 : snapshot.draftComplete ? (snapshot.lastRequiredPartIndex >= 0 ? Math.round((snapshot.writeIndex / (snapshot.lastRequiredPartIndex + 1)) * 100) : 0) : snapshot.firstDraftStarted ? (snapshot.requiredPartCount ? Math.round((snapshot.draftedParts / snapshot.requiredPartCount) * 100) : 0) : snapshot.outlineReady ? 100 : snapshot.foundationReady ? 60 : snapshot.ideaReady ? 30 : 0;
   const exportStats = getProjectExportReadinessStats(project);
   const plannedFinish = plan.plannedCompletionDate ? new Date(`${plan.plannedCompletionDate}T12:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'Open-ended';
   return [
@@ -2395,8 +2591,8 @@ function getProjectProgressStats(project: Project): SpecializedStat[] {
     { label: 'Stage checkpoints', value: `${completedMilestones} / ${milestones.length}`, detail: 'completed / total' },
     { label: 'Target word progress', value: `${wordCompletion}%`, detail: `${formatCount(snapshot.wordCount)} / ${formatCount(snapshot.targetWords)} words` },
     { label: 'Estimated page progress', value: `${currentPages} / ${targetPages || '—'}`, detail: 'estimated pages at 250 words' },
-    { label: 'Components', value: `${snapshot.draftedParts} / ${snapshot.parts.length}`, detail: 'drafted / planned' },
-    { label: 'First draft', value: snapshot.parts.length ? `${Math.round((snapshot.draftedParts / snapshot.parts.length) * 100)}%` : '—', detail: 'draft completion' },
+    { label: 'Required components', value: `${snapshot.draftedParts} / ${snapshot.requiredPartCount}`, detail: 'drafted / required' },
+    { label: 'First draft', value: snapshot.requiredPartCount ? `${Math.round((snapshot.draftedParts / snapshot.requiredPartCount) * 100)}%` : '—', detail: 'required draft completion' },
     { label: 'Revision', value: snapshot.manuscriptComplete ? '100%' : 'Not tracked', detail: snapshot.manuscriptComplete ? 'revision path complete' : 'revision tasks are not logged yet' },
     { label: 'Formatting', value: exportStats[0].value, detail: 'preview and export preparation' },
     { label: 'Remaining work', value: formatCount(remainingWords), detail: 'estimated words remaining' },
@@ -3167,9 +3363,11 @@ function Write({ projects, activeProject, onSelectProject, onUpdateProject, onPa
   const unitCount = Math.max(Number.parseInt(currentProject.unitGoal, 10) || 0, 0);
   const activeProgressLabel = activePart?.kind === 'unit' ? `${blueprint.unitLabel.toUpperCase()} ${(activePart.unitIndex ?? 0) + 1} OF ${unitCount || '—'}` : `${activeArea.label} · ${activeIndex + 1} OF ${parts.length}`;
   const chapterEndMarked = Boolean(activePart && plan.chapterEnds?.[activePart.key]);
-  const completed = parts.length > 0 && plan.writeIndex >= parts.length;
-  const completedPartCount = parts.filter((part) => plan.drafts[part.key]?.trim()).length;
-  const completionPercent = parts.length ? Math.round((completedPartCount / parts.length) * 100) : 0;
+  const requiredParts = parts.filter((part) => part.required);
+  const lastRequiredPartIndex = parts.reduce((lastIndex, part, index) => part.required ? index : lastIndex, -1);
+  const completed = requiredParts.length > 0 && plan.writeIndex > lastRequiredPartIndex;
+  const completedPartCount = requiredParts.filter((part) => plan.drafts[part.key]?.trim()).length;
+  const completionPercent = requiredParts.length ? Math.round((completedPartCount / requiredParts.length) * 100) : 0;
   const contextNotes = activePart ? getWriteContext(activePart, plan, blueprint) : [];
   const sessionStartedAt = useRef(Date.now());
   const compassWordCount = useRef(activePart ? countWords(plan.drafts[activePart.key] || '') : 0);
@@ -3293,8 +3491,8 @@ function Write({ projects, activeProject, onSelectProject, onUpdateProject, onPa
     const previousValue = currentPlan.drafts[activePart.key] || '';
     const wordDelta = Math.max(0, countWords(value) - countWords(previousValue));
     const nextDrafts = { ...currentPlan.drafts, [activePart.key]: value };
-    const nextCompletedPartCount = parts.filter((part) => Boolean((part.key === activePart.key ? value : currentPlan.drafts[part.key])?.trim())).length;
-    const nextCompletionPercent = parts.length ? Math.round((nextCompletedPartCount / parts.length) * 100) : 0;
+    const nextCompletedPartCount = requiredParts.filter((part) => Boolean((part.key === activePart.key ? value : currentPlan.drafts[part.key])?.trim())).length;
+    const nextCompletionPercent = requiredParts.length ? Math.round((nextCompletedPartCount / requiredParts.length) * 100) : 0;
     const nextActivity = addActivity(currentPlan, { words: wordDelta, pages: wordDelta / 250, completion: nextCompletionPercent, minutes: consumeActiveMinutes(), writingUses: pendingWritingUses.current });
     pendingWritingUses.current = 0;
     onUpdateProject(activeProject, { plan: { ...currentPlan, drafts: nextDrafts, activity: nextActivity } });
@@ -3457,7 +3655,12 @@ function Journey({ projects, activeProject, onSelectProject, onUpdateProject, on
   const [selectedMilestoneId, setSelectedMilestoneId] = useState<string | null>(null);
   const [selectedCheckpointId, setSelectedCheckpointId] = useState<string | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
+  const [reduceMotion, setReduceMotion] = useState(false);
+  const [celebration, setCelebration] = useState<JourneyCelebration | null>(null);
+  const previousJourneySnapshot = useRef<JourneySnapshot | null>(null);
+  const celebrationWrites = useRef(new Set<string>());
   const pulse = useRef(new Animated.Value(0)).current;
+  const detailAnimation = useRef(new Animated.Value(0)).current;
   const { width } = useWindowDimensions();
   const journeyMapWidth = Math.max(240, width - 40);
   const currentMilestoneIndex = milestones.findIndex((milestone) => milestone.status === 'current');
@@ -3467,12 +3670,19 @@ function Journey({ projects, activeProject, onSelectProject, onUpdateProject, on
   const selectedCheckpointProgress = selectedMilestone ? selectedCheckpoint ? getJourneyMiniCheckpointProgress(snapshot, selectedMilestone, selectedCheckpoint, currentPlan) : getJourneyCheckpointProgress(snapshot, selectedMilestone, currentPlan) : undefined;
   const milestoneProgress = milestones.map((milestone) => getJourneyCheckpointProgress(snapshot, milestone, currentPlan).progress);
   const journeyLayout = useMemo(() => buildJourneyLayout(milestones, journeyMapWidth, milestoneProgress), [milestones, journeyMapWidth, milestoneProgress]);
+  const journeySignature = `${snapshot.progressPercent}:${snapshot.draftedParts}:${snapshot.writeIndex}:${snapshot.manuscriptComplete}`;
+  const selectedJourneyIndex = selectedMilestone ? milestones.findIndex((milestone) => milestone.id === selectedMilestone.id) : -1;
+  const selectedJourneyPoint = selectedCheckpoint ? journeyLayout.miniSteps.find((step) => step.milestoneId === selectedMilestone?.id && step.checkpoint.id === selectedCheckpoint.id)?.point : selectedJourneyIndex >= 0 ? journeyLayout.milestonePoints[selectedJourneyIndex] : undefined;
+  const popupWidth = Math.min(178, journeyMapWidth - 24);
+  const popupOnRight = Boolean(selectedJourneyPoint && selectedJourneyPoint.x < journeyMapWidth / 2);
+  const popupLeft = selectedJourneyPoint ? popupOnRight ? Math.min(journeyMapWidth - popupWidth - 8, selectedJourneyPoint.x + 48) : Math.max(8, selectedJourneyPoint.x - popupWidth - 48) : 8;
+  const popupTop = selectedJourneyPoint ? selectedJourneyPoint.y < 178 ? selectedJourneyPoint.y + 28 : Math.max(10, Math.min(journeyLayout.height - 190, selectedJourneyPoint.y - 164)) : 10;
   const nextStep = getJourneyNextStep(snapshot, currentMilestone);
   const nextPage: Page = 'Write';
   const nextAction = snapshot.manuscriptComplete ? 'Review the manuscript' : !snapshot.firstDraftStarted ? 'Start writing whenever you’re ready' : snapshot.nextPart ? `Write ${snapshot.nextPart.title}` : 'Continue manuscript';
 
-  const openMilestoneDetail = (milestoneId: string) => { setSelectedMilestoneId(milestoneId); setSelectedCheckpointId(null); setDetailOpen(true); };
-  const openCheckpointDetail = (milestoneId: string, checkpointId: string) => { setSelectedMilestoneId(milestoneId); setSelectedCheckpointId(checkpointId); setDetailOpen(true); };
+  const openMilestoneDetail = (milestoneId: string) => { if (detailOpen && selectedMilestoneId === milestoneId && !selectedCheckpointId) { closeDetail(); return; } setSelectedMilestoneId(milestoneId); setSelectedCheckpointId(null); setDetailOpen(true); };
+  const openCheckpointDetail = (milestoneId: string, checkpointId: string) => { if (detailOpen && selectedMilestoneId === milestoneId && selectedCheckpointId === checkpointId) { closeDetail(); return; } setSelectedMilestoneId(milestoneId); setSelectedCheckpointId(checkpointId); setDetailOpen(true); };
   const closeDetail = () => { setDetailOpen(false); setSelectedCheckpointId(null); };
   const journeyLineStyle = (start: JourneyPoint, end: JourneyPoint) => {
     const dx = end.x - start.x;
@@ -3481,10 +3691,22 @@ function Journey({ projects, activeProject, onSelectProject, onUpdateProject, on
     const angle = Math.atan2(dy, dx) * (180 / Math.PI);
     return { left: (start.x + end.x - length) / 2, top: (start.y + end.y) / 2 - 1.5, width: length, transform: [{ rotate: `${angle}deg` }] };
   };
+  const journeyProgressPoint = (start: JourneyPoint, end: JourneyPoint, progress: number): JourneyPoint => ({ x: start.x + (end.x - start.x) * progress, y: start.y + (end.y - start.y) * progress });
+  const popupTailTop = selectedJourneyPoint ? Math.max(12, Math.min(150, selectedJourneyPoint.y - popupTop - 7)) : 24;
   const detailPart = selectedCheckpoint?.partKey ? snapshot.parts.find((part) => part.key === selectedCheckpoint.partKey) : undefined;
   const detailPartWords = detailPart ? countWords(currentPlan.drafts[detailPart.key] ?? '') : 0;
-  const detailStatus = selectedCheckpointProgress?.progress === 100 ? 'Complete' : selectedMilestone?.status === 'current' ? 'Current' : selectedMilestone?.status === 'locked' ? 'Locked' : 'Upcoming';
-  const detailActionLabel = selectedCheckpoint?.partKey ? (detailPartWords ? 'Continue writing' : 'Start writing') : selectedMilestone?.id === 'book-exported' ? 'Open Book Studio' : selectedMilestone?.id === 'book-started' || selectedMilestone?.id === 'book-foundation' || selectedMilestone?.id === 'outline' ? 'Open planning' : 'Continue writing';
+  const detailStatus = selectedCheckpointProgress?.progress === 100 ? 'Completed' : selectedMilestone?.status === 'locked' ? 'Locked' : selectedMilestone?.status === 'current' ? (selectedCheckpointProgress?.progress ?? 0) > 0 ? 'In progress' : 'Ready' : 'Ready';
+  const detailCelebrationKey = selectedCheckpoint?.partKey ? `chapter:${selectedCheckpoint.partKey}` : selectedMilestone?.id === 'outline' ? 'planning-complete' : selectedMilestone?.id === 'halfway-point' ? 'halfway' : selectedMilestone?.id === 'draft-complete' ? 'first-draft-complete' : selectedMilestone?.id === 'manuscript-complete' ? 'final-manuscript' : undefined;
+  const detailCompletedAt = detailCelebrationKey ? currentPlan.journeyCelebrations?.[detailCelebrationKey] ?? (selectedCheckpoint?.partKey && snapshot.requiredDraftedPartKeys.length === 1 ? currentPlan.journeyCelebrations?.['first-chapter'] : undefined) : undefined;
+  const replaySelectedCelebration = () => {
+    if (!selectedMilestone || !selectedCheckpointProgress || selectedCheckpointProgress.progress !== 100) return;
+    const kind: JourneyCelebrationKind = selectedMilestone.id === 'outline' ? 'planning' : selectedMilestone.id === 'halfway-point' ? 'halfway' : selectedMilestone.id === 'draft-complete' ? 'draft' : selectedMilestone.id === 'manuscript-complete' ? 'final' : selectedCheckpoint ? 'chapter' : 'section';
+    const title = selectedCheckpoint?.title ?? selectedMilestone.title;
+    const next = buildCelebration(detailCelebrationKey ?? selectedMilestone.id, kind, kind === 'final' ? 'Your manuscript is complete' : title, kind === 'final' ? 'You reached 100% of the required writing path.' : selectedCheckpoint?.description ?? selectedMilestone.detail, kind === 'final' ? '✦' : '✓', kind === 'final' ? 'Open Book Studio' : undefined);
+    setCelebration(next);
+    void journeyHaptic(kind);
+  };
+  const detailActionLabel = selectedCheckpoint?.partKey ? (detailPartWords ? 'Continue writing' : 'Start writing') : selectedMilestone?.id === 'manuscript-complete' && snapshot.manuscriptComplete ? 'Open Book Studio' : selectedMilestone?.id === 'book-started' || selectedMilestone?.id === 'book-foundation' || selectedMilestone?.id === 'outline' ? 'Open planning' : 'Continue writing';
   const openDetailAction = () => {
     if (selectedCheckpoint?.partKey) {
       const partIndex = snapshot.parts.findIndex((part) => part.key === selectedCheckpoint.partKey);
@@ -3493,27 +3715,97 @@ function Journey({ projects, activeProject, onSelectProject, onUpdateProject, on
       onPage('Write');
       return;
     }
-    if (selectedMilestone?.id === 'book-exported' && snapshot.manuscriptComplete) {
+    if (selectedMilestone?.id === 'manuscript-complete' && snapshot.manuscriptComplete) {
       closeDetail();
-      onOpenBookStudio(currentProject.title, 'assemble');
+      onOpenBookStudio(currentProject.title, 'read');
       return;
     }
     closeDetail();
     onPage(selectedMilestone?.id === 'book-started' || selectedMilestone?.id === 'book-foundation' || selectedMilestone?.id === 'outline' ? 'Plan' : 'Write');
   };
 
+  const totalWritingMinutes = Object.values(currentPlan.activity ?? {}).reduce((total, entry) => total + entry.minutes, 0);
+  const longestWritingStreak = (() => {
+    const activeDates = new Set(Object.entries(currentPlan.activity ?? {}).filter(([, entry]) => entry.words > 0 || entry.minutes >= 5).map(([key]) => key));
+    let longest = 0;
+    activeDates.forEach((key) => {
+      const date = new Date(`${key}T12:00:00`);
+      const previous = new Date(date); previous.setDate(previous.getDate() - 1);
+      if (activeDates.has(activityDateKey(previous.getTime()))) return;
+      let length = 1;
+      const cursor = new Date(date);
+      while (activeDates.has(activityDateKey(cursor.getTime() + 86_400_000))) { length += 1; cursor.setDate(cursor.getDate() + 1); }
+      longest = Math.max(longest, length);
+    });
+    return longest;
+  })();
+  const buildCelebration = (key: string, kind: JourneyCelebrationKind, title: string, detail: string, icon: string, actionLabel?: string): JourneyCelebration => ({
+    key, kind, title, detail, icon, actionLabel,
+    stats: kind === 'mini' ? [`${formatCount(snapshot.wordCount)} words total`] : kind === 'planning' ? [`${snapshot.completedUnits} ${snapshot.blueprint.unitLabelPlural.toLowerCase()} outlined`, `${snapshot.selectedStructureCount} planning tasks`, `${snapshot.progressPercent}% complete`] : [`${formatCount(snapshot.wordCount)} words`, `${snapshot.completedUnits} ${snapshot.blueprint.unitLabelPlural.toLowerCase()}`, `${snapshot.progressPercent}% complete`, `${totalWritingMinutes} min writing`].concat(kind === 'final' ? [`${longestWritingStreak} day longest streak`, new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })] : []),
+  });
+  const rememberCelebration = (key: string) => {
+    if (currentPlan.journeyCelebrations?.[key] || celebrationWrites.current.has(key)) return;
+    celebrationWrites.current.add(key);
+    onUpdateProject(currentProject.title, { plan: { ...currentPlan, journeyCelebrations: { ...(currentPlan.journeyCelebrations ?? {}), [key]: Date.now() } } });
+  };
+  const showCelebration = (next: JourneyCelebration, persist = true) => {
+    if (persist) rememberCelebration(next.key);
+    setCelebration(next);
+    void journeyHaptic(next.kind);
+  };
+
   useEffect(() => {
+    let mounted = true;
+    AccessibilityInfo.isReduceMotionEnabled().then((enabled) => { if (mounted) setReduceMotion(enabled); }).catch(() => undefined);
+    const subscription = AccessibilityInfo.addEventListener('reduceMotionChanged', setReduceMotion);
+    return () => { mounted = false; subscription.remove(); };
+  }, []);
+
+  useEffect(() => {
+    detailAnimation.setValue(reduceMotion ? 1 : 0);
+    if (detailOpen && !reduceMotion) Animated.timing(detailAnimation, { toValue: 1, duration: 180, useNativeDriver: true }).start();
+  }, [detailAnimation, detailOpen, reduceMotion, selectedCheckpointId, selectedMilestoneId]);
+
+  useEffect(() => {
+    if (reduceMotion) { pulse.stopAnimation(); pulse.setValue(0); return undefined; }
     const animation = Animated.loop(Animated.sequence([
       Animated.timing(pulse, { toValue: 1, duration: 1100, useNativeDriver: true }),
       Animated.timing(pulse, { toValue: 0, duration: 1100, useNativeDriver: true }),
     ]));
     animation.start();
     return () => animation.stop();
-  }, [pulse]);
+  }, [pulse, reduceMotion]);
+
+  useEffect(() => {
+    const previous = previousJourneySnapshot.current;
+    const newlyDraftedPartKey = previous ? snapshot.requiredDraftedPartKeys.find((key) => !previous.requiredDraftedPartKeys.includes(key)) : undefined;
+    const currentCelebrations = currentPlan.journeyCelebrations ?? {};
+    const showPending = (next: JourneyCelebration) => { if (!currentCelebrations[next.key] && !celebrationWrites.current.has(next.key)) showCelebration(next); };
+
+    if (!previous) {
+      previousJourneySnapshot.current = snapshot;
+      if (snapshot.manuscriptComplete) showPending(buildCelebration('final-manuscript', 'final', 'Your manuscript is complete', 'You reached 100% of the required writing path.', '✦', 'Open Book Studio'));
+      else if (snapshot.draftComplete) showPending(buildCelebration('first-draft-complete', 'draft', 'First draft complete', 'You wrote an entire manuscript. The revision stage is ready.', '✓'));
+      else if (snapshot.halfwayReady) showPending(buildCelebration('halfway', 'halfway', 'Halfway there', 'Your manuscript is taking shape.', '½'));
+      else if (snapshot.outlineReady) showPending(buildCelebration('planning-complete', 'planning', 'Your plan is complete', 'Your book is ready to write.', '⌁'));
+      return;
+    }
+
+    if (snapshot.manuscriptComplete && !previous.manuscriptComplete) showPending(buildCelebration('final-manuscript', 'final', 'Your manuscript is complete', 'You reached 100% of the required writing path.', '✦', 'Open Book Studio'));
+    else if (snapshot.draftComplete && !previous.draftComplete) showPending(buildCelebration('first-draft-complete', 'draft', 'First draft complete', 'You wrote an entire manuscript. The revision stage is ready.', '✓'));
+    else if (snapshot.halfwayReady && !previous.halfwayReady) showPending(buildCelebration('halfway', 'halfway', 'Halfway there', 'Your manuscript is taking shape.', '½'));
+    else if (snapshot.outlineReady && !previous.outlineReady) showPending(buildCelebration('planning-complete', 'planning', 'Your plan is complete', 'Your book is ready to write.', '⌁'));
+    else if (newlyDraftedPartKey) {
+      const completedPart = snapshot.parts.find((part) => part.key === newlyDraftedPartKey);
+      if (completedPart) showPending(buildCelebration(snapshot.requiredDraftedPartKeys.length === 1 ? 'first-chapter' : `chapter:${completedPart.key}`, 'chapter', `${completedPart.title} complete`, 'The next writing step is ready.', '✓'));
+    }
+    previousJourneySnapshot.current = snapshot;
+  }, [journeySignature]);
 
   useEffect(() => {
     setSelectedMilestoneId(null);
     setSelectedCheckpointId(null);
+    setDetailOpen(false);
   }, [activeProject]);
 
   const chooseProject = (project: Project) => {
@@ -3536,6 +3828,7 @@ function Journey({ projects, activeProject, onSelectProject, onUpdateProject, on
 
     <View style={s.journeySummaryCard}>
       <View style={s.journeySummaryTop}><View><Text style={s.journeySummaryEyebrow}>YOUR JOURNEY</Text><Text style={s.journeySummaryStage}>{snapshot.stage}</Text></View><Text style={s.journeySummaryPercent}>{snapshot.progressPercent}%</Text></View>
+      <JourneyBookVisual snapshot={snapshot} />
       <View style={s.journeyProgressTrack}><View style={[s.journeyProgressFill, { width: `${snapshot.progressPercent}%` }]} /></View>
       <View style={s.journeyStatsRow}><View style={s.journeyStat}><Text style={s.journeyStatValue}>{formatCount(snapshot.wordCount)}</Text><Text style={s.journeyStatLabel}>WORDS WRITTEN</Text><Text style={s.journeyStatSub}>{snapshot.targetWords ? `of ${formatCount(snapshot.targetWords)} est. target` : 'Target not set'}</Text></View><View style={s.journeyStatDivider} /><View style={s.journeyStat}><Text style={s.journeyStatValue}>{snapshot.completedUnits} of {snapshot.unitCount}</Text><Text style={s.journeyStatLabel}>{snapshot.blueprint.unitLabelPlural.toUpperCase()}</Text><Text style={s.journeyStatSub}>with a draft</Text></View></View>
       <View style={s.journeyEstimateCard}><View style={s.journeyEstimateIcon}><Text style={s.journeyEstimateIconText}>◷</Text></View><View style={s.journeyEstimateCopy}><Text style={s.journeyEstimateLabel}>ESTIMATED FINISH</Text><Text style={s.journeyEstimateValue}>{snapshot.estimateLabel}</Text><Text style={s.journeyEstimateDetail}>{snapshot.estimateDetail}</Text></View></View>
@@ -3549,12 +3842,14 @@ function Journey({ projects, activeProject, onSelectProject, onUpdateProject, on
       <View style={s.journeyTodayGoalRow}><Text style={s.journeyTodayGoal}>{todayPlan.goal}</Text><Text style={s.journeyTodayHint}>A suggestion, not a deadline.</Text></View>
       <View style={s.journeyTodayActions}><Pressable onPress={() => todayPlan.tone === 'paused' ? onUpdateProject(currentProject.title, { plan: { ...currentPlan, writingPlanPaused: false } }) : onPage(todayPlan.actionPage)} style={s.journeyTodayPrimary}><Text style={s.journeyTodayPrimaryText}>{todayPlan.actionLabel}</Text><Text style={s.journeyTodayPrimaryArrow}>→</Text></Pressable>{todayPlan.tone !== 'paused' && <Pressable onPress={() => onUpdateProject(currentProject.title, { plan: { ...currentPlan, writingPlanPaused: true } })} style={s.journeyTodayPause}><Text style={s.journeyTodayPauseText}>Pause plan</Text></Pressable>}</View>
     </View>}
-    {latestMilestone && <View style={s.journeyMilestoneReached}><View style={s.journeyMilestoneReachedIcon}><Text style={s.journeyMilestoneReachedIconText}>{latestMilestone.icon}</Text></View><View style={s.journeyMilestoneReachedCopy}><Text style={s.journeyMilestoneReachedEyebrow}>MILESTONE REACHED</Text><Text style={s.journeyMilestoneReachedTitle}>{latestMilestone.title} <Text style={s.journeyMilestoneReachedCheck}>✓</Text></Text></View></View>}
+    {latestMilestone && <View style={[s.journeyMilestoneReached, latestMilestone.id === 'manuscript-complete' && journeyPopupS.journeyMilestoneReachedCelebration]}><View style={[s.journeyMilestoneReachedIcon, latestMilestone.id === 'manuscript-complete' && journeyPopupS.journeyMilestoneReachedCelebrationIcon]}><Text style={s.journeyMilestoneReachedIconText}>{latestMilestone.icon}</Text></View><View style={s.journeyMilestoneReachedCopy}><Text style={[s.journeyMilestoneReachedEyebrow, latestMilestone.id === 'manuscript-complete' && journeyPopupS.journeyMilestoneReachedCelebrationEyebrow]}>{latestMilestone.id === 'manuscript-complete' ? 'BOOK COMPLETE' : 'MILESTONE REACHED'}</Text><Text style={s.journeyMilestoneReachedTitle}>{latestMilestone.id === 'manuscript-complete' ? 'Your manuscript is complete' : latestMilestone.title} <Text style={s.journeyMilestoneReachedCheck}>✓</Text></Text></View></View>}
+    {celebration && <JourneyCelebration celebration={celebration} reduceMotion={reduceMotion} onDismiss={() => setCelebration(null)} onPrimary={celebration.kind === 'final' ? () => { setCelebration(null); onOpenBookStudio(currentProject.title, 'read'); } : undefined} />}
 
     <View style={s.journeyMapHeading}><View><Text style={s.journeyMapEyebrow}>YOUR PATH</Text><Text style={s.journeyMapTitle}>Small steps lead to big moments.</Text></View><Text style={s.journeyMapHint}>Tap any dot</Text></View>
     <View style={[s.journeyMap, { height: journeyLayout.height, width: journeyMapWidth }]}>
+      {detailOpen && <Pressable onPress={closeDetail} style={journeyEnhancementS.mapDismiss} accessibilityLabel="Dismiss checkpoint details" />}
       {journeyLayout.segments.map((segment, index) => {
-        const progressPoint = interpolateJourneyPoint(segment.start, segment.end, segment.progress / 100);
+        const progressPoint = journeyProgressPoint(segment.start, segment.end, segment.progress / 100);
         return <Fragment key={'route-' + index}>
           <View style={[s.journeyRoute, journeyLineStyle(segment.start, segment.end)]} />
           {segment.progress > 0 && <View style={[s.journeyRouteCompleteDynamic, journeyLineStyle(segment.start, progressPoint)]} />}
@@ -3566,9 +3861,17 @@ function Journey({ projects, activeProject, onSelectProject, onUpdateProject, on
         const firstIncomplete = milestone.miniCheckpoints.findIndex((item) => !item.completed);
         const isCurrent = milestone.status === 'current' && firstIncomplete === index;
         const accessibilityStatus = checkpointProgress.progress === 100 ? 'complete' : isCurrent ? 'current' : 'upcoming';
-        return <Pressable key={checkpoint.id} onPress={() => openCheckpointDetail(milestoneId, checkpoint.id)} style={[s.journeyMiniHit, { left: point.x - 22, top: point.y - 22 }]} accessibilityRole="button" accessibilityLabel={checkpoint.title + ', ' + checkpointProgress.progress + ' percent complete, ' + accessibilityStatus + ', double tap for details'}>
-          <View style={[s.journeyMiniDotPath, checkpointProgress.progress === 100 && s.journeyMiniDotPathComplete, isCurrent && s.journeyMiniDotPathCurrent, milestone.status === 'locked' && s.journeyMiniDotPathLocked]}><Text style={[s.journeyMiniDotPathText, checkpointProgress.progress === 100 && s.journeyMiniDotPathTextComplete]}>{checkpointProgress.progress === 100 ? '✓' : String(index + 1)}</Text></View>
-        </Pressable>;
+        const labelOnRight = (index + milestones.findIndex((item) => item.id === milestoneId)) % 2 === 0;
+        const labelWidth = Math.min(126, Math.max(94, journeyMapWidth * 0.34));
+        const labelLeft = labelOnRight ? Math.min(journeyMapWidth - labelWidth - 6, point.x + 24) : Math.max(6, point.x - labelWidth - 24);
+        return <Fragment key={checkpoint.id}>
+          <Pressable onPress={() => openCheckpointDetail(milestoneId, checkpoint.id)} style={[s.journeyMiniHit, journeyEnhancementS.miniHit, { left: point.x - 22, top: point.y - 22 }]} accessibilityRole="button" accessibilityLabel={checkpoint.title + ', ' + checkpointProgress.progress + ' percent complete, ' + accessibilityStatus + ', double tap for details'}>
+            <Animated.View style={[s.journeyMiniDotPath, checkpointProgress.progress === 100 && s.journeyMiniDotPathComplete, isCurrent && s.journeyMiniDotPathCurrent, milestone.status === 'locked' && s.journeyMiniDotPathLocked, isCurrent && journeyEnhancementS.miniDotRecommended, selectedCheckpointId === checkpoint.id && journeyEnhancementS.miniDotSelected, isCurrent && !reduceMotion && { transform: [{ scale: pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.13] }) }] }, milestone.id === 'manuscript-complete' && checkpointProgress.progress === 100 && !reduceMotion && { transform: [{ scale: pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.16] }) }] }]}><Text style={[s.journeyMiniDotPathText, checkpointProgress.progress === 100 && s.journeyMiniDotPathTextComplete]}>{checkpointProgress.progress === 100 ? '✓' : milestone.status === 'locked' ? '🔒' : String(index + 1)}</Text></Animated.View>
+          </Pressable>
+          <Pressable onPress={() => openCheckpointDetail(milestoneId, checkpoint.id)} style={[journeyEnhancementS.miniLabel, { top: point.y - 15, width: labelWidth, left: labelLeft }]} accessibilityRole="button" accessibilityLabel={`Open ${checkpoint.title} details`}>
+            <Text numberOfLines={2} style={journeyEnhancementS.miniLabelText}>{checkpoint.title}</Text>
+          </Pressable>
+        </Fragment>;
       })}
       {milestones.map((milestone, index) => {
         const point = journeyLayout.milestonePoints[index];
@@ -3578,28 +3881,20 @@ function Journey({ projects, activeProject, onSelectProject, onUpdateProject, on
         const stateLabel = milestone.status === 'complete' ? 'COMPLETE' : milestone.status === 'current' ? 'CURRENT' : milestone.status === 'locked' ? 'LOCKED' : 'UP NEXT';
         return <Fragment key={milestone.id}>
           <Pressable onPress={() => openMilestoneDetail(milestone.id)} style={[s.journeyMilestoneHit, { left: point.x - 46, top: point.y - 46 }]} accessibilityRole="button" accessibilityLabel={milestone.title + ', ' + progress + ' percent complete, ' + stateLabel.toLowerCase() + ', double tap for details'}>
-            <Animated.View style={[s.journeyNodeLarge, milestone.status === 'complete' ? s.journeyNodeLargeComplete : milestone.status === 'current' ? s.journeyNodeLargeCurrent : milestone.status === 'locked' ? s.journeyNodeLargeLocked : s.journeyNodeLargeFuture, selected && s.journeyNodeSelected, milestone.status === 'current' && { transform: [{ scale: pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.06] }) }] }]}><Text style={s.journeyNodeIcon}>{milestone.status === 'complete' ? '✓' : milestone.status === 'locked' ? '🔒' : milestone.icon}</Text></Animated.View>
+            <Animated.View style={[journeyEnhancementS.nodeOrbit, milestone.status === 'complete' && journeyEnhancementS.nodeOrbitComplete, milestone.status === 'current' && journeyEnhancementS.nodeOrbitCurrent, selected && journeyEnhancementS.nodeOrbitSelected, !reduceMotion && milestone.status === 'current' && { transform: [{ scale: pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.08] }) }] }]} />
+            <Animated.View style={[s.journeyNodeLarge, milestone.status === 'complete' ? s.journeyNodeLargeComplete : milestone.status === 'current' ? s.journeyNodeLargeCurrent : milestone.status === 'locked' ? s.journeyNodeLargeLocked : s.journeyNodeLargeFuture, selected && s.journeyNodeSelected, milestone.id === 'manuscript-complete' && milestone.status === 'complete' && journeyPopupS.journeyNodeLargeCelebration, !reduceMotion && milestone.status === 'current' && { transform: [{ scale: pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.06] }) }] }]}><Text style={s.journeyNodeIcon}>{milestone.status === 'complete' ? '✓' : milestone.status === 'locked' ? '🔒' : milestone.icon}</Text>{milestone.id === 'manuscript-complete' && milestone.status === 'complete' && <Text style={journeyPopupS.journeyNodeSparkle}>✦</Text>}</Animated.View>
           </Pressable>
-          <Pressable onPress={() => openMilestoneDetail(milestone.id)} style={[s.journeyMilestoneLabel, { top: point.y - 31 }, point.x < journeyMapWidth / 2 ? s.journeyMilestoneLabelLeft : s.journeyMilestoneLabelRight, selected && s.journeyMilestoneLabelSelected]} accessibilityRole="button">
-            <Text style={s.journeyMilestoneLabelTitle}>{milestone.title}</Text>
+          <Pressable onPress={() => openMilestoneDetail(milestone.id)} style={[s.journeyMilestoneLabel, { top: point.y - 31 }, { left: point.x < journeyMapWidth / 2 ? Math.min(journeyMapWidth - 162 - 8, point.x + 48) : Math.max(8, point.x - 48 - 162), width: Math.min(162, journeyMapWidth - 16) }, selected && s.journeyMilestoneLabelSelected, milestone.id === 'manuscript-complete' && milestone.status === 'complete' && journeyPopupS.journeyMilestoneLabelCelebration]} accessibilityRole="button">
+            <Text numberOfLines={2} style={s.journeyMilestoneLabelTitle}>{milestone.title}</Text>
             <Text style={[s.journeyMilestoneLabelState, milestone.status === 'complete' ? s.journeyStateComplete : milestone.status === 'current' ? s.journeyStateCurrent : milestone.status === 'locked' ? s.journeyStateLocked : s.journeyStateFuture]}>{stateLabel}</Text>
             <Text style={s.journeyMilestoneLabelMeta}>{milestone.miniCheckpoints.length ? completedChildren + ' of ' + milestone.miniCheckpoints.length + ' steps' : progress + '% complete'}</Text>
           </Pressable>
         </Fragment>;
       })}
-    </View>
 
-    <Modal animationType="slide" visible={detailOpen && Boolean(selectedMilestone && selectedCheckpointProgress)} transparent onRequestClose={closeDetail}>
-      <View style={s.journeyModalShade}><Pressable style={s.journeyModalDismiss} onPress={closeDetail} /><View style={s.journeyDetailSheet}><View style={s.sheetHandle} />
-        <View style={s.journeyDetailHeader}><View style={s.journeyDetailHeaderCopy}><Text style={s.journeySheetEyebrow}>{selectedCheckpoint ? 'STEP DETAIL' : 'MILESTONE DETAIL'}</Text><Text style={s.journeySheetTitle}>{selectedCheckpoint?.title ?? selectedMilestone?.title}</Text>{selectedCheckpoint && <Text style={s.journeyCheckpointParent}>Part of {selectedMilestone?.title}</Text>}</View><Text style={s.journeyDetailPercent}>{selectedCheckpointProgress?.progress ?? 0}%</Text></View>
-        {selectedCheckpoint && <Text style={s.journeyDetailDescription}>{selectedCheckpoint.description ?? 'Continue this step inside ' + selectedMilestone?.title + '.'}</Text>}
-        {!selectedCheckpoint && <Text style={s.journeyDetailDescription}>{selectedMilestone?.detail}</Text>}
-        <View style={s.journeyCheckpointTrack}><View style={[s.journeyCheckpointFill, { width: String(selectedCheckpointProgress?.progress ?? 0) + '%' }]} /></View>
-        <View style={s.journeyDetailStatGrid}><View style={s.journeyDetailStat}><Text style={s.journeyCheckpointMetaLabel}>STATUS</Text><Text style={s.journeyCheckpointMetaValue}>{detailStatus}</Text></View><View style={s.journeyDetailStat}><Text style={s.journeyCheckpointMetaLabel}>TIME LEFT</Text><Text style={s.journeyCheckpointMetaValue}>{selectedCheckpointProgress?.estimateLabel}</Text></View>{selectedCheckpoint && detailPart && <View style={s.journeyDetailStat}><Text style={s.journeyCheckpointMetaLabel}>WORDS</Text><Text style={s.journeyCheckpointMetaValue}>{formatCount(detailPartWords)}{snapshot.targetWords ? ' / ' + formatCount(Math.ceil(snapshot.targetWords / Math.max(1, snapshot.parts.length))) : ''}</Text></View>}{!selectedCheckpoint && selectedMilestone && <View style={s.journeyDetailStat}><Text style={s.journeyCheckpointMetaLabel}>CHILD STEPS</Text><Text style={s.journeyCheckpointMetaValue}>{selectedMilestone.miniCheckpoints.filter((checkpoint) => getJourneyMiniCheckpointProgress(snapshot, selectedMilestone, checkpoint, currentPlan).progress === 100).length} of {selectedMilestone.miniCheckpoints.length}</Text></View>}</View>
-        <Text style={s.journeyDetailRequirement}>{selectedCheckpoint ? selectedCheckpointProgress?.estimateDetail : selectedMilestone?.id === 'book-exported' ? 'Complete the manuscript, review it in Book Studio, and export the finished book.' : 'Completion requirement: ' + selectedMilestone?.detail}</Text>
-        <Pressable onPress={openDetailAction} style={s.journeyDetailAction}><Text style={s.journeyDetailActionText}>{detailActionLabel}</Text><Text style={s.journeyDetailActionArrow}>→</Text></Pressable>
-      </View></View>
-    </Modal>
+    {detailOpen && selectedMilestone && selectedCheckpointProgress && <Animated.View style={[journeyPopupS.journeyInlinePopup, { width: popupWidth, left: popupLeft, top: popupTop, opacity: detailAnimation, transform: [{ scale: detailAnimation.interpolate({ inputRange: [0, 1], outputRange: [0.96, 1] }) }] }, selectedMilestone.id === 'manuscript-complete' && selectedMilestone.status === 'complete' && journeyPopupS.journeyInlinePopupCelebration]}><Pressable onPress={closeDetail} style={journeyPopupS.journeyInlinePopupClose} accessibilityLabel="Close checkpoint details"><Text style={journeyPopupS.journeyInlinePopupCloseText}>×</Text></Pressable>{selectedMilestone.id === 'manuscript-complete' && selectedMilestone.status === 'complete' && <Text style={journeyPopupS.journeyInlinePopupCelebrationLabel}>✦  BOOK COMPLETE  ✦</Text>}<Text style={journeyPopupS.journeyInlinePopupEyebrow}>{selectedCheckpoint ? 'MINI CHECKPOINT' : 'MAIN CHECKPOINT'} · {detailStatus.toUpperCase()}</Text><Text numberOfLines={3} style={journeyPopupS.journeyInlinePopupTitle}>{selectedCheckpoint?.title ?? selectedMilestone.title}</Text>{selectedCheckpoint && <Text style={journeyPopupS.journeyInlinePopupParent}>Part of {selectedMilestone.title}</Text>}<Text numberOfLines={4} style={journeyPopupS.journeyInlinePopupDescription}>{selectedCheckpoint?.description ?? selectedMilestone.detail}</Text>{detailCompletedAt && <Text style={journeyPopupS.journeyInlinePopupCompletedAt}>Completed {new Date(detailCompletedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</Text>}<View style={journeyPopupS.journeyInlinePopupProgressRow}><Text style={journeyPopupS.journeyInlinePopupProgress}>{selectedCheckpointProgress.progress}%</Text><View style={journeyPopupS.journeyInlinePopupTime}><Text style={journeyPopupS.journeyInlinePopupTimeLabel}>ESTIMATED TIME</Text><Text style={journeyPopupS.journeyInlinePopupTimeValue}>{selectedCheckpoint?.estimatedTime ?? selectedCheckpointProgress.estimateLabel}</Text></View></View><View style={s.journeyCheckpointTrack}><View style={[s.journeyCheckpointFill, { width: String(selectedCheckpointProgress.progress) + '%' }]} /></View>{selectedCheckpointProgress.progress === 100 && <Pressable onPress={replaySelectedCelebration} style={journeyPopupS.journeyInlinePopupReplay}><Text style={journeyPopupS.journeyInlinePopupReplayText}>Replay celebration</Text></Pressable>}<Pressable onPress={openDetailAction} style={journeyPopupS.journeyInlinePopupAction}><Text style={journeyPopupS.journeyInlinePopupActionText}>{detailActionLabel}</Text><Text style={journeyPopupS.journeyInlinePopupActionArrow}>→</Text></Pressable></Animated.View>}
+
+    </View>
 
     <Modal animationType="slide" visible={selectorOpen} transparent onRequestClose={() => setSelectorOpen(false)}>
       <View style={s.journeyModalShade}><Pressable style={s.journeyModalDismiss} onPress={() => setSelectorOpen(false)} /><View style={s.journeySelectorSheet}><View style={s.sheetHandle} /><Text style={s.journeySheetEyebrow}>YOUR BOOKS</Text><Text style={s.journeySheetTitle}>Choose a journey</Text><Text style={s.journeySheetHint}>Each book keeps its own path and progress.</Text>{projects.map((project) => { const projectSnapshot = getJourneySnapshot(project); return <Pressable key={project.title} onPress={() => chooseProject(project)} style={[s.journeyBookRow, project.title === activeProject && s.journeyBookRowActive]}><View style={[s.journeyBookMark, { backgroundColor: project.color }]}><Text style={s.journeyBookMarkText}>{project.mark}</Text></View><View style={s.journeyBookRowCopy}><Text numberOfLines={1} style={s.journeyBookRowTitle}>{project.title}</Text><Text style={s.journeyBookRowMeta}>{projectSnapshot.stage} · {projectSnapshot.progressPercent}% complete</Text><Text style={s.journeyBookRowEdited}>Last edited · {formatLastEdited(project.updatedAt)}</Text></View>{project.title === activeProject && <Text style={s.journeyBookRowCheck}>✓</Text>}</Pressable>; })}</View></View>
@@ -3693,25 +3988,78 @@ function BookStudio({ projects, project, initialSection, onBack, onPage, onSelec
 type LegalDocument = 'privacy' | 'terms';
 type AccountAction = 'logout' | 'delete';
 type ProfileReminder = { id: string; label: string; time: string; days: number[]; enabled: boolean };
+type ProfileFeedbackType = 'recommendation' | 'suggestion';
 
-function Profile({ projects, onLogout, onDeleteAccount }: { projects: Project[]; onLogout: () => void; onDeleteAccount: () => void }) {
-  const [reminders, setReminders] = useState(true); const [cloud, setCloud] = useState(true);
+function Profile({ projects, onLogout, onDeleteAccount, cloudSyncState, cloudConflictCount, cloudBackupEnabled, onCloudBackupChange, onSyncNow, onReviewConflicts, onPage, onOpenBookStudio }: { projects: Project[]; onLogout: () => void; onDeleteAccount: () => void; cloudSyncState: 'saved' | 'saving' | 'offline' | 'paused' | 'error' | 'conflict'; cloudConflictCount: number; cloudBackupEnabled: boolean; onCloudBackupChange: (enabled: boolean) => void; onSyncNow: () => void; onReviewConflicts: () => void; onPage: (page: Page) => void; onOpenBookStudio: (title: string, section: StudioSection) => void }) {
+  const [reminders, setReminders] = useState(true);
   const [notificationPanelOpen, setNotificationPanelOpen] = useState(false);
   const [expandedReminderId, setExpandedReminderId] = useState('weekday-writing');
   const [profileReminders, setProfileReminders] = useState<ProfileReminder[]>([{ id: 'weekday-writing', label: 'Writing session', time: '7:00 PM', days: [1, 2, 3, 4, 5], enabled: true }]);
   const [legalDocument, setLegalDocument] = useState<LegalDocument | null>(null);
   const [accountAction, setAccountAction] = useState<AccountAction | null>(null);
+  const [authOpen, setAuthOpen] = useState(false);
+  const [cloudEmail, setCloudEmail] = useState<string | null>(null);
+  const [cloudProfile, setCloudProfile] = useState<{ id: string; displayName: string; createdAt: string | null } | null>(null);
+  const [profileEditOpen, setProfileEditOpen] = useState(false);
+  const [profileNameDraft, setProfileNameDraft] = useState('');
+  const [profileSaveBusy, setProfileSaveBusy] = useState(false);
+  const [profileSaveError, setProfileSaveError] = useState('');
+  const [aboutOpen, setAboutOpen] = useState(false);
+  const [storageDetailsOpen, setStorageDetailsOpen] = useState(false);
+  const [storageDetailsBusy, setStorageDetailsBusy] = useState(false);
+  const [storageDetailsError, setStorageDetailsError] = useState('');
+  const [cloudStorageSummary, setCloudStorageSummary] = useState<import('./src/lib/bookez-sync').BookezStorageSummary | null>(null);
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const [feedbackType, setFeedbackType] = useState<ProfileFeedbackType>('recommendation');
+  const [feedbackText, setFeedbackText] = useState('');
+  const [feedbackSubmitted, setFeedbackSubmitted] = useState(false);
   const isPrivacy = legalDocument === 'privacy';
   const dayLabels = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
   const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-  const earnedBadges = getWriterAchievements(projects).filter((achievement) => achievement.completed).reverse();
-  const badgePageSize = 3;
-  const badgePageCount = Math.max(1, Math.ceil(earnedBadges.length / badgePageSize));
-  const [badgePage, setBadgePage] = useState(0);
-  const visibleBadges = earnedBadges.slice(badgePage * badgePageSize, (badgePage + 1) * badgePageSize);
+  const activeProject = projects[0];
+  const defaultGoal = activeProject?.plan?.targetWords ? `${formatCount(Number.parseInt(activeProject.plan.targetWords, 10) || 0)} words` : 'Set in Plan';
+  const profileDisplayName = cloudProfile?.displayName.trim() || (cloudEmail ? 'Bookez writer' : 'Local writer');
+  const profileInitials = profileDisplayName.split(/\s+/).filter(Boolean).slice(0, 2).map((word) => word[0]?.toUpperCase()).join('') || 'W';
+  const memberSince = cloudProfile?.createdAt ? `Member since ${new Date(cloudProfile.createdAt).toLocaleDateString(undefined, { month: 'short', year: 'numeric' })}` : cloudEmail ? 'Bookez cloud member' : 'Writing locally on this device';
+  const localStorageSummary = useMemo(() => {
+    const activeProjects = projects.filter((project) => !project.deletedAt);
+    const drafts = activeProjects.flatMap((project) => Object.values(project.plan.drafts).filter((draft) => draft.trim()));
+    return { projects: activeProjects.length, chapters: drafts.length, words: drafts.reduce((total, draft) => total + countWords(draft), 0) };
+  }, [projects]);
   useEffect(() => {
-    setBadgePage((currentPage) => Math.min(currentPage, badgePageCount - 1));
-  }, [badgePageCount]);
+    const applySession = (session: { user?: { id: string; email?: string | null; user_metadata?: { display_name?: string | null }; created_at?: string } } | null) => {
+      const user = session?.user;
+      setCloudEmail(user?.email ?? null);
+      setCloudProfile(user ? { id: user.id, displayName: user.user_metadata?.display_name?.trim() ?? '', createdAt: user.created_at ?? null } : null);
+    };
+    supabase.auth.getSession().then(({ data: { session } }) => applySession(session));
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => applySession(session));
+    return () => subscription.unsubscribe();
+  }, []);
+
+  const openProfileEditor = () => {
+    if (!cloudProfile) { setAuthOpen(true); return; }
+    setProfileNameDraft(cloudProfile.displayName);
+    setProfileSaveError('');
+    setProfileEditOpen(true);
+  };
+  const saveProfileName = async () => {
+    if (!cloudProfile) return;
+    setProfileSaveBusy(true); setProfileSaveError('');
+    const displayName = profileNameDraft.trim();
+    try {
+      const authResult = await supabase.auth.updateUser({ data: { display_name: displayName || null } });
+      if (authResult.error) throw authResult.error;
+      const profileResult = await supabase.from('profiles').update({ display_name: displayName || null }).eq('user_id', cloudProfile.id);
+      if (profileResult.error) throw profileResult.error;
+      setCloudProfile({ ...cloudProfile, displayName });
+      setProfileEditOpen(false);
+    } catch (caught) {
+      setProfileSaveError(caught instanceof Error ? caught.message : 'We could not save your profile right now.');
+    } finally {
+      setProfileSaveBusy(false);
+    }
+  };
 
   const updateProfileReminder = (id: string, changes: Partial<ProfileReminder>) => setProfileReminders((current) => current.map((reminder) => reminder.id === id ? { ...reminder, ...changes } : reminder));
   const toggleProfileReminderDay = (id: string, day: number) => setProfileReminders((current) => current.map((reminder) => {
@@ -3732,6 +4080,16 @@ function Profile({ projects, onLogout, onDeleteAccount }: { projects: Project[];
     if (expandedReminderId === id) setExpandedReminderId('');
   };
 
+  const openFeedback = () => {
+    setFeedbackSubmitted(false);
+    setFeedbackText('');
+    setFeedbackOpen(true);
+  };
+  const submitFeedback = () => {
+    if (!feedbackText.trim()) return;
+    setFeedbackSubmitted(true);
+  };
+
   const confirmAccountAction = () => {
     const action = accountAction;
     setAccountAction(null);
@@ -3739,14 +4097,48 @@ function Profile({ projects, onLogout, onDeleteAccount }: { projects: Project[];
     if (action === 'delete') onDeleteAccount();
   };
 
-  return <><View style={s.profileTop}><View style={s.profileAvatar}><Text style={s.profileAvatarText}>L</Text><View style={s.profileHalo} /></View><Text style={s.profileName}>Lena Morris</Text><Text style={s.profileEmail}>lena@bookez.studio</Text><View style={s.pathfinder}><Text style={s.pathfinderText}>✦ PATHFINDER</Text></View></View>
-    <View style={s.profileBadgesCard}><View style={s.profileBadgesHeader}><View><Text style={s.profileBadgesEyebrow}>BADGES EARNED</Text><Text style={s.profileBadgesTitle}>Your writing wins</Text></View><Text style={s.profileBadgesCount}>{earnedBadges.length ? `${earnedBadges.length} earned` : 'Keep writing'}</Text></View>{earnedBadges.length ? <><View style={s.profileBadgesRow}>{visibleBadges.map((achievement) => <View key={achievement.id} style={s.profileBadge}><View style={s.profileBadgeIcon}><Text style={s.profileBadgeIconText}>{achievement.icon}</Text></View><Text numberOfLines={2} style={s.profileBadgeTitle}>{achievement.title}</Text></View>)}</View><PaginationControls page={badgePage} pageCount={badgePageCount} onPageChange={setBadgePage} /></> : <Text style={s.profileBadgesEmpty}>Your first milestone will become a badge here.</Text>}</View>
-    <Text style={s.preferenceTitle}>Your space</Text>
-    <View style={s.preferences}><View style={s.prefRow}><View><Text style={s.prefTitle}>Writing reminders</Text><Text style={s.prefSub}>A gentle nudge each evening</Text></View><Switch value={reminders} onValueChange={setReminders} trackColor={{ false: '#D7D9E6', true: '#BAB6F1' }} thumbColor={reminders ? C.periwinkle : '#FFF'} /></View><View style={s.prefLine} /><View style={s.prefRow}><View><Text style={s.prefTitle}>Cloud backup</Text><Text style={s.prefSub}>Keep every chapter safe</Text></View><Switch value={cloud} onValueChange={setCloud} trackColor={{ false: '#D7D9E6', true: '#B7DAB9' }} thumbColor={cloud ? '#75AF80' : '#FFF'} /></View></View>
+  const openStorageDetails = async () => {
+    setStorageDetailsOpen(true);
+    setStorageDetailsError('');
+    if (!cloudEmail) return;
+    setStorageDetailsBusy(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error('Sign in to compare your local and cloud storage.');
+      setCloudStorageSummary(await getBookezStorageSummary(session.user.id));
+    } catch (caught) {
+      setStorageDetailsError(caught instanceof Error ? caught.message : 'We could not load your cloud storage yet.');
+    } finally {
+      setStorageDetailsBusy(false);
+    }
+  };
+
+  return <><View style={s.profileHero}><View style={s.profileHeroIdentity}><View style={[s.profileAvatar, s.profileAvatarCompact]}><Text style={[s.profileAvatarText, s.profileAvatarTextCompact]}>{profileInitials}</Text><View style={[s.profileHalo, s.profileHaloCompact]} /></View><View style={s.profileHeroCopy}><Text style={s.profileOverline}>BOOKEZ WRITER</Text><Text numberOfLines={1} style={[s.profileName, s.profileNameInHero]}>{profileDisplayName}</Text><Text numberOfLines={2} style={s.profileEmail}>{cloudEmail ?? 'Sign in to sync your writing across devices'}</Text><Text style={s.profileMemberSince}>{memberSince}</Text></View></View><Pressable onPress={openProfileEditor} style={s.profileEditButton} accessibilityRole="button" accessibilityLabel={cloudProfile ? 'Edit profile' : 'Sign in to sync your writing'}><Text style={s.profileEditButtonText}>{cloudProfile ? 'Edit profile' : 'Sign in to sync'}</Text></Pressable></View>
+    <Text style={s.preferenceTitle}>Cloud Sync</Text>
+    <View style={syncS.card}>
+      <View style={syncS.cardHeader}><View style={syncS.cardIcon}><Text style={syncS.cardIconText}>☁</Text></View><View style={syncS.cardHeaderCopy}><Text style={syncS.cardKicker}>TWO SAFE COPIES</Text><Text style={syncS.cardTitle}>Your writing, wherever you are.</Text><Text style={syncS.cardDescription}>Bookez saves on this device first. When you’re signed in and backup is on, it sends a private copy to your Bookez cloud account.</Text></View></View><View style={syncS.backupToggleRow}><View style={syncS.backupToggleCopy}><Text style={syncS.backupToggleTitle}>Cloud backup</Text><Text style={syncS.backupToggleDescription}>{cloudBackupEnabled ? 'Automatically keep a private cloud copy.' : 'Paused — writing stays on this device.'}</Text></View><Switch value={cloudBackupEnabled} onValueChange={onCloudBackupChange} trackColor={{ false: '#D7D9E6', true: '#B7DAB9' }} thumbColor={cloudBackupEnabled ? '#75AF80' : '#FFF'} accessibilityLabel="Cloud backup" /></View>
+      <View style={syncS.storagePreview}><View style={syncS.storagePreviewItem}><Text style={syncS.storagePreviewLabel}>THIS DEVICE</Text><Text style={syncS.storagePreviewValue}>{localStorageSummary.projects} project{localStorageSummary.projects === 1 ? '' : 's'}</Text><Text style={syncS.storagePreviewMeta}>{localStorageSummary.chapters} drafted part{localStorageSummary.chapters === 1 ? '' : 's'} · {formatCount(localStorageSummary.words)} words</Text></View><View style={syncS.storagePreviewDivider} /><View style={syncS.storagePreviewItem}><Text style={syncS.storagePreviewLabel}>BOOKEZ CLOUD</Text><Text style={syncS.storagePreviewValue}>{cloudEmail ? cloudStorageSummary ? cloudStorageSummary.projects + ' project' + (cloudStorageSummary.projects === 1 ? '' : 's') : 'Tap View storage to check' : 'Not connected'}</Text><Text style={syncS.storagePreviewMeta}>{cloudEmail ? cloudStorageSummary ? cloudStorageSummary.chapters + ' drafted part' + (cloudStorageSummary.chapters === 1 ? '' : 's') + ' · ' + formatCount(cloudStorageSummary.words) + ' words' : 'Private copy available after sign-in' : 'Sign in to create a copy'}</Text></View></View>
+      <View style={s.prefLine} />
+      <View style={s.settingsRow}><View style={s.settingsRowCopy}><View style={[s.settingsIcon, cloudEmail ? s.settingsIconSage : s.settingsIconBlue]}><Text style={s.settingsIconText}>{cloudEmail ? '✓' : '↗'}</Text></View><View><Text style={s.settingsText}>{cloudEmail ? 'Cloud account connected' : 'Sign in to sync your writing'}</Text><Text style={s.settingsSub}>{cloudEmail ? cloudSyncState === 'saving' ? 'Syncing changes…' : cloudSyncState === 'conflict' ? cloudConflictCount + ' conflict' + (cloudConflictCount === 1 ? '' : 's') + ' needs review' : cloudSyncState === 'error' ? 'Sync paused — tap to retry' : cloudSyncState === 'paused' ? 'Cloud backup is paused' : cloudSyncState === 'offline' ? 'Offline — changes stay on this device' : 'Synced securely to Bookez cloud' : 'Keep projects safe across devices'}</Text></View></View></View>
+      <View style={syncS.actionRow}><Pressable onPress={openStorageDetails} style={syncS.secondaryAction} accessibilityRole="button"><Text style={syncS.secondaryActionText}>View storage</Text><Text style={syncS.secondaryActionArrow}>⌁</Text></Pressable><Pressable onPress={onSyncNow} disabled={!cloudEmail || !cloudBackupEnabled || cloudSyncState === 'saving'} style={[syncS.nowButton, (!cloudEmail || !cloudBackupEnabled || cloudSyncState === 'saving') && syncS.nowButtonDisabled]}><Text style={syncS.nowButtonText}>{cloudSyncState === 'saving' ? 'Syncing…' : cloudBackupEnabled ? 'Sync now' : 'Backup paused'}</Text></Pressable>{cloudConflictCount > 0 && <Pressable onPress={onReviewConflicts} style={syncS.accountButton}><Text style={syncS.accountButtonText}>Review conflicts</Text><Text style={syncS.accountArrow}>›</Text></Pressable>}<Pressable onPress={() => setAuthOpen(true)} style={syncS.accountButton}><Text style={syncS.accountButtonText}>{cloudEmail ? 'Manage account' : 'Sign in or create account'}</Text><Text style={syncS.accountArrow}>›</Text></Pressable></View>
+    </View>
+    <Modal animationType="slide" visible={storageDetailsOpen} transparent onRequestClose={() => setStorageDetailsOpen(false)}>
+      <View style={syncS.modalShade}><Pressable style={syncS.modalDismiss} onPress={() => setStorageDetailsOpen(false)} /><View style={syncS.storageSheet}><View style={s.sheetHandle} /><View style={syncS.storageHeader}><View style={syncS.storageHeaderCopy}><Text style={syncS.cardKicker}>STORAGE OVERVIEW</Text><Text style={syncS.storageTitle}>Where your writing lives</Text></View><Pressable onPress={() => setStorageDetailsOpen(false)} style={syncS.storageClose} accessibilityLabel="Close storage overview"><Text style={syncS.storageCloseText}>×</Text></Pressable></View><Text style={syncS.storageDescription}>Your device is the first place Bookez saves. Cloud backup creates a private copy for this account so you can keep writing across devices.</Text><View style={syncS.comparisonRow}><View style={syncS.comparisonCard}><View style={syncS.comparisonIcon}><Text style={syncS.comparisonIconText}>⌂</Text></View><Text style={syncS.comparisonLabel}>THIS DEVICE</Text><Text style={syncS.comparisonValue}>{localStorageSummary.projects}</Text><Text style={syncS.comparisonMeta}>project{localStorageSummary.projects === 1 ? '' : 's'}</Text><Text style={syncS.comparisonDetail}>{localStorageSummary.chapters} drafted part{localStorageSummary.chapters === 1 ? '' : 's'} · {formatCount(localStorageSummary.words)} words</Text><Text style={syncS.comparisonStatus}>Always available offline</Text></View><View style={[syncS.comparisonCard, syncS.comparisonCardCloud]}><View style={[syncS.comparisonIcon, syncS.comparisonIconCloud]}><Text style={[syncS.comparisonIconText, syncS.comparisonIconTextCloud]}>☁</Text></View><Text style={syncS.comparisonLabel}>BOOKEZ CLOUD</Text>{storageDetailsBusy ? <Text style={syncS.loadingText}>Checking…</Text> : cloudStorageSummary ? <><Text style={syncS.comparisonValue}>{cloudStorageSummary.projects}</Text><Text style={syncS.comparisonMeta}>project{cloudStorageSummary.projects === 1 ? '' : 's'}</Text><Text style={syncS.comparisonDetail}>{cloudStorageSummary.chapters} drafted part{cloudStorageSummary.chapters === 1 ? '' : 's'} · {formatCount(cloudStorageSummary.words)} words</Text><Text style={syncS.comparisonStatus}>Private copy on your account</Text></> : <Text style={syncS.cloudEmptyText}>{cloudEmail ? 'Tap Refresh to check your cloud copy.' : 'Sign in to create a private cloud copy.'}</Text>}</View></View>{storageDetailsError ? <Text style={syncS.storageError}>{storageDetailsError}</Text> : null}<View style={syncS.storageNote}><Text style={syncS.storageNoteIcon}>i</Text><Text style={syncS.storageNoteText}>{cloudSyncState === 'saving' ? 'Sync is in progress. Keep this screen open if you want to watch it finish.' : cloudSyncState === 'offline' ? 'You’re offline. Local changes stay safe here and will sync when you’re connected.' : cloudSyncState === 'paused' ? 'Cloud backup is paused. Your local writing remains available on this device.' : 'Sync sends changes from this device to your private Bookez cloud copy.'}</Text></View><View style={syncS.storageActions}><Pressable onPress={openStorageDetails} disabled={storageDetailsBusy} style={syncS.refreshButton}><Text style={syncS.refreshButtonText}>{storageDetailsBusy ? 'Checking…' : 'Refresh cloud details'}</Text></Pressable><Pressable onPress={onSyncNow} disabled={!cloudEmail || !cloudBackupEnabled || cloudSyncState === 'saving'} style={[syncS.modalSyncButton, (!cloudEmail || !cloudBackupEnabled || cloudSyncState === 'saving') && syncS.nowButtonDisabled]}><Text style={syncS.modalSyncButtonText}>{cloudSyncState === 'saving' ? 'Syncing…' : 'Sync now'}</Text><Text style={syncS.modalSyncButtonArrow}>→</Text></Pressable></View><Pressable onPress={() => setStorageDetailsOpen(false)} style={syncS.doneButton}><Text style={syncS.doneButtonText}>Done</Text></Pressable></View></View>
+    </Modal>
     <Text style={s.preferenceTitle}>Notifications</Text>
     <View style={s.notificationPanel}>
       <Pressable onPress={() => setNotificationPanelOpen(!notificationPanelOpen)} style={s.notificationPanelHeader} accessibilityRole="button" accessibilityLabel={notificationPanelOpen ? 'Close notification controls' : 'Open notification controls'}><View style={s.notificationBell}><Text style={s.notificationBellText}>◷</Text></View><View style={s.notificationHeaderCopy}><Text style={s.notificationTitle}>Writing reminders</Text><Text style={s.notificationSub}>{profileReminders.length} reminder{profileReminders.length === 1 ? '' : 's'} · choose your days and times</Text></View><Switch value={reminders} onValueChange={(value) => { setReminders(value); if (value) setNotificationPanelOpen(true); }} trackColor={{ false: '#D7D9E6', true: '#BAB6F1' }} thumbColor={reminders ? C.periwinkle : '#FFF'} /></Pressable>
       {notificationPanelOpen && <View style={s.notificationPanelBody}><Text style={s.notificationPanelHint}>Make the rhythm fit your week. Add as many reminders as you need.</Text>{reminders ? profileReminders.map((reminder) => { const expanded = expandedReminderId === reminder.id; return <View key={reminder.id} style={[s.notificationReminder, expanded && s.notificationReminderExpanded]}><Pressable onPress={() => setExpandedReminderId(expanded ? '' : reminder.id)} style={s.notificationReminderSummary} accessibilityRole="button" accessibilityLabel={`${reminder.label}, ${reminder.time}`}><View style={[s.notificationReminderIcon, reminder.enabled && s.notificationReminderIconActive]}><Text style={s.notificationReminderIconText}>◷</Text></View><View style={s.notificationReminderCopy}><Text numberOfLines={1} style={s.notificationReminderLabel}>{reminder.label || 'Untitled reminder'}</Text><Text style={s.notificationReminderMeta}>{reminder.time} · {reminder.days.length === 7 ? 'Every day' : reminder.days.map((day) => dayLabels[day]).join('')}</Text></View><Switch value={reminder.enabled} onValueChange={(value) => updateProfileReminder(reminder.id, { enabled: value })} trackColor={{ false: '#D7D9E6', true: '#BAB6F1' }} thumbColor={reminder.enabled ? C.periwinkle : '#FFF'} /><Text style={s.notificationReminderChevron}>{expanded ? '⌃' : '⌄'}</Text></Pressable>{expanded && <View style={s.notificationReminderEditor}><Text style={s.notificationFieldLabel}>REMINDER NAME</Text><TextInput value={reminder.label} onChangeText={(value) => updateProfileReminder(reminder.id, { label: value })} placeholder="Writing session" placeholderTextColor="#A0A3BB" style={s.notificationInput} accessibilityLabel="Reminder name" /><Text style={s.notificationFieldLabel}>TIME</Text><TextInput value={reminder.time} onChangeText={(value) => updateProfileReminder(reminder.id, { time: value })} placeholder="e.g. 7:00 PM" placeholderTextColor="#A0A3BB" style={s.notificationInput} accessibilityLabel="Reminder time" /><Text style={s.notificationFieldLabel}>DAYS OF THE WEEK</Text><View style={s.notificationDaysRow}>{dayLabels.map((label, day) => <Pressable key={`${reminder.id}-${day}`} onPress={() => toggleProfileReminderDay(reminder.id, day)} style={[s.notificationDay, reminder.days.includes(day) && s.notificationDayActive]} accessibilityLabel={`${reminder.days.includes(day) ? 'Remove' : 'Add'} ${dayNames[day]}`}><Text style={[s.notificationDayText, reminder.days.includes(day) && s.notificationDayTextActive]}>{label}</Text></Pressable>)}</View><View style={s.notificationReminderActions}><Text style={s.notificationReminderDaysHint}>{reminder.days.length ? reminder.days.length === 7 ? 'Every day' : `${reminder.days.length} days selected` : 'Choose at least one day'}</Text><Pressable onPress={() => removeProfileReminder(reminder.id)} style={s.notificationRemoveButton}><Text style={s.notificationRemoveText}>Remove</Text></Pressable></View></View>}</View>; }) : <Text style={s.notificationDisabledCopy}>Reminders are paused. Turn them on whenever you want a gentle nudge.</Text>}<Pressable onPress={addProfileReminder} style={s.notificationAddButton} accessibilityRole="button"><Text style={s.notificationAddIcon}>＋</Text><Text style={s.notificationAddText}>Add another reminder</Text></Pressable></View>}
+    </View>
+    <Text style={s.preferenceTitle}>Share your thoughts</Text>
+    <View style={feedbackS.card}><View style={feedbackS.cardHeader}><View style={feedbackS.icon}><Text style={feedbackS.iconText}>✦</Text></View><View style={feedbackS.copy}><Text style={feedbackS.eyebrow}>FOR THE CREATOR</Text><Text style={feedbackS.title}>Help shape Bookez</Text><Text style={feedbackS.description}>Have a recommendation, idea, or small thing that would make writing feel better?</Text></View></View><Pressable onPress={openFeedback} style={feedbackS.button} accessibilityRole="button"><Text style={feedbackS.buttonText}>Share feedback</Text><Text style={feedbackS.buttonArrow}>→</Text></Pressable></View>
+    <Text style={s.preferenceTitle}>Help & information</Text>
+    <View style={s.settingsCard}>
+      <Pressable onPress={openFeedback} style={s.settingsRow} accessibilityRole="button"><View style={s.settingsRowCopy}><View style={[s.settingsIcon, s.settingsIconBlue]}><Text style={s.settingsIconText}>?</Text></View><View><Text style={s.settingsText}>Help & feedback</Text><Text style={s.settingsSub}>Share a question, idea, or recommendation</Text></View></View><Text style={s.chevron}>›</Text></Pressable>
+      <View style={s.prefLine} />
+      <Pressable onPress={() => { setFeedbackType('suggestion'); openFeedback(); }} style={s.settingsRow} accessibilityRole="button"><View style={s.settingsRowCopy}><View style={[s.settingsIcon, s.settingsIconCoral]}><Text style={s.settingsIconText}>!</Text></View><View><Text style={s.settingsText}>Report a problem</Text><Text style={s.settingsSub}>Tell us what got in the way</Text></View></View><Text style={s.chevron}>›</Text></Pressable>
+      <View style={s.prefLine} />
+      <Pressable onPress={() => setAboutOpen(true)} style={s.settingsRow} accessibilityRole="button"><View style={s.settingsRowCopy}><View style={[s.settingsIcon, s.settingsIconSage]}><Text style={s.settingsIconText}>i</Text></View><View><Text style={s.settingsText}>About Bookez</Text><Text style={s.settingsSub}>Version 1.0.0 · a calm place to make things</Text></View></View><Text style={s.chevron}>›</Text></Pressable>
     </View>
     <Text style={s.preferenceTitle}>Privacy & terms</Text>
     <View style={s.settingsCard}>
@@ -3757,11 +4149,15 @@ function Profile({ projects, onLogout, onDeleteAccount }: { projects: Project[];
 
     {__DEV__ && <><Text style={s.preferenceTitle}>Developer</Text><View style={s.settingsCard}><Pressable onPress={() => Sentry.captureException(new Error("Bookez Sentry test"))} style={s.settingsRow} accessibilityRole="button"><View style={s.settingsRowCopy}><View style={[s.settingsIcon, s.settingsIconBlue]}><Text style={s.settingsIconText}>⌁</Text></View><View><Text style={s.settingsText}>Send Sentry test</Text><Text style={s.settingsSub}>Development-only error event</Text></View></View><Text style={s.chevron}>›</Text></Pressable></View></>}
 
-    <Text style={s.preferenceTitle}>Account</Text>
+    <Text style={s.preferenceTitle}>Account & data</Text>
     <View style={s.accountCard}>
-      <Pressable onPress={() => setAccountAction('delete')} style={s.accountActionRow}><View style={[s.settingsIcon, s.settingsIconCoral]}><Text style={s.settingsIconText}>×</Text></View><View style={s.settingsRowCopy}><Text style={s.deleteText}>Delete account</Text><Text style={s.settingsSub}>Permanently remove your account and drafts</Text></View><Text style={s.chevron}>›</Text></Pressable>
+      <Pressable onPress={() => activeProject && onOpenBookStudio(activeProject.title, 'export')} style={s.accountActionRow} accessibilityRole="button" accessibilityState={{ disabled: !activeProject }}><View style={[s.settingsIcon, s.settingsIconBlue]}><Text style={s.settingsIconText}>↗</Text></View><View style={s.accountActionCopy}><Text numberOfLines={1} style={s.settingsText}>Export my writing</Text><Text numberOfLines={2} style={s.settingsSub}>{activeProject ? 'Open Book Studio to assemble and export your book' : 'Add a project to export writing'}</Text></View><Text style={s.chevron}>›</Text></Pressable>
       <View style={s.prefLine} />
-      <Pressable onPress={() => setAccountAction('logout')} style={s.accountActionRow}><View style={[s.settingsIcon, s.settingsIconSage]}><Text style={s.settingsIconText}>↗</Text></View><View style={s.settingsRowCopy}><Text style={s.settingsText}>Log out</Text><Text style={s.settingsSub}>Pause here and come back anytime</Text></View><Text style={s.chevron}>›</Text></Pressable>
+      <Pressable onPress={() => setAuthOpen(true)} style={s.accountActionRow} accessibilityRole="button"><View style={[s.settingsIcon, s.settingsIconSage]}><Text style={s.settingsIconText}>◎</Text></View><View style={s.accountActionCopy}><Text numberOfLines={1} style={s.settingsText}>Account management</Text><Text numberOfLines={2} style={s.settingsSub}>{cloudEmail ? 'Manage your shared CityPeak sign-in' : 'Connect or manage your Bookez cloud account'}</Text></View><Text style={s.chevron}>›</Text></Pressable>
+      <View style={s.prefLine} />
+      <Pressable onPress={() => setAccountAction('delete')} style={s.accountActionRow}><View style={[s.settingsIcon, s.settingsIconCoral]}><Text style={s.settingsIconText}>×</Text></View><View style={s.accountActionCopy}><Text numberOfLines={1} style={s.deleteText}>Delete Bookez data</Text><Text numberOfLines={2} style={s.settingsSub}>Remove Bookez projects and drafts only</Text></View><Text style={s.chevron}>›</Text></Pressable>
+      <View style={s.prefLine} />
+      <Pressable onPress={() => setAccountAction('logout')} style={s.accountActionRow}><View style={[s.settingsIcon, s.settingsIconSage]}><Text style={s.settingsIconText}>↗</Text></View><View style={s.accountActionCopy}><Text numberOfLines={1} style={s.settingsText}>Log out</Text><Text numberOfLines={2} style={s.settingsSub}>Pause here and come back anytime</Text></View><Text style={s.chevron}>›</Text></Pressable>
     </View>
     <Text style={s.profileFootnote}>You stay in control of your words, always.</Text>
 
@@ -3773,9 +4169,107 @@ function Profile({ projects, onLogout, onDeleteAccount }: { projects: Project[];
     </Modal>
 
     <Modal animationType="fade" visible={accountAction !== null} transparent onRequestClose={() => setAccountAction(null)}>
-      <View style={s.profileModalShade}><Pressable style={s.profileModalDismiss} onPress={() => setAccountAction(null)} /><View style={s.confirmSheet}><View style={[s.confirmIcon, accountAction === 'delete' ? s.confirmIconDelete : s.confirmIconLogout]}><Text style={s.confirmIconText}>{accountAction === 'delete' ? '×' : '↗'}</Text></View><Text style={s.confirmTitle}>{accountAction === 'delete' ? 'Delete your account?' : 'Log out of Bookez?'}</Text><Text style={s.confirmCopy}>{accountAction === 'delete' ? 'This removes your account and all saved drafts. This action cannot be undone.' : 'Your projects will stay safe. You can sign back in whenever you are ready to write.'}</Text><Pressable onPress={confirmAccountAction} style={[s.confirmButton, accountAction === 'delete' && s.confirmButtonDelete]}><Text style={s.confirmButtonText}>{accountAction === 'delete' ? 'Delete account' : 'Log out'}</Text></Pressable><Pressable onPress={() => setAccountAction(null)} style={s.cancelButton}><Text style={s.cancelButtonText}>Keep my account</Text></Pressable></View></View>
+      <View style={s.profileModalShade}><Pressable style={s.profileModalDismiss} onPress={() => setAccountAction(null)} /><View style={s.confirmSheet}><View style={[s.confirmIcon, accountAction === 'delete' ? s.confirmIconDelete : s.confirmIconLogout]}><Text style={s.confirmIconText}>{accountAction === 'delete' ? '×' : '↗'}</Text></View><Text style={s.confirmTitle}>{accountAction === 'delete' ? 'Delete Bookez data?' : 'Log out of Bookez?'}</Text><Text style={s.confirmCopy}>{accountAction === 'delete' ? 'This removes your Bookez projects and drafts only. It does not delete your shared CityPeak account.' : 'Your projects will stay safe. You can sign back in whenever you are ready to write.'}</Text><Pressable onPress={confirmAccountAction} style={[s.confirmButton, accountAction === 'delete' && s.confirmButtonDelete]}><Text style={s.confirmButtonText}>{accountAction === 'delete' ? 'Delete Bookez data' : 'Log out'}</Text></Pressable><Pressable onPress={() => setAccountAction(null)} style={s.cancelButton}><Text style={s.cancelButtonText}>Keep my account</Text></Pressable></View></View>
+    </Modal>
+
+    <Modal animationType="slide" visible={profileEditOpen} transparent onRequestClose={() => setProfileEditOpen(false)}>
+      <View style={s.profileModalShade}><Pressable style={s.profileModalDismiss} onPress={() => setProfileEditOpen(false)} /><View style={s.profileEditSheet}><View style={s.sheetHandle} /><Text style={s.legalOverline}>YOUR BOOKEZ PROFILE</Text><Text style={s.profileEditTitle}>Make it yours.</Text><Text style={s.profileEditCopy}>Your display name appears on this device and in your Bookez cloud profile.</Text><TextInput value={profileNameDraft} onChangeText={setProfileNameDraft} placeholder="Display name" placeholderTextColor="#9A9DB7" style={s.profileEditInput} autoCapitalize="words" accessibilityLabel="Display name" />{profileSaveError ? <Text style={s.profileEditError}>{profileSaveError}</Text> : null}<Pressable onPress={saveProfileName} disabled={profileSaveBusy} style={[s.confirmButton, profileSaveBusy && s.profileSaveDisabled]}><Text style={s.confirmButtonText}>{profileSaveBusy ? 'Saving…' : 'Save profile'}</Text></Pressable><Pressable onPress={() => setProfileEditOpen(false)} style={s.cancelButton}><Text style={s.cancelButtonText}>Cancel</Text></Pressable></View></View>
+    </Modal>
+
+    <Modal animationType="fade" visible={aboutOpen} transparent onRequestClose={() => setAboutOpen(false)}>
+      <View style={s.profileModalShade}><Pressable style={s.profileModalDismiss} onPress={() => setAboutOpen(false)} /><View style={s.confirmSheet}><View style={[s.confirmIcon, s.confirmIconLogout]}><Text style={s.confirmIconText}>✦</Text></View><Text style={s.confirmTitle}>Bookez</Text><Text style={s.confirmCopy}>A thoughtful writing space for planning, drafting, and finishing one meaningful piece at a time.</Text><Text style={s.aboutVersion}>Version 1.0.0</Text><Pressable onPress={() => setAboutOpen(false)} style={s.confirmButton}><Text style={s.confirmButtonText}>Done</Text></Pressable></View></View>
+    </Modal>
+
+    <AuthSheet visible={authOpen} onClose={() => setAuthOpen(false)} signedInEmail={cloudEmail} />
+
+    <Modal animationType="slide" visible={feedbackOpen} transparent onRequestClose={() => setFeedbackOpen(false)}>
+      <View style={feedbackS.shade}><Pressable style={feedbackS.dismiss} onPress={() => setFeedbackOpen(false)} /><View style={feedbackS.sheet}><View style={s.sheetHandle} />{feedbackSubmitted ? <View style={feedbackS.success}><View style={feedbackS.successIcon}><Text style={feedbackS.successIconText}>✓</Text></View><Text style={feedbackS.successTitle}>Thank you for helping shape Bookez.</Text><Text style={feedbackS.successCopy}>Your note has been saved for this session.</Text><Pressable onPress={() => setFeedbackOpen(false)} style={feedbackS.button}><Text style={feedbackS.buttonText}>Done</Text><Text style={feedbackS.buttonArrow}>→</Text></Pressable></View> : <><Text style={feedbackS.modalEyebrow}>A NOTE FOR THE CREATOR</Text><Text style={feedbackS.modalTitle}>What would make Bookez better?</Text><Text style={feedbackS.modalCopy}>A quick recommendation or an honest thought helps guide what comes next.</Text><View style={feedbackS.choiceRow}><Pressable onPress={() => setFeedbackType('recommendation')} style={[feedbackS.choice, feedbackType === 'recommendation' && feedbackS.choiceSelected]}><Text style={[feedbackS.choiceText, feedbackType === 'recommendation' && feedbackS.choiceTextSelected]}>I recommend it</Text></Pressable><Pressable onPress={() => setFeedbackType('suggestion')} style={[feedbackS.choice, feedbackType === 'suggestion' && feedbackS.choiceSelected]}><Text style={[feedbackS.choiceText, feedbackType === 'suggestion' && feedbackS.choiceTextSelected]}>I have a suggestion</Text></Pressable></View><TextInput value={feedbackText} onChangeText={setFeedbackText} multiline numberOfLines={5} textAlignVertical="top" placeholder={feedbackType === 'recommendation' ? 'What do you enjoy or want to keep?' : 'What should we improve or add?'} placeholderTextColor="#9A9DB7" style={feedbackS.input} accessibilityLabel="Feedback comment" /><Pressable onPress={submitFeedback} disabled={!feedbackText.trim()} style={[feedbackS.button, !feedbackText.trim() && feedbackS.buttonDisabled]} accessibilityRole="button"><Text style={feedbackS.buttonText}>Send to the creator</Text><Text style={feedbackS.buttonArrow}>→</Text></Pressable></>}</View></View>
     </Modal>
   </>;
+}
+
+function AuthSheet({ visible, onClose, signedInEmail, dismissible = true }: { visible: boolean; onClose: () => void; signedInEmail: string | null; dismissible?: boolean }) {
+  const [mode, setMode] = useState<'signIn' | 'signUp' | 'forgot'>('signIn');
+  const [displayName, setDisplayName] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [resendBusy, setResendBusy] = useState(false);
+  const [verificationPending, setVerificationPending] = useState(false);
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+  const entrance = useRef(new Animated.Value(0)).current;
+  const glow = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (!visible) return;
+    setMode('signIn'); setMessage(''); setError(''); setShowPassword(false); setResendBusy(false); setVerificationPending(false);
+    entrance.setValue(0);
+    const entranceAnimation = Animated.spring(entrance, { toValue: 1, tension: 58, friction: 9, useNativeDriver: true });
+    const glowAnimation = Animated.loop(Animated.sequence([
+      Animated.timing(glow, { toValue: 1, duration: 2600, useNativeDriver: true }),
+      Animated.timing(glow, { toValue: 0, duration: 2600, useNativeDriver: true }),
+    ]));
+    entranceAnimation.start(); glowAnimation.start();
+    return () => { entranceAnimation.stop(); glowAnimation.stop(); };
+  }, [visible]);
+
+  const submit = async () => {
+    setBusy(true); setMessage(''); setError('');
+    try {
+      if (mode === 'forgot') {
+        await sendPasswordReset(email);
+        setMessage('If an account exists for that email, a reset link is on its way.');
+      } else if (mode === 'signUp') {
+        const result = await signUpWithEmail(email, password, displayName);
+        if (result.needsEmailConfirmation) {
+          setMode('signIn');
+          setPassword('');
+          setVerificationPending(true);
+          setMessage('Verification email sent. Confirm your email, then sign in to sync your writing.');
+        } else {
+          setMessage('Your Bookez account is ready.');
+        }
+      } else {
+        await signInWithEmail(email, password);
+        setVerificationPending(false);
+        onClose();
+      }
+    } catch (caught) {
+      const caughtMessage = caught instanceof Error ? caught.message : 'We could not complete that request.';
+      if (caughtMessage.toLowerCase().includes('confirm')) setVerificationPending(true);
+      setError(caughtMessage);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const resendConfirmation = async () => {
+    if (!email.trim()) { setError('Enter your email first.'); return; }
+    setResendBusy(true); setMessage(''); setError('');
+    try {
+      await resendSignupConfirmation(email);
+      setMessage('A new verification email is on its way.');
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'We could not resend the verification email.');
+    } finally {
+      setResendBusy(false);
+    }
+  };
+
+  const signOut = async () => {
+    setBusy(true); setError('');
+    try { await signOutBookez(); onClose(); }
+    catch (caught) { setError(caught instanceof Error ? caught.message : 'We could not sign you out.'); }
+    finally { setBusy(false); }
+  };
+
+  const modeTitle = mode === 'forgot' ? 'Find your way back.' : mode === 'signUp' ? 'Make room for the work that matters.' : 'Welcome back.';
+  const modeCopy = mode === 'forgot' ? 'Enter your email and we’ll send a secure link to reset your password.' : mode === 'signUp' ? 'Create a private space for your ideas, drafts, and finished work.' : 'Sign in to keep your writing moving across your devices.';
+  const primaryLabel = mode === 'forgot' ? 'Send reset link' : mode === 'signUp' ? 'Create my account' : 'Sign in to Bookez';
+
+  return <Modal animationType="fade" visible={visible} transparent onRequestClose={dismissible ? onClose : undefined}><View style={authS.shade}>{dismissible && <Pressable style={authS.dismiss} onPress={onClose} />}<KeyboardAvoidingView style={authS.keyboard} behavior={Platform.OS === 'ios' ? 'padding' : undefined}><Animated.View style={[authS.sheet, { opacity: entrance, transform: [{ translateY: entrance.interpolate({ inputRange: [0, 1], outputRange: [34, 0] }) }] }]}><LinearGradient colors={['#F7F5FF', '#EEF6FF', '#FFF5EC']} style={StyleSheet.absoluteFill} /><Animated.View style={[authS.orbOne, { transform: [{ translateY: glow.interpolate({ inputRange: [0, 1], outputRange: [0, 16] }) }, { scale: glow.interpolate({ inputRange: [0, 1], outputRange: [1, 1.08] }) }] }]} /><Animated.View style={[authS.orbTwo, { transform: [{ translateY: glow.interpolate({ inputRange: [0, 1], outputRange: [14, 0] }) }] }]} /><ScrollView contentContainerStyle={authS.content} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}><View style={authS.topBar}><View style={authS.brand}><View style={authS.logoMark} accessibilityLabel="Bookez book icon"><View style={authS.bookPageLeft} /><View style={authS.bookPageRight} /><View style={authS.bookSpine} /></View><View><Text style={authS.brandName}>BOOKEZ</Text><Text style={authS.brandSub}>A quieter place to write</Text></View></View>{dismissible && <Pressable onPress={onClose} style={authS.closeButton} accessibilityLabel="Close sign in"><Text style={authS.closeText}>×</Text></Pressable>}</View>{signedInEmail ? <View style={authS.connectedState}><View style={authS.statusIcon}><Text style={authS.statusIconText}>✓</Text></View><Text style={authS.eyebrow}>BOOKEZ CLOUD</Text><Text style={authS.title}>Your writing is connected.</Text><Text style={authS.copy}>Signed in as {signedInEmail}. Your Bookez profile can sync safely without changing your CityPeak account.</Text>{error ? <Text style={authS.error}>{error}</Text> : null}<Pressable onPress={signOut} disabled={busy} style={[authS.primary, busy && authS.disabled]}>{busy && <ActivityIndicator size="small" color="#FFF" />}<Text style={authS.primaryText}>{busy ? 'Signing out…' : 'Sign out of Bookez'}</Text></Pressable><Pressable onPress={onClose} style={authS.secondary}><Text style={authS.secondaryText}>Done</Text></Pressable></View> : <><View style={authS.hero}><Text style={authS.eyebrow}>{mode === 'forgot' ? 'ACCOUNT RECOVERY' : mode === 'signUp' ? 'CREATE YOUR SPACE' : 'WELCOME BACK'}</Text><Text style={authS.title}>{modeTitle}</Text><Text style={authS.copy}>{modeCopy}</Text></View><View style={authS.modeRow}><Pressable onPress={() => { setMode('signIn'); setMessage(''); setError(''); }} style={[authS.modeOption, mode === 'signIn' && authS.modeOptionActive]}><Text style={[authS.modeText, mode === 'signIn' && authS.modeTextActive]}>Sign in</Text></Pressable><Pressable onPress={() => { setMode('signUp'); setMessage(''); setError(''); }} style={[authS.modeOption, mode === 'signUp' && authS.modeOptionActive]}><Text style={[authS.modeText, mode === 'signUp' && authS.modeTextActive]}>Create account</Text></Pressable></View>{mode === 'signUp' && <View><Text style={authS.fieldLabel}>YOUR NAME</Text><TextInput value={displayName} onChangeText={setDisplayName} placeholder="What should we call you?" placeholderTextColor="#A3A5BA" style={authS.input} autoCapitalize="words" accessibilityLabel="Your name" /></View>}<Text style={authS.fieldLabel}>EMAIL ADDRESS</Text><TextInput value={email} onChangeText={setEmail} autoCapitalize="none" keyboardType="email-address" textContentType="emailAddress" placeholder="you@example.com" placeholderTextColor="#A3A5BA" style={authS.input} accessibilityLabel="Email address" />{mode !== 'forgot' && <><Text style={authS.fieldLabel}>PASSWORD</Text><View style={authS.passwordWrap}><TextInput value={password} onChangeText={setPassword} secureTextEntry={!showPassword} textContentType={mode === 'signUp' ? 'newPassword' : 'password'} placeholder={mode === 'signUp' ? 'At least 6 characters' : 'Your password'} placeholderTextColor="#A3A5BA" style={authS.passwordInput} accessibilityLabel="Password" /><Pressable onPress={() => setShowPassword((current) => !current)} style={authS.passwordToggle} accessibilityLabel={showPassword ? 'Hide password' : 'Show password'}><Text style={authS.passwordToggleText}>{showPassword ? 'Hide' : 'Show'}</Text></Pressable></View></>}{message ? <View style={authS.messageBox}><Text style={authS.messageIcon}>✓</Text><Text style={authS.message}>{message}</Text></View> : null}{error ? <View style={authS.errorBox}><Text style={authS.errorIcon}>!</Text><Text style={authS.error}>{error}</Text></View> : null}{verificationPending && <Pressable onPress={resendConfirmation} disabled={busy || resendBusy} style={authS.textButton}><Text style={authS.textButtonText}>{resendBusy ? 'Sending verification email…' : 'Resend verification email'}</Text></Pressable>}<Pressable onPress={submit} disabled={busy} style={[authS.primary, busy && authS.disabled]}>{busy && <ActivityIndicator size="small" color="#FFF" />}<Text style={authS.primaryText}>{busy ? 'One moment…' : primaryLabel}</Text><Text style={authS.primaryArrow}>→</Text></Pressable>{mode === 'signIn' && <Pressable onPress={() => { setMode('forgot'); setMessage(''); setError(''); }} disabled={busy} style={authS.textButton}><Text style={authS.textButtonText}>Forgot your password?</Text></Pressable>}{mode === 'forgot' && <Pressable onPress={() => { setMode('signIn'); setMessage(''); setError(''); }} style={authS.textButton}><Text style={authS.textButtonText}>← Back to sign in</Text></Pressable>}{mode === 'signUp' && <Text style={authS.legal}>By creating an account, you agree to keep your Bookez space respectful and secure.</Text>}{mode !== 'forgot' && <Pressable onPress={() => { setMode(mode === 'signIn' ? 'signUp' : 'signIn'); setMessage(''); setError(''); }} style={authS.secondary}><Text style={authS.secondaryText}>{mode === 'signIn' ? 'New to Bookez? Create an account' : 'Already have an account? Sign in'}</Text></Pressable>}</>}</ScrollView></Animated.View></KeyboardAvoidingView></View></Modal>;
 }
 
 function AccountExit({ deleted, onReturn }: { deleted: boolean; onReturn: () => void }) {
@@ -3789,6 +4283,7 @@ function StatsCategoryCard({ eyebrow, title, subtitle, stats, tone = 'blue' }: {
 function Stats({ projects, activeProject, onSelectProject, onPage }: { projects: Project[]; activeProject: string; onSelectProject: (title: string) => void; onPage: (page: Page) => void }) {
   const [range, setRange] = useState<StatsRange>('Week');
   const [scope, setScope] = useState<StatsScope>('overall');
+  const [writingUnitsInfoOpen, setWritingUnitsInfoOpen] = useState(false);
   const currentProject = projects.find((project) => project.title === activeProject) ?? projects[0];
   const stats = scope === 'overall' ? getOverallStatsSnapshot(projects, range) : getStatsSnapshot(currentProject, range);
   const specializedStats = getProjectSpecializedStats(currentProject);
@@ -3811,6 +4306,11 @@ function Stats({ projects, activeProject, onSelectProject, onPage }: { projects:
   const inputTotal = stats.dictationUses + stats.writingUses;
   const hasActivity = stats.entries.length > 0;
   const average = (value: number, suffix = '') => value ? `${value >= 10 ? Math.round(value) : value.toFixed(1)}${suffix}` : '—';
+  const unitLabel = scope === 'overall' ? 'writing pieces' : stats.journey.blueprint.unitLabelPlural;
+  const unitCardLabel = scope === 'overall' ? 'DRAFTED WRITING PIECES' : `${stats.journey.blueprint.unitLabelPlural.toUpperCase()} WITH DRAFTS`;
+  const unitInfoTitle = scope === 'overall' ? 'Drafted writing pieces' : `${stats.journey.blueprint.unitLabelPlural} with drafts`;
+  const unitInfoCopy = scope === 'overall' ? 'This combines the main draftable pieces across all your Bookez projects.' : `This tracks the ${stats.journey.blueprint.unitLabelPlural} in ${currentProject.title}.`;
+  const unitInfoFormula = `${stats.journey.completedUnits} drafted ${unitLabel} / ${stats.journey.unitCount} planned ${unitLabel}`;
 
   return <>
     <View style={s.statsHero}><View style={s.statsHeroTop}><View style={{ flex: 1 }}><Text style={s.planHeroOverline}>YOUR WRITING RHYTHM</Text><Text style={s.statsTitle}>Small steps{`\n`}add up.</Text></View><Pressable onPress={() => onPage('Journey')} style={s.statsJourneyButton}><Text style={s.statsJourneyButtonText}>View Journey</Text><Text style={s.statsJourneyButtonArrow}>↗</Text></Pressable></View><Text numberOfLines={1} style={s.statsBookName}>{scope === 'overall' ? 'All your projects' : currentProject.title}</Text><View style={s.statsScopeToggle}><Pressable onPress={() => setScope('overall')} style={[s.statsScopeOption, scope === 'overall' && s.statsScopeOptionActive]}><Text style={[s.statsScopeOptionText, scope === 'overall' && s.statsScopeOptionTextActive]}>Overall</Text></Pressable><Pressable onPress={() => setScope('project')} style={[s.statsScopeOption, scope === 'project' && s.statsScopeOptionActive]}><Text style={[s.statsScopeOptionText, scope === 'project' && s.statsScopeOptionTextActive]}>Project-specific</Text></Pressable></View>{scope === 'project' && <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.statsProjectPicker}>{projects.map((project) => <Pressable key={project.title} onPress={() => onSelectProject(project.title)} style={[s.statsProjectOption, project.title === activeProject && s.statsProjectOptionActive]}><View style={[s.statsProjectOptionMark, { backgroundColor: project.color }]}><Text style={s.statsProjectOptionMarkText}>{project.mark}</Text></View><Text numberOfLines={1} style={[s.statsProjectOptionText, project.title === activeProject && s.statsProjectOptionTextActive]}>{project.title}</Text></Pressable>)}</ScrollView>}<View style={s.rangeRow}>{(['Week', 'Month', 'All time'] as StatsRange[]).map((item) => <Pill key={item} label={item} selected={range === item} onPress={() => setRange(item)} />)}</View></View>
@@ -3837,7 +4337,8 @@ function Stats({ projects, activeProject, onSelectProject, onPage }: { projects:
 
     <View style={s.statsInsightCard}><Text style={s.statsInsightEyebrow}>A LITTLE SOMETHING TO NOTICE</Text>{stats.strongestDay ? <><Text style={s.statsInsightTitle}>Your strongest day was {formatActivityDay(stats.strongestDay.key, true)}.</Text><Text style={s.statsInsightCopy}>{formatCount(stats.strongestDay.words)} words, about {stats.strongestDay.pages.toFixed(1)} pages, with {Math.round(stats.strongestDay.completion)}% of the writing path complete.</Text></> : <><Text style={s.statsInsightTitle}>Your rhythm will reveal itself here.</Text><Text style={s.statsInsightCopy}>Once you have a writing day logged, you’ll see your strongest day and average active time per page.</Text></>}<View style={s.statsInsightMetric}><Text style={s.statsInsightMetricLabel}>AVG ACTIVE TIME / EST. PAGE</Text><Text style={s.statsInsightMetricValue}>{stats.averageMinutesPerPage ? formatDuration(stats.averageMinutesPerPage) : '—'}</Text></View></View>
 
-    <Text style={s.preferenceTitle}>{scope === 'overall' ? 'All projects at a glance' : 'Book at a glance'}</Text><View style={s.statsBookCard}><View><Text style={s.statsBookCardLabel}>ESTIMATED MANUSCRIPT PAGES</Text><Text style={s.statsBookCardValue}>{stats.journey.wordCount ? `${(stats.journey.wordCount / 250).toFixed(1)}` : '—'}</Text></View><View style={s.statsBookCardDivider} /><View><Text style={s.statsBookCardLabel}>{scope === 'overall' ? 'WRITING UNITS WITH DRAFTS' : `${stats.journey.blueprint.unitLabelPlural.toUpperCase()} WITH DRAFTS`}</Text><Text style={s.statsBookCardValue}>{stats.journey.completedUnits} / {stats.journey.unitCount}</Text></View></View>
+    <Text style={s.preferenceTitle}>{scope === 'overall' ? 'All projects at a glance' : 'Book at a glance'}</Text><View style={s.statsBookCard}><View style={{ flex: 1, minWidth: 0, justifyContent: 'center' }}><Text style={s.statsBookCardLabel}>ESTIMATED MANUSCRIPT PAGES</Text><Text style={s.statsBookCardValue}>{stats.journey.wordCount ? `${(stats.journey.wordCount / 250).toFixed(1)}` : '—'}</Text></View><View style={s.statsBookCardDivider} /><Pressable onPress={() => setWritingUnitsInfoOpen(true)} style={{ flex: 1, minWidth: 0, minHeight: 70, paddingHorizontal: 10, borderRadius: 14, justifyContent: 'center', backgroundColor: '#F3F1FF' }} accessibilityRole="button" accessibilityLabel="Learn how drafted writing pieces are calculated"><Text style={s.statsBookCardLabel}>{unitCardLabel}</Text><Text style={s.statsBookCardValue}>{stats.journey.completedUnits} / {stats.journey.unitCount}</Text><Text style={{ color: C.periwinkle, fontSize: 6, letterSpacing: 0.4, fontWeight: '700', marginTop: 5 }}>TAP TO LEARN MORE</Text></Pressable></View>
+    <Modal animationType="slide" visible={writingUnitsInfoOpen} transparent onRequestClose={() => setWritingUnitsInfoOpen(false)}><View style={{ flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(32,41,84,0.22)' }}><Pressable style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 }} onPress={() => setWritingUnitsInfoOpen(false)} /><View style={{ maxHeight: '62%', padding: 20, paddingBottom: 26, borderTopLeftRadius: 29, borderTopRightRadius: 29, backgroundColor: '#FBFAFF' }}><View style={s.sheetHandle} /><Text style={{ color: C.periwinkle, fontSize: 8, letterSpacing: 1, fontWeight: '700' }}>WHAT THIS NUMBER MEANS</Text><Text style={{ color: C.ink, fontSize: 22, fontWeight: '700', marginTop: 6 }}>{unitInfoTitle}</Text><Text style={{ color: C.muted, fontSize: 10, lineHeight: 15, marginTop: 7 }}>{unitInfoCopy}</Text><View style={{ marginTop: 14, padding: 12, borderRadius: 15, backgroundColor: '#F3F1FF', borderWidth: 1, borderColor: '#E4E0FC' }}><Text style={{ color: C.periwinkle, fontSize: 7, letterSpacing: 0.7, fontWeight: '700' }}>HOW IT’S CALCULATED</Text><Text style={{ color: C.ink, fontSize: 13, lineHeight: 18, fontWeight: '700', marginTop: 6 }}>{unitInfoFormula}</Text><Text style={{ color: C.muted, fontSize: 9, lineHeight: 14, marginTop: 8 }}>A piece counts when it has saved draft text. Planning notes, structure choices, and empty pieces do not count yet.</Text></View><Pressable onPress={() => setWritingUnitsInfoOpen(false)} style={{ minHeight: 44, marginTop: 14, borderRadius: 14, backgroundColor: C.periwinkle, alignItems: 'center', justifyContent: 'center' }}><Text style={{ color: '#FFF', fontSize: 10, fontWeight: '700' }}>Got it</Text></Pressable></View></View></Modal>
     {scope === 'project' && <><StatsCategoryCard eyebrow="STRUCTURE" title="Shape of the work" subtitle="See what is drafted, empty, outlined, and still in progress." stats={projectStructureStats} tone="mint" /><StatsCategoryCard eyebrow="GOALS & HABITS" title="Your writing rhythm" subtitle="Goals, schedule adherence, and the patterns behind your pace." stats={projectGoalStats} tone="gold" /><StatsCategoryCard eyebrow="FOCUS" title="Time spent in the work" subtitle="Session patterns from your writing rhythm tools." stats={projectFocusStats} tone="rose" /><StatsCategoryCard eyebrow="CONTENT PROFILE" title="Inside the draft" subtitle="Lightweight signals to help you notice patterns while revising." stats={projectContentStats} /><StatsCategoryCard eyebrow="EXPORT READINESS" title="Ready to share" subtitle="A calm checklist for the pages and writing units that make up the finished object." stats={projectExportStats} tone="mint" /></>}
   </>;
 }
@@ -3849,25 +4350,118 @@ function Navigation({ page, onPage }: { page: Page; onPage: (page: Page) => void
 export default Sentry.wrap(function App() {
   const [page, setPage] = useState<Page>('Library');
   const [accountState, setAccountState] = useState<'active' | 'signedOut' | 'deleted'>('active');
+  const [authReady, setAuthReady] = useState(false);
   const [studioRoute, setStudioRoute] = useState<{ title: string; section: StudioSection }>({ title: 'The Midnight Atlas', section: 'assemble' });
   const [projects, setProjects] = useState<Project[]>([
-    { title: 'The Midnight Atlas', color: C.periwinkle, mark: '✦', type: 'Fiction Book', pageGoal: '240', unitGoal: '24', plan: defaultPlanFor('Fiction Book') },
-    { title: 'Letters to June', color: C.coral, mark: '✉', type: 'Memoir & Biography', pageGoal: '260', unitGoal: '18', plan: defaultPlanFor('Memoir & Biography') },
-    { title: 'Wildflower Notes', color: C.sage, mark: '✳', type: 'Journal or Diary', pageGoal: '120', unitGoal: '30', plan: defaultPlanFor('Journal or Diary') },
+    { title: 'The Midnight Atlas', color: C.periwinkle, mark: '✦', type: 'Fiction Book', pageGoal: '240', unitGoal: '24', cloudId: stableUuidFrom('starter-midnight-atlas'), plan: { ...defaultPlanFor('Fiction Book'), chapterRevisions: {} } },
+    { title: 'Letters to June', color: C.coral, mark: '✉', type: 'Memoir & Biography', pageGoal: '260', unitGoal: '18', cloudId: stableUuidFrom('starter-letters-to-june'), plan: { ...defaultPlanFor('Memoir & Biography'), chapterRevisions: {} } },
+    { title: 'Wildflower Notes', color: C.sage, mark: '✳', type: 'Journal or Diary', pageGoal: '120', unitGoal: '30', cloudId: stableUuidFrom('starter-wildflower-notes'), plan: { ...defaultPlanFor('Journal or Diary'), chapterRevisions: {} } },
   ]);
   const [storageReady, setStorageReady] = useState(false);
   const [activeProject, setActiveProject] = useState('The Midnight Atlas');
+  const [cloudUserId, setCloudUserId] = useState<string | null>(null);
+  const [cloudSyncState, setCloudSyncState] = useState<'saved' | 'saving' | 'offline' | 'paused' | 'error' | 'conflict'>('offline');
+  const [cloudBackupEnabled, setCloudBackupEnabled] = useState(true);
+  const [cloudConflictCount, setCloudConflictCount] = useState(0);
+  const [storageOwnerId, setStorageOwnerId] = useState('local');
+  const [cloudMigrationReady, setCloudMigrationReady] = useState(false);
+  const migrationPrompted = useRef<string | null>(null);
+  const queuedFingerprints = useRef<Record<string, string>>({});
+  const applyFlushResult = (result: Awaited<ReturnType<typeof flushBookezQueue>>) => {
+    if (result.applied.length) {
+      setProjects((current) => current.map((project) => {
+        const projectRevision = result.applied.find((item) => item.table === 'projects' && item.recordId === project.cloudId)?.revision;
+        const chapterRevisions = { ...(project.plan.chapterRevisions ?? {}) };
+        result.applied.filter((item) => item.table === 'chapters' && item.revision !== undefined).forEach((item) => {
+          const chapterKey = Object.keys(project.plan.drafts).find((key) => stableUuidFrom(`${project.cloudId}:${key}`) === item.recordId);
+          if (chapterKey && item.revision !== undefined) chapterRevisions[chapterKey] = item.revision;
+        });
+        return projectRevision !== undefined || Object.keys(chapterRevisions).length !== Object.keys(project.plan.chapterRevisions ?? {}).length ? { ...project, cloudRevision: projectRevision ?? project.cloudRevision, plan: { ...project.plan, chapterRevisions } } : project;
+      }));
+    }
+    setCloudConflictCount(result.conflicts);
+    setCloudSyncState(result.state);
+  };
+  const runBookezSync = async (force = false) => {
+    if (!cloudBackupEnabled) { setCloudSyncState('paused'); return; }
+    if (!cloudUserId || !cloudMigrationReady) { setCloudSyncState('offline'); return; }
+    setCloudSyncState('saving');
+    try {
+      const flushed = await flushBookezQueue({ force });
+      applyFlushResult(flushed);
+      if (flushed.state === 'error' || flushed.state === 'conflict') return;
+      const pulled = await pullBookezProjectSummaries(cloudUserId);
+      setProjects((current) => {
+        const next = [...current];
+        pulled.projects.forEach((remote) => {
+          const index = next.findIndex((project) => project.cloudId === remote.id);
+          if (index < 0) {
+            next.push({ title: remote.title, color: C.periwinkle, mark: '✦', type: remote.writing_type, pageGoal: String(Math.round((remote.target_words ?? 0) / 250) || 0), unitGoal: String(remote.target_chapters ?? 0), cloudId: remote.id, cloudRevision: remote.revision, deletedAt: remote.deleted_at ? Date.parse(remote.deleted_at) : undefined, archived: remote.status === 'archived', plan: { ...defaultPlanFor(remote.writing_type), chapterRevisions: {} } });
+            return;
+          }
+          const local = next[index];
+          const setting = pulled.planSettings.find((item) => item.project_id === remote.id);
+          const remotePlan = setting?.plan_json && typeof setting.plan_json === 'object' ? setting.plan_json as Partial<ProjectPlan> : {};
+          next[index] = { ...local, title: local.title || remote.title, cloudRevision: remote.revision, deletedAt: remote.deleted_at ? Date.parse(remote.deleted_at) : undefined, archived: remote.status === 'archived' || Boolean(remote.deleted_at), plan: { ...local.plan, ...remotePlan, drafts: local.plan.drafts, chapterRevisions: local.plan.chapterRevisions ?? {} } };
+        });
+        return next;
+      });
+      await commitBookezProjectCursor(cloudUserId, pulled.cursor);
+      setCloudSyncState('saved');
+    } catch {
+      setCloudSyncState('error');
+    }
+  };
+  const reviewBookezConflicts = async () => {
+    const snapshot = await getBookezSyncSnapshot();
+    const conflict = snapshot.conflicts[0];
+    if (!conflict) { setCloudConflictCount(0); return; }
+    Alert.alert('Sync conflict', `A newer cloud version exists for this ${conflict.table === 'chapters' ? 'chapter' : 'project'}. Bookez kept your local version here and left the cloud version untouched.`, [
+      { text: 'Keep local', onPress: () => { void keepBookezLocalConflict(conflict.id).then(() => runBookezSync(true)); } },
+      { text: 'Review later', style: 'cancel' },
+    ]);
+  };
   useEffect(() => {
     Sentry.setTag('screen', page);
   }, [page]);
+  useEffect(() => {
+    let mounted = true;
+    const restoreBookezSession = async () => {
+      const initialUrl = await Linking.getInitialURL();
+      if (initialUrl) await handleBookezAuthUrl(initialUrl);
+      const { data: { session } } = await supabase.auth.getSession();
+      if (mounted && session?.user) { setCloudUserId(session.user.id); setAccountState('active'); await ensureBookezProfile(session.user.id, session.user.user_metadata?.display_name); }
+      if (mounted && !session?.user) { setCloudUserId(null); setCloudMigrationReady(true); setAccountState('signedOut'); }
+      if (mounted) setAuthReady(true);
+    };
+    void restoreBookezSession();
+    const urlSubscription = Linking.addEventListener('url', ({ url }) => { void handleBookezAuthUrl(url); });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setCloudUserId(session?.user.id ?? null);
+      if (session?.user) {
+        setAccountState('active');
+        setTimeout(() => { void ensureBookezProfile(session.user.id, session.user.user_metadata?.display_name); }, 0);
+      } else {
+        setCloudMigrationReady(true);
+        setAccountState('signedOut');
+      }
+      setAuthReady(true);
+    });
+    return () => { mounted = false; urlSubscription.remove(); subscription.unsubscribe(); };
+  }, []);
+  useEffect(() => {
+    if (storageReady && cloudUserId && cloudMigrationReady && cloudBackupEnabled) void runBookezSync();
+  }, [cloudUserId, storageReady, cloudMigrationReady, cloudBackupEnabled]);
   useEffect(() => {
     let mounted = true;
     AsyncStorage.getItem(projectStorageKey).then((saved) => {
       if (!mounted) return;
       if (saved) {
         try {
-          const parsed = JSON.parse(saved) as { projects?: Project[]; activeProject?: string };
-          if (Array.isArray(parsed.projects) && parsed.projects.length) setProjects(parsed.projects);
+          const parsed = JSON.parse(saved) as { projects?: Project[]; activeProject?: string; ownerId?: string; cloudBackupEnabled?: boolean };
+          if (parsed.ownerId) setStorageOwnerId(parsed.ownerId);
+          if (typeof parsed.cloudBackupEnabled === 'boolean') setCloudBackupEnabled(parsed.cloudBackupEnabled);
+          if (Array.isArray(parsed.projects) && parsed.projects.length) setProjects(parsed.projects.map((project) => ({ ...project, cloudId: project.cloudId ?? createLocalUuid(), plan: { ...project.plan, chapterRevisions: project.plan.chapterRevisions ?? {} } })));
           if (parsed.activeProject) setActiveProject(parsed.activeProject);
         } catch {
           // Keep the in-memory starter projects when saved data is not readable.
@@ -3879,8 +4473,86 @@ export default Sentry.wrap(function App() {
   }, []);
   useEffect(() => {
     if (!storageReady) return;
-    AsyncStorage.setItem(projectStorageKey, JSON.stringify({ projects, activeProject })).catch(() => undefined);
-  }, [projects, activeProject, storageReady]);
+    if (cloudUserId && !cloudMigrationReady) return;
+    const timer = setTimeout(() => { AsyncStorage.setItem(projectStorageKey, JSON.stringify({ projects, activeProject, ownerId: cloudUserId ?? storageOwnerId ?? 'local', cloudBackupEnabled })).catch(() => undefined); }, 250);
+    return () => clearTimeout(timer);
+  }, [projects, activeProject, storageReady, cloudUserId, cloudMigrationReady, storageOwnerId, cloudBackupEnabled]);
+  useEffect(() => {
+    if (!storageReady) return;
+    if (!cloudBackupEnabled) { setCloudMigrationReady(true); return; }
+    if (!cloudUserId) { setCloudMigrationReady(true); return; }
+    if (storageOwnerId === cloudUserId) { setCloudMigrationReady(true); return; }
+    if (migrationPrompted.current === cloudUserId) return;
+    migrationPrompted.current = cloudUserId;
+    setCloudMigrationReady(false);
+    Alert.alert('Set up cloud sync', 'These projects are currently stored on this device. Choose whether to back them up to this signed-in account or keep them separate and start with the account’s cloud projects.', [
+      { text: 'Keep separate', style: 'cancel', onPress: () => { void AsyncStorage.setItem(localProjectBackupKey(storageOwnerId), JSON.stringify({ projects, activeProject })); setProjects([]); setActiveProject(''); setStorageOwnerId(cloudUserId); setCloudMigrationReady(true); } },
+      { text: 'Back up these projects', onPress: () => { setStorageOwnerId(cloudUserId); setCloudMigrationReady(true); } },
+    ]);
+  }, [cloudUserId, storageReady, storageOwnerId, cloudBackupEnabled]);
+  useEffect(() => {
+    if (!storageReady) return;
+    if (!cloudBackupEnabled) { setCloudSyncState('paused'); return; }
+    if (!cloudUserId) { setCloudSyncState('offline'); return; }
+    const timer = setTimeout(async () => {
+      setCloudSyncState('saving');
+      try {
+        await Promise.all(projects.map(async (project) => {
+          if (!project.cloudId) return;
+          const snapshot = getJourneySnapshot(project);
+          const projectPayload = { id: project.cloudId, user_id: cloudUserId, title: project.title, writing_type: project.type, target_words: Number.parseInt(project.plan.targetWords ?? '', 10) || null, target_chapters: Number.parseInt(project.unitGoal, 10) || null, status: project.deletedAt ? 'archived' : project.archived ? 'archived' : snapshot.manuscriptComplete ? 'completed' : project.plan.writingPlanPaused ? 'paused' : 'active', current_word_count: snapshot.wordCount, revision: project.cloudRevision ?? 0, deleted_at: project.deletedAt ? new Date(project.deletedAt).toISOString() : null };
+          const { revision: _projectRevision, ...projectFingerprintPayload } = projectPayload;
+          const projectFingerprint = JSON.stringify(projectFingerprintPayload);
+          if (queuedFingerprints.current[`projects:${project.cloudId}`] !== projectFingerprint) { queuedFingerprints.current[`projects:${project.cloudId}`] = projectFingerprint; await saveBookezProject(projectPayload); }
+          const planPayload = { id: stableUuidFrom(`${project.cloudId}:plan`), project_id: project.cloudId, user_id: cloudUserId, writing_frequency: project.plan.writingFrequency ?? null, reminder_enabled: project.plan.reminderEnabled ?? false, reminder_time: project.plan.writingReminderTime ?? null, pace: project.plan.paceFlexibility ?? null, planned_completion_date: project.plan.plannedCompletionDate ?? null, words_per_session: Number.parseInt(project.plan.targetWords ?? '', 10) || null, plan_json: cloudPlanSnapshot(project.plan), deleted_at: project.deletedAt ? new Date(project.deletedAt).toISOString() : null };
+          const planFingerprint = JSON.stringify(planPayload);
+          if (queuedFingerprints.current[`plan:${project.cloudId}`] !== planFingerprint) { queuedFingerprints.current[`plan:${project.cloudId}`] = planFingerprint; await saveBookezPlanSettings(planPayload); }
+          if (project.deletedAt) return;
+          await Promise.all(snapshot.parts.map(async (part, index) => {
+            const chapterId = stableUuidFrom(`${project.cloudId}:${part.key}`);
+            const chapterPayload = { id: chapterId, project_id: project.cloudId!, user_id: cloudUserId, title: part.title, position: index, content: project.plan.drafts[part.key] ?? '', notes: project.plan.partNotes[part.key] ?? '', word_count: countWords(project.plan.drafts[part.key] ?? ''), target_words: snapshot.targetWords && snapshot.parts.length ? Math.ceil(snapshot.targetWords / snapshot.parts.length) : null, status: project.plan.drafts[part.key]?.trim() ? 'drafted' : project.plan.writeIndex >= index ? 'in_progress' : 'not_started', revision: project.plan.chapterRevisions?.[part.key] ?? 0 };
+            const { revision: _chapterRevision, ...chapterFingerprintPayload } = chapterPayload;
+            const chapterFingerprint = JSON.stringify(chapterFingerprintPayload);
+            if (queuedFingerprints.current[`chapters:${chapterId}`] !== chapterFingerprint) { queuedFingerprints.current[`chapters:${chapterId}`] = chapterFingerprint; await saveBookezChapter(chapterPayload); }
+          }));
+        }));
+        const flushed = await flushBookezQueue();
+        applyFlushResult(flushed);
+      } catch {
+        setCloudSyncState('error');
+      }
+    }, 2500);
+    return () => clearTimeout(timer);
+  }, [projects, storageReady, cloudUserId, cloudBackupEnabled]);
+  useEffect(() => {
+    if (!storageReady || !cloudUserId || !cloudBackupEnabled || (page !== 'Write' && page !== 'BookStudio')) return;
+    const project = projects.find((item) => item.title === activeProject);
+    if (!project?.cloudId) return;
+    void loadBookezProjectChapters(cloudUserId, project.cloudId).then((chapters) => {
+      setProjects((current) => current.map((item) => {
+        if (item.cloudId !== project.cloudId) return item;
+        const snapshot = getJourneySnapshot(item);
+        const drafts = { ...item.plan.drafts };
+        const partNotes = { ...item.plan.partNotes };
+        const chapterRevisions = { ...(item.plan.chapterRevisions ?? {}) };
+        chapters.forEach((chapter) => {
+          const part = snapshot.parts[chapter.position];
+          if (!part) return;
+          if (!drafts[part.key] || (item.updatedAt ?? 0) <= Date.parse(chapter.updated_at)) drafts[part.key] = chapter.content;
+          if (!partNotes[part.key] || (item.updatedAt ?? 0) <= Date.parse(chapter.updated_at)) partNotes[part.key] = chapter.notes;
+          chapterRevisions[part.key] = chapter.revision;
+        });
+        return { ...item, plan: { ...item.plan, drafts, partNotes, chapterRevisions } };
+      }));
+    }).catch(() => undefined);
+  }, [page, activeProject, cloudUserId, cloudBackupEnabled, storageReady]);
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') void runBookezSync();
+      else if (cloudUserId && cloudBackupEnabled) void flushBookezQueue();
+    });
+    return () => subscription.remove();
+  }, [cloudUserId, cloudMigrationReady, cloudBackupEnabled]);
   const updateProject = (title: string, changes: Partial<Project>) => setProjects((current) => current.map((project) => project.title === title ? { ...project, ...changes, updatedAt: Date.now() } : project));
   const openBookStudio = (title: string, section: StudioSection) => { setActiveProject(title); setStudioRoute({ title, section }); setPage('BookStudio'); };
   const returnFromAccount = () => {
@@ -3890,16 +4562,38 @@ export default Sentry.wrap(function App() {
     }
     setAccountState('active');
   };
+  const deleteAccountData = async () => {
+    const deletingUserId = cloudUserId;
+    setCloudBackupEnabled(false);
+    try {
+      if (deletingUserId) {
+        await deleteBookezData();
+        await signOutBookez();
+      }
+      await clearBookezLocalSyncData();
+      const localKeys = await AsyncStorage.getAllKeys();
+      const bookezDataKeys = localKeys.filter((key) => key === projectStorageKey || key.startsWith('bookez.projects.backup.'));
+      if (bookezDataKeys.length) await AsyncStorage.multiRemove(bookezDataKeys);
+      setProjects([]);
+      setCloudUserId(null);
+      setCloudMigrationReady(true);
+      setAccountState('deleted');
+      setPage('Library');
+    } catch (caught) {
+      setCloudBackupEnabled(true);
+      Alert.alert('Could not delete your data', caught instanceof Error ? caught.message : 'Bookez could not finish deleting your data. Nothing was marked as deleted.');
+    }
+  };
   const renderPage = () => {
     if (page === 'Library') return <Library projects={projects} activeProject={activeProject} onPage={setPage} onSelectProject={setActiveProject} onProjectsChange={setProjects} onOpenBookStudio={openBookStudio} />;
     if (page === 'Plan') return <Plan projects={projects} activeProject={activeProject} onSelectProject={setActiveProject} onUpdateProject={updateProject} onPage={setPage} />;
     if (page === 'Write') return <Write projects={projects} activeProject={activeProject} onSelectProject={setActiveProject} onUpdateProject={updateProject} onPage={setPage} />;
     if (page === 'Journey') return <Journey projects={projects} activeProject={activeProject} onSelectProject={setActiveProject} onUpdateProject={updateProject} onPage={setPage} onBack={() => setPage('Library')} onOpenBookStudio={openBookStudio} />;
     if (page === 'BookStudio') return <BookStudio projects={projects} project={projects.find((project) => project.title === studioRoute.title) ?? projects.find((project) => project.title === activeProject)} initialSection={studioRoute.section} onBack={() => setPage('Library')} onPage={setPage} onSelectProject={setActiveProject} onUpdateProject={updateProject} onOpenBookStudio={openBookStudio} />;
-    if (page === 'Profile') return <Profile projects={projects} onLogout={() => { setAccountState('signedOut'); setPage('Library'); }} onDeleteAccount={() => { setProjects([]); setAccountState('deleted'); setPage('Library'); }} />;
+    if (page === 'Profile') return <Profile projects={projects} cloudSyncState={cloudSyncState} cloudConflictCount={cloudConflictCount} cloudBackupEnabled={cloudBackupEnabled} onCloudBackupChange={setCloudBackupEnabled} onSyncNow={() => { void runBookezSync(true); }} onReviewConflicts={() => { void reviewBookezConflicts(); }} onPage={setPage} onOpenBookStudio={openBookStudio} onLogout={async () => { try { await signOutBookez(); } finally { setCloudUserId(null); setCloudMigrationReady(true); setAccountState('signedOut'); setPage('Library'); } }} onDeleteAccount={deleteAccountData} />;
     return <Stats projects={projects} activeProject={activeProject} onSelectProject={setActiveProject} onPage={setPage} />;
   };
-  return <><StatusBar style="dark" /><Ambient><SafeAreaView style={s.safe}>{accountState === 'active' ? <><ScrollView contentContainerStyle={s.content} showsVerticalScrollIndicator={false}>{renderPage()}</ScrollView><Navigation page={page} onPage={setPage} /></> : <ScrollView contentContainerStyle={s.content} showsVerticalScrollIndicator={false}><AccountExit deleted={accountState === 'deleted'} onReturn={returnFromAccount} /></ScrollView>}</SafeAreaView></Ambient></>;
+  return <><StatusBar style="dark" /><Ambient><SafeAreaView style={s.safe}>{!authReady ? null : accountState === 'active' ? <><ScrollView contentContainerStyle={s.content} showsVerticalScrollIndicator={false}>{renderPage()}</ScrollView><Navigation page={page} onPage={setPage} /></> : accountState === 'signedOut' ? <AuthSheet visible onClose={() => undefined} signedInEmail={null} dismissible={false} /> : <ScrollView contentContainerStyle={s.content} showsVerticalScrollIndicator={false}><AccountExit deleted onReturn={returnFromAccount} /></ScrollView>}</SafeAreaView></Ambient></>;
 });
 
 const rhythmS = StyleSheet.create({
@@ -3950,6 +4644,172 @@ const rhythmS = StyleSheet.create({
   stylePreferenceLabel: { color: C.muted, fontSize: 7, letterSpacing: 0.55, fontWeight: '700', marginTop: 12 },
   stylePreferenceValue: { color: C.ink, fontSize: 13, lineHeight: 17, fontWeight: '700', marginTop: 5 },
   stylePreferenceDetail: { color: C.muted, fontSize: 8, lineHeight: 12, marginTop: 5 },
+});
+
+const journeyPopupS = StyleSheet.create({
+  journeyInlinePopup: { position: 'absolute', padding: 12, borderRadius: 18, backgroundColor: '#FFF', borderWidth: 1, borderColor: '#DCD8F7', shadowColor: '#4C477A', shadowOpacity: 0.2, shadowRadius: 14, shadowOffset: { width: 0, height: 6 }, elevation: 9, zIndex: 20 },
+  journeyInlinePopupCelebration: { backgroundColor: '#FFF9E4', borderColor: '#F0D27C' },
+  journeyInlinePopupClose: { position: 'absolute', top: 6, right: 7, width: 24, height: 24, borderRadius: 8, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F4F2FF', zIndex: 2 },
+  journeyInlinePopupCloseText: { color: C.muted, fontSize: 16, lineHeight: 17 },
+  journeyInlinePopupCelebrationLabel: { color: '#A97819', fontSize: 7, letterSpacing: 0.8, fontWeight: '700', marginBottom: 5 },
+  journeyInlinePopupEyebrow: { color: C.periwinkle, fontSize: 7, letterSpacing: 0.75, fontWeight: '700', paddingRight: 24 },
+  journeyInlinePopupTitle: { color: C.ink, fontSize: 14, lineHeight: 18, fontWeight: '700', marginTop: 4, paddingRight: 18 },
+  journeyInlinePopupParent: { color: '#9294A8', fontSize: 8, marginTop: 3 },
+  journeyInlinePopupDescription: { color: C.muted, fontSize: 9, lineHeight: 13, marginTop: 7 },
+  journeyInlinePopupCompletedAt: { color: '#4D8B59', fontSize: 8, fontWeight: '700', marginTop: 7 },
+  journeyInlinePopupProgressRow: { marginTop: 10, flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', gap: 8 },
+  journeyInlinePopupProgress: { color: C.periwinkle, fontSize: 21, fontWeight: '700' },
+  journeyInlinePopupTime: { flex: 1, alignItems: 'flex-end' },
+  journeyInlinePopupTimeLabel: { color: C.muted, fontSize: 6, letterSpacing: 0.5, fontWeight: '700' },
+  journeyInlinePopupTimeValue: { color: C.ink, fontSize: 9, fontWeight: '700', marginTop: 3, textAlign: 'right' },
+  journeyInlinePopupAction: { minHeight: 34, marginTop: 10, paddingHorizontal: 9, borderRadius: 10, backgroundColor: C.periwinkle, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  journeyInlinePopupActionText: { color: '#FFF', fontSize: 8, fontWeight: '700' },
+  journeyInlinePopupActionArrow: { color: '#FFF', fontSize: 15 },
+  journeyInlinePopupReplay: { minHeight: 27, marginTop: 8, paddingHorizontal: 8, borderRadius: 9, backgroundColor: '#F4F2FF', alignItems: 'center', justifyContent: 'center' },
+  journeyInlinePopupReplayText: { color: C.periwinkle, fontSize: 8, fontWeight: '700' },
+  journeyNodeLargeCelebration: { backgroundColor: '#F5C75C', borderColor: '#FFF0B1', shadowColor: '#D69C24', shadowOpacity: 0.4, shadowRadius: 20, elevation: 9 },
+  journeyNodeSparkle: { position: 'absolute', top: -7, right: -5, color: '#FFF', fontSize: 17 },
+  journeyMilestoneLabelCelebration: { backgroundColor: '#FFF9E4', borderColor: '#F0D27C' },
+  journeyMilestoneReachedCelebration: { backgroundColor: '#FFF9E4', borderColor: '#F0D27C', shadowColor: '#D69C24', shadowOpacity: 0.14, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 3 },
+  journeyMilestoneReachedCelebrationIcon: { backgroundColor: '#F5C75C' },
+  journeyMilestoneReachedCelebrationEyebrow: { color: '#A97819' },
+});
+
+const journeyEnhancementS = StyleSheet.create({
+  mapDismiss: { ...StyleSheet.absoluteFill, zIndex: 1 },
+  miniHit: { zIndex: 5 },
+  miniDotRecommended: { width: 34, height: 34, borderRadius: 17, borderWidth: 3 },
+  miniDotSelected: { borderColor: C.periwinkle, shadowColor: C.periwinkle, shadowOpacity: 0.38, shadowRadius: 9, shadowOffset: { width: 0, height: 2 }, elevation: 4, transform: [{ scale: 1.07 }] },
+  miniLabel: { position: 'absolute', minHeight: 27, paddingHorizontal: 5, paddingVertical: 3, borderRadius: 8, justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.86)', zIndex: 2 },
+  miniLabelText: { color: C.muted, fontSize: 8, lineHeight: 10, fontWeight: '600' },
+  nodeOrbit: { position: 'absolute', width: 92, height: 92, borderRadius: 46, borderWidth: 2, borderColor: '#E5E2F2', zIndex: 3 },
+  nodeOrbitComplete: { borderColor: '#BEB8F5', backgroundColor: 'rgba(139,138,232,0.08)' },
+  nodeOrbitCurrent: { borderColor: '#F6B59D', backgroundColor: 'rgba(247,131,133,0.08)' },
+  nodeOrbitSelected: { borderColor: C.periwinkle, borderWidth: 3 },
+  popupTailLeft: { position: 'absolute', left: -7, width: 0, height: 0, borderTopWidth: 7, borderBottomWidth: 7, borderRightWidth: 7, borderTopColor: 'transparent', borderBottomColor: 'transparent', borderRightColor: '#DCD8F7' },
+  popupTailRight: { position: 'absolute', right: -7, width: 0, height: 0, borderTopWidth: 7, borderBottomWidth: 7, borderLeftWidth: 7, borderTopColor: 'transparent', borderBottomColor: 'transparent', borderLeftColor: '#DCD8F7' },
+  bookVisual: { width: 92, height: 54, marginTop: 12, marginBottom: 2, borderRadius: 16, backgroundColor: '#EEF1FF', borderWidth: 1, borderColor: '#DDE1FC', alignItems: 'center', justifyContent: 'center' },
+  bookVisualComplete: { backgroundColor: '#FFF7DC', borderColor: '#F0D27C' },
+  bookPage: { position: 'absolute', width: 38, height: 34, borderRadius: 5, backgroundColor: '#FFF', transform: [{ rotate: '-8deg' }], shadowColor: '#7D79AA', shadowOpacity: 0.14, shadowRadius: 4, shadowOffset: { width: 1, height: 2 }, elevation: 2 },
+  bookPageBack: { width: 35, height: 31, transform: [{ rotate: '8deg' }], backgroundColor: '#E0E8FF' },
+  bookPagePlanning: { backgroundColor: '#D4E8FF' },
+  bookPageWriting: { backgroundColor: '#D7F0E2' },
+  bookPageComplete: { backgroundColor: '#FFFDF2' },
+  bookCover: { width: 35, height: 40, borderRadius: 7, alignItems: 'center', justifyContent: 'center', backgroundColor: C.periwinkle, transform: [{ rotate: '-3deg' }], shadowColor: '#605CA1', shadowOpacity: 0.2, shadowRadius: 5, shadowOffset: { width: 0, height: 2 }, elevation: 3 },
+  bookCoverComplete: { backgroundColor: '#C79722', shadowColor: '#D69C24', shadowOpacity: 0.4 },
+  bookVisualMark: { color: '#FFF', fontSize: 16, fontWeight: '700' },
+  bookVisualProgress: { position: 'absolute', left: 11, right: 11, bottom: 7, height: 4, borderRadius: 3, overflow: 'hidden', backgroundColor: 'rgba(255,255,255,0.62)' },
+  bookVisualProgressFill: { height: 4, borderRadius: 3, backgroundColor: C.coral },
+  celebration: { position: 'relative', overflow: 'hidden', marginTop: 12, padding: 12, borderRadius: 18, borderWidth: 1, flexDirection: 'row', alignItems: 'center', shadowColor: '#646080', shadowOpacity: 0.1, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 2 },
+  celebrationMini: { paddingVertical: 9, borderRadius: 14 },
+  celebrationFinalLayout: { padding: 16, borderRadius: 22 },
+  celebrationDefault: { backgroundColor: '#F4F2FF', borderColor: '#DCD7FA' },
+  celebrationPlanning: { backgroundColor: '#EEF5FF', borderColor: '#CFE1F6' },
+  celebrationChapter: { backgroundColor: '#EDF8F2', borderColor: '#C8E8D2' },
+  celebrationDraft: { backgroundColor: '#FFF4E8', borderColor: '#F4D0A5' },
+  celebrationFinal: { backgroundColor: '#FFF9E4', borderColor: '#F0D27C' },
+  celebrationIcon: { width: 34, height: 34, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: '#DCD7FF' },
+  celebrationIconFinal: { width: 44, height: 44, borderRadius: 16, backgroundColor: C.gold },
+  celebrationIconText: { color: C.periwinkle, fontSize: 17, fontWeight: '700' },
+  celebrationCopy: { flex: 1, minWidth: 0, marginLeft: 10 },
+  celebrationEyebrow: { color: C.periwinkle, fontSize: 7, letterSpacing: 0.8, fontWeight: '700' },
+  celebrationTitle: { color: C.ink, fontSize: 13, lineHeight: 17, fontWeight: '700', marginTop: 3 },
+  celebrationDetail: { color: C.muted, fontSize: 9, lineHeight: 13, marginTop: 3 },
+  celebrationStats: { flexDirection: 'row', flexWrap: 'wrap', gap: 5, marginTop: 7 },
+  celebrationStat: { color: C.muted, fontSize: 7, fontWeight: '700' },
+  celebrationActions: { alignSelf: 'stretch', alignItems: 'flex-end', justifyContent: 'center', marginLeft: 8 },
+  celebrationAction: { minHeight: 30, paddingHorizontal: 8, borderRadius: 10, backgroundColor: C.periwinkle, flexDirection: 'row', alignItems: 'center', gap: 6 },
+  celebrationActionFinal: { backgroundColor: '#B88719' },
+  celebrationActionText: { color: '#FFF', fontSize: 8, fontWeight: '700' },
+  celebrationActionArrow: { color: '#FFF', fontSize: 13 },
+  celebrationDismiss: { minHeight: 26, paddingHorizontal: 5, justifyContent: 'center' },
+  celebrationDismissText: { color: C.muted, fontSize: 8, fontWeight: '700' },
+  celebrationParticle: { position: 'absolute', top: 8, color: C.gold, fontSize: 12 },
+});
+
+const feedbackS = StyleSheet.create({
+  card: { padding: 15, borderRadius: 22, backgroundColor: '#F2F0FF', borderWidth: 1, borderColor: '#E1DDFB' },
+  cardHeader: { flexDirection: 'row', alignItems: 'flex-start' },
+  icon: { width: 37, height: 37, borderRadius: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: '#DCD7FF' },
+  iconText: { color: C.periwinkle, fontSize: 18 },
+  copy: { flex: 1, marginLeft: 10 },
+  eyebrow: { color: C.periwinkle, fontSize: 7, letterSpacing: 0.8, fontWeight: '700' },
+  title: { color: C.ink, fontSize: 16, fontWeight: '700', marginTop: 4 },
+  description: { color: C.muted, fontSize: 9, lineHeight: 14, marginTop: 4 },
+  button: { minHeight: 43, marginTop: 13, paddingHorizontal: 12, borderRadius: 13, backgroundColor: C.periwinkle, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  buttonDisabled: { opacity: 0.45 },
+  buttonText: { color: '#FFF', fontSize: 10, fontWeight: '700' },
+  buttonArrow: { color: '#FFF', fontSize: 17 },
+  shade: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(32,41,84,0.24)' },
+  dismiss: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 },
+  sheet: { padding: 20, paddingBottom: 28, borderTopLeftRadius: 29, borderTopRightRadius: 29, backgroundColor: '#FBFAFF' },
+  modalEyebrow: { color: C.periwinkle, fontSize: 8, letterSpacing: 1, fontWeight: '700', marginTop: 10 },
+  modalTitle: { color: C.ink, fontSize: 22, lineHeight: 27, fontWeight: '700', marginTop: 6 },
+  modalCopy: { color: C.muted, fontSize: 10, lineHeight: 15, marginTop: 7 },
+  choiceRow: { marginTop: 16, flexDirection: 'row', gap: 8 },
+  choice: { flex: 1, minHeight: 39, paddingHorizontal: 9, borderRadius: 12, backgroundColor: '#F1F0F6', borderWidth: 1, borderColor: '#E7E5EF', alignItems: 'center', justifyContent: 'center' },
+  choiceSelected: { backgroundColor: '#EEECFF', borderColor: '#C9C1F6' },
+  choiceText: { color: C.muted, fontSize: 9, fontWeight: '700', textAlign: 'center' },
+  choiceTextSelected: { color: C.periwinkle },
+  input: { minHeight: 118, marginTop: 12, padding: 12, borderRadius: 15, backgroundColor: '#FFF', borderWidth: 1, borderColor: '#E1DFEC', color: C.ink, fontSize: 11, lineHeight: 16 },
+  success: { alignItems: 'center', paddingVertical: 12 },
+  successIcon: { width: 52, height: 52, borderRadius: 18, alignItems: 'center', justifyContent: 'center', backgroundColor: '#E8F5E9' },
+  successIconText: { color: '#4D8B59', fontSize: 25, fontWeight: '700' },
+  successTitle: { color: C.ink, fontSize: 19, lineHeight: 24, fontWeight: '700', textAlign: 'center', marginTop: 13 },
+  successCopy: { color: C.muted, fontSize: 10, textAlign: 'center', marginTop: 6 },
+});
+
+const authS = StyleSheet.create({
+  shade: { flex: 1, backgroundColor: 'rgba(32,41,84,0.12)' },
+  dismiss: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 },
+  keyboard: { flex: 1, justifyContent: 'flex-end' },
+  sheet: { flex: 1, overflow: 'hidden', backgroundColor: '#F8F7FF' },
+  content: { flexGrow: 1, justifyContent: 'center', paddingHorizontal: 24, paddingTop: 30, paddingBottom: 36 },
+  orbOne: { position: 'absolute', top: -85, right: -58, width: 220, height: 220, borderRadius: 110, backgroundColor: 'rgba(201,188,245,0.48)' },
+  orbTwo: { position: 'absolute', top: 168, left: -88, width: 170, height: 170, borderRadius: 85, backgroundColor: 'rgba(165,220,247,0.30)' },
+  topBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  brand: { flexDirection: 'row', alignItems: 'center' },
+  logoMark: { width: 38, height: 38, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: C.ink, borderWidth: 2, borderColor: '#E5B95C', shadowColor: C.ink, shadowOpacity: 0.16, shadowRadius: 9, shadowOffset: { width: 0, height: 4 }, elevation: 2 },
+  bookPageLeft: { position: 'absolute', width: 10, height: 15, left: 7, top: 9, borderTopLeftRadius: 3, borderBottomLeftRadius: 3, backgroundColor: '#FFF9E8', borderWidth: 1, borderColor: '#E7C56E' },
+  bookPageRight: { position: 'absolute', width: 10, height: 15, right: 7, top: 9, borderTopRightRadius: 3, borderBottomRightRadius: 3, backgroundColor: '#FFF9E8', borderWidth: 1, borderColor: '#E7C56E' },
+  bookSpine: { position: 'absolute', width: 1, height: 14, top: 10, left: 18, backgroundColor: '#C99938' },
+  brandName: { color: C.ink, fontSize: 11, letterSpacing: 1.8, fontWeight: '800', marginLeft: 10 },
+  brandSub: { color: C.muted, fontSize: 8, marginTop: 2, marginLeft: 10 },
+  closeButton: { width: 36, height: 36, borderRadius: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.68)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.8)' },
+  closeText: { color: C.ink, fontSize: 23, lineHeight: 24, fontWeight: '300' },
+  hero: { marginTop: 36, maxWidth: 330 },
+  eyebrow: { color: C.periwinkle, fontSize: 8, letterSpacing: 1.2, fontWeight: '800' },
+  title: { color: C.ink, fontSize: 29, lineHeight: 34, fontWeight: '800', marginTop: 9, letterSpacing: -0.5 },
+  copy: { color: C.muted, fontSize: 11, lineHeight: 17, marginTop: 10, maxWidth: 330 },
+  modeRow: { marginTop: 29, padding: 4, borderRadius: 16, flexDirection: 'row', backgroundColor: 'rgba(201,188,245,0.28)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.86)' },
+  modeOption: { flex: 1, minHeight: 36, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  modeOptionActive: { backgroundColor: '#FFF', shadowColor: '#6C6795', shadowOpacity: 0.1, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 2 },
+  modeText: { color: C.muted, fontSize: 10, fontWeight: '700' },
+  modeTextActive: { color: C.ink },
+  fieldLabel: { color: '#7C7BC3', fontSize: 8, letterSpacing: 1, fontWeight: '800', marginTop: 19, marginBottom: 7 },
+  input: { minHeight: 52, paddingHorizontal: 15, borderRadius: 15, backgroundColor: 'rgba(255,255,255,0.90)', borderWidth: 1, borderColor: 'rgba(201,188,245,0.72)', color: C.ink, fontSize: 13, shadowColor: C.periwinkle, shadowOpacity: 0.06, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 1 },
+  passwordWrap: { minHeight: 52, borderRadius: 15, flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.90)', borderWidth: 1, borderColor: 'rgba(201,188,245,0.72)', shadowColor: C.periwinkle, shadowOpacity: 0.06, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 1 },
+  passwordInput: { flex: 1, minHeight: 50, paddingHorizontal: 15, color: C.ink, fontSize: 13 },
+  passwordToggle: { paddingHorizontal: 14, minHeight: 50, alignItems: 'center', justifyContent: 'center' },
+  passwordToggleText: { color: C.periwinkle, fontSize: 9, fontWeight: '800' },
+  primary: { minHeight: 54, marginTop: 22, paddingHorizontal: 16, borderRadius: 16, backgroundColor: C.periwinkle, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', shadowColor: C.periwinkle, shadowOpacity: 0.25, shadowRadius: 12, shadowOffset: { width: 0, height: 6 }, elevation: 3 },
+  primaryText: { color: '#FFF', fontSize: 11, fontWeight: '800' },
+  primaryArrow: { color: '#FFF', fontSize: 19, marginLeft: 10, marginTop: -1 },
+  secondary: { minHeight: 45, marginTop: 4, alignItems: 'center', justifyContent: 'center' },
+  secondaryText: { color: C.muted, fontSize: 10, fontWeight: '700', textAlign: 'center' },
+  textButton: { minHeight: 38, alignItems: 'center', justifyContent: 'center' },
+  textButtonText: { color: C.periwinkle, fontSize: 10, fontWeight: '800' },
+  legal: { color: '#9A9CB1', fontSize: 8, lineHeight: 12, marginTop: 13, textAlign: 'center' },
+  messageBox: { marginTop: 13, padding: 11, borderRadius: 13, flexDirection: 'row', alignItems: 'flex-start', backgroundColor: '#ECF8EE', borderWidth: 1, borderColor: '#D5EED9' },
+  messageIcon: { color: '#4D8B59', fontSize: 12, fontWeight: '800', marginRight: 8 },
+  message: { flex: 1, color: '#4D8B59', fontSize: 10, lineHeight: 14 },
+  errorBox: { marginTop: 13, padding: 11, borderRadius: 13, flexDirection: 'row', alignItems: 'flex-start', backgroundColor: '#FFF0F0', borderWidth: 1, borderColor: '#F5D7D8' },
+  errorIcon: { width: 16, height: 16, borderRadius: 8, textAlign: 'center', color: '#C96567', fontSize: 11, lineHeight: 16, fontWeight: '800', marginRight: 8, backgroundColor: '#FFDCDD' },
+  error: { flex: 1, color: '#C96567', fontSize: 10, lineHeight: 14 },
+  connectedState: { flex: 1, justifyContent: 'center', paddingBottom: 45 },
+  statusIcon: { width: 60, height: 60, borderRadius: 22, alignItems: 'center', justifyContent: 'center', backgroundColor: '#E5F4E8', borderWidth: 1, borderColor: '#CDE9D2', marginBottom: 24 },
+  statusIconText: { color: '#4D8B59', fontSize: 29, fontWeight: '800' },
+  disabled: { opacity: 0.55 },
 });
 
 const imagePreviewS = StyleSheet.create({ chapterVisuals: { gap: 9 }, backCover: { marginTop: 20, paddingTop: 13, borderTopWidth: 1, borderTopColor: '#EEE7DD' }, backCoverLabel: { color: C.muted, fontSize: 7, letterSpacing: 0.8, fontWeight: '700' } });
@@ -4024,6 +4884,8 @@ const citationStyles = StyleSheet.create({
 });
 
 const s: any = Object.assign(StyleSheet.create({
+  accountActionCopy: { flex: 1, minWidth: 0, marginRight: 8 },
+  profileHero: { marginTop: 6, padding: 16, borderRadius: 24, backgroundColor: '#FFF', borderWidth: 1, borderColor: '#ECEAF4', shadowColor: '#706C98', shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 5 }, elevation: 2 }, profileHeroIdentity: { flexDirection: 'row', alignItems: 'center' }, profileHeroCopy: { flex: 1, minWidth: 0, marginLeft: 12 }, profileAvatarCompact: { width: 64, height: 64, borderRadius: 32 }, profileAvatarTextCompact: { fontSize: 24 }, profileHaloCompact: { width: 74, height: 74, borderRadius: 37 }, profileNameInHero: { marginTop: 3, fontSize: 20 }, profileOverline: { color: C.periwinkle, fontSize: 7, letterSpacing: 1, fontWeight: '700' }, profileMemberSince: { color: '#9A9CB1', fontSize: 8, marginTop: 4 }, profileEditButton: { minHeight: 35, marginTop: 14, borderRadius: 11, backgroundColor: '#F3F1FF', alignItems: 'center', justifyContent: 'center' }, profileEditButtonText: { color: C.periwinkle, fontSize: 9, fontWeight: '700' }, profileSnapshotCard: { marginTop: 13, padding: 15, borderRadius: 22, backgroundColor: '#F4F2FF', borderWidth: 1, borderColor: '#E5E1FA' }, profileSnapshotHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }, profileSectionEyebrow: { color: C.periwinkle, fontSize: 7, letterSpacing: 0.9, fontWeight: '700' }, profileSnapshotTitle: { color: C.ink, fontSize: 15, fontWeight: '700', marginTop: 4 }, profileSnapshotProject: { color: C.muted, fontSize: 8, fontWeight: '700' }, profileSnapshotGrid: { marginTop: 14, flexDirection: 'row', flexWrap: 'wrap', gap: 7 }, profileSnapshotMetric: { width: '48%', minHeight: 58, padding: 9, borderRadius: 14, backgroundColor: 'rgba(255,255,255,0.76)' }, profileSnapshotValue: { color: C.ink, fontSize: 16, fontWeight: '700' }, profileSnapshotLabel: { color: C.muted, fontSize: 6, letterSpacing: 0.6, fontWeight: '700', marginTop: 5 }, profileInlineAction: { minHeight: 33, marginTop: 11, paddingHorizontal: 9, borderRadius: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: 'rgba(255,255,255,0.58)' }, profileInlineActionText: { color: C.periwinkle, fontSize: 9, fontWeight: '700' }, profileInlineActionArrow: { color: C.periwinkle, fontSize: 16 }, profileEmptyAchievement: { marginTop: 11, padding: 10, borderRadius: 13, backgroundColor: '#FAF9FF' }, profileNextAchievement: { color: '#AA7A18', fontSize: 8, lineHeight: 12, marginTop: 5 }, profileEditSheet: { padding: 20, paddingBottom: 24, borderTopLeftRadius: 29, borderTopRightRadius: 29, backgroundColor: '#FBFAFF' }, profileEditTitle: { color: C.ink, fontSize: 25, fontWeight: '700', letterSpacing: -0.5, marginTop: 5 }, profileEditCopy: { color: C.muted, fontSize: 10, lineHeight: 15, marginTop: 7 }, profileEditInput: { minHeight: 47, marginTop: 16, paddingHorizontal: 13, borderRadius: 13, borderWidth: 1, borderColor: '#DCDCEA', color: C.ink, fontSize: 13, backgroundColor: '#FFF' }, profileEditError: { color: '#C96567', fontSize: 9, lineHeight: 13, marginTop: 8 }, profileSaveDisabled: { opacity: 0.6 }, aboutVersion: { color: '#9A9CB1', fontSize: 9, marginTop: 13 },
   specializedStatsCardMint: { backgroundColor: '#EFF9F1', borderColor: '#D7EBD9' }, specializedStatsCardRose: { backgroundColor: '#FFF1F0', borderColor: '#F2D6D6' }, chartLegend: { marginTop: 11, flexDirection: 'row', gap: 13 }, chartLegendItem: { flexDirection: 'row', alignItems: 'center', gap: 5 }, chartLegendDot: { width: 8, height: 8, borderRadius: 4 }, barPair: { height: 100, flexDirection: 'row', alignItems: 'flex-end', gap: 2 }, barTime: { width: 7, borderRadius: 5, backgroundColor: '#F2B9A1' },
   journeyNodeStack: { alignItems: 'center' }, journeyMiniDotRow: { minHeight: 27, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }, journeyMiniDot: { width: 21, height: 21, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F1F0F7', borderWidth: 2, borderColor: '#D8D7E5' }, journeyMiniDotComplete: { backgroundColor: '#E8F5E9', borderColor: '#B9DDBE' }, journeyMiniDotCurrent: { backgroundColor: '#FFF1E5', borderColor: '#F2CBB7' }, journeyMiniDotSelected: { borderColor: C.periwinkle, shadowColor: C.periwinkle, shadowOpacity: 0.35, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 2 }, journeyMiniDotText: { color: '#9899AD', fontSize: 7, fontWeight: '700' }, journeyMiniDotTextComplete: { color: '#4D8B59' }, journeyMiniDotLine: { width: 15, height: 2, backgroundColor: '#D8D7E5' }, journeyMiniDotLineComplete: { backgroundColor: '#C6C1F4' }, journeyMiniToBigLine: { width: 15, height: 2, backgroundColor: '#D8D7E5' }, journeyCheckpointParent: { color: '#9A9CB1', fontSize: 8, marginTop: 3 },
   statsScopeToggle: { marginTop: 14, padding: 3, borderRadius: 13, backgroundColor: '#ECEAF5', flexDirection: 'row' }, statsScopeOption: { flex: 1, minHeight: 34, paddingHorizontal: 9, borderRadius: 10, alignItems: 'center', justifyContent: 'center' }, statsScopeOptionActive: { backgroundColor: '#FFF', shadowColor: '#6F6A96', shadowOpacity: 0.09, shadowRadius: 5, shadowOffset: { width: 0, height: 2 }, elevation: 1 }, statsScopeOptionText: { color: C.muted, fontSize: 9, fontWeight: '700' }, statsScopeOptionTextActive: { color: C.ink }, statsProjectPicker: { gap: 7, paddingTop: 10, paddingBottom: 2 }, statsProjectOption: { minWidth: 116, maxWidth: 152, minHeight: 39, paddingHorizontal: 8, borderRadius: 12, flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.55)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.72)' }, statsProjectOptionActive: { backgroundColor: '#EEEDFF', borderColor: '#D6D0FA' }, statsProjectOptionMark: { width: 24, height: 24, borderRadius: 8, alignItems: 'center', justifyContent: 'center' }, statsProjectOptionMarkText: { color: '#FFF', fontSize: 11 }, statsProjectOptionText: { flex: 1, color: C.muted, fontSize: 8, fontWeight: '700', marginLeft: 6 }, statsProjectOptionTextActive: { color: C.ink },

@@ -3,13 +3,18 @@
     "name": "Bookez",
     "slug": "Bookez",
     "version": "1.0.0",
+    "description": "A quieter place to plan, write, and finish meaningful books.",
     "orientation": "portrait",
+    "scheme": "bookez",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.lecoffeeconfit.bookme",
-      "buildNumber": "1"
+      "buildNumber": "1",
+      "config": {
+        "usesNonExemptEncryption": false
+      }
     },
     "plugins": [
       [
@@ -35,6 +40,11 @@
     },
     "web": {
       "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "0f1366e7-a5a2-4e72-94a1-516e015dc07a"
+      }
     }
   }
 }

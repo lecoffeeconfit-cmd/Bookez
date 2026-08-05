@@ -42,6 +42,9 @@ yarn-error.*
 
 .env.local
 
+# Local Supabase backups (never commit production data)
+.local-backups/
+
 # Sentry local auth/configuration
 sentry.properties
 .sentryclirc
