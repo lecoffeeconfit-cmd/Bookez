@@ -81,6 +81,48 @@ export type Database = {
         Update: { id?: string; request_id?: string | null; reporter_user_id?: string; reason?: string; details?: string | null; status?: string };
         Relationships: [{ foreignKeyName: 'feedback_reports_request_id_fkey'; columns: ['request_id']; isOneToOne: false; referencedRelation: 'feedback_requests'; referencedColumns: ['id'] }];
       };
+      community_feedback_requests: {
+        Row: { id: string; user_id: string; project_id: string; project_title: string; author_display_name: string; genre: string | null; completion_percent: number | null; stage: string | null; cover_image_path: string | null; focus: string; question: string | null; content_scope: string; content_snapshot: Json; selected_word_count: number; reading_minutes: number; listening_minutes: number; selected_item_count: number; focuses: Json; custom_question: string | null; author_visibility: string; reading_enabled: boolean; listening_enabled: boolean; passage_comments_enabled: boolean; general_feedback_enabled: boolean; response_visibility: string; response_limit: number | null; closes_at: string | null; status: string; created_at: string; updated_at: string };
+        Insert: { id?: string; user_id: string; project_id: string; project_title: string; author_display_name?: string; genre?: string | null; completion_percent?: number | null; stage?: string | null; cover_image_path?: string | null; focus?: string; question?: string | null; content_scope?: string; content_snapshot?: Json; selected_word_count?: number; reading_minutes?: number; listening_minutes?: number; selected_item_count?: number; focuses?: Json; custom_question?: string | null; author_visibility?: string; reading_enabled?: boolean; listening_enabled?: boolean; passage_comments_enabled?: boolean; general_feedback_enabled?: boolean; response_visibility?: string; response_limit?: number | null; closes_at?: string | null; status?: string; created_at?: string; updated_at?: string };
+        Update: { id?: string; user_id?: string; project_id?: string; project_title?: string; author_display_name?: string; genre?: string | null; completion_percent?: number | null; stage?: string | null; cover_image_path?: string | null; focus?: string; question?: string | null; content_scope?: string; content_snapshot?: Json; selected_word_count?: number; reading_minutes?: number; listening_minutes?: number; selected_item_count?: number; focuses?: Json; custom_question?: string | null; author_visibility?: string; reading_enabled?: boolean; listening_enabled?: boolean; passage_comments_enabled?: boolean; general_feedback_enabled?: boolean; response_visibility?: string; response_limit?: number | null; closes_at?: string | null; status?: string; updated_at?: string };
+        Relationships: [{ foreignKeyName: 'community_feedback_requests_project_id_fkey'; columns: ['project_id']; isOneToOne: false; referencedRelation: 'projects'; referencedColumns: ['id'] }];
+      };
+      community_feedback_request_content: {
+        Row: { id: string; request_id: string; item_id: string; item_title: string; item_text: string; position: number; source_type: string; created_at: string };
+        Insert: { id?: string; request_id: string; item_id: string; item_title: string; item_text: string; position: number; source_type?: string; created_at?: string };
+        Update: { id?: string; request_id?: string; item_id?: string; item_title?: string; item_text?: string; position?: number; source_type?: string };
+        Relationships: [{ foreignKeyName: 'community_feedback_request_content_request_id_fkey'; columns: ['request_id']; isOneToOne: false; referencedRelation: 'community_feedback_requests'; referencedColumns: ['id'] }];
+      };
+      community_feedback_responses: {
+        Row: { id: string; request_id: string; responder_id: string; anonymous: boolean; overall_impression: string | null; strengths: string | null; unclear_sections: string | null; suggestions: string | null; question_answers: Json; additional_comments: string | null; quick_reactions: Json; status: string; is_helpful: boolean; thanked_at: string | null; archived: boolean; submitted_at: string | null; created_at: string; updated_at: string };
+        Insert: { id?: string; request_id: string; responder_id: string; anonymous?: boolean; overall_impression?: string | null; strengths?: string | null; unclear_sections?: string | null; suggestions?: string | null; question_answers?: Json; additional_comments?: string | null; quick_reactions?: Json; status?: string; is_helpful?: boolean; thanked_at?: string | null; archived?: boolean; submitted_at?: string | null; created_at?: string; updated_at?: string };
+        Update: { id?: string; request_id?: string; responder_id?: string; anonymous?: boolean; overall_impression?: string | null; strengths?: string | null; unclear_sections?: string | null; suggestions?: string | null; question_answers?: Json; additional_comments?: string | null; quick_reactions?: Json; status?: string; is_helpful?: boolean; thanked_at?: string | null; archived?: boolean; submitted_at?: string | null; updated_at?: string };
+        Relationships: [{ foreignKeyName: 'community_feedback_responses_request_id_fkey'; columns: ['request_id']; isOneToOne: false; referencedRelation: 'community_feedback_requests'; referencedColumns: ['id'] }];
+      };
+      community_feedback_replies: {
+        Row: { id: string; request_id: string; response_id: string; author_id: string; body: string; created_at: string; updated_at: string };
+        Insert: { id?: string; request_id: string; response_id: string; author_id: string; body: string; created_at?: string; updated_at?: string };
+        Update: { id?: string; request_id?: string; response_id?: string; author_id?: string; body?: string; updated_at?: string };
+        Relationships: [{ foreignKeyName: 'community_feedback_replies_request_id_fkey'; columns: ['request_id']; isOneToOne: false; referencedRelation: 'community_feedback_requests'; referencedColumns: ['id'] }, { foreignKeyName: 'community_feedback_replies_response_id_fkey'; columns: ['response_id']; isOneToOne: true; referencedRelation: 'community_feedback_responses'; referencedColumns: ['id'] }];
+      };
+      community_feedback_reader_responses: {
+        Row: { id: string; request_id: string; response_id: string; responder_id: string; anonymous: boolean; body: string; created_at: string; updated_at: string };
+        Insert: { id?: string; request_id: string; response_id: string; responder_id: string; anonymous?: boolean; body: string; created_at?: string; updated_at?: string };
+        Update: { id?: string; request_id?: string; response_id?: string; responder_id?: string; anonymous?: boolean; body?: string; updated_at?: string };
+        Relationships: [{ foreignKeyName: 'community_feedback_reader_responses_request_id_fkey'; columns: ['request_id']; isOneToOne: false; referencedRelation: 'community_feedback_requests'; referencedColumns: ['id'] }, { foreignKeyName: 'community_feedback_reader_responses_response_id_fkey'; columns: ['response_id']; isOneToOne: true; referencedRelation: 'community_feedback_responses'; referencedColumns: ['id'] }];
+      };
+      community_feedback_annotations: {
+        Row: { id: string; request_id: string; response_id: string | null; responder_id: string; item_id: string; text_start: number; text_end: number; quoted_excerpt: string; comment_text: string; created_at: string };
+        Insert: { id?: string; request_id: string; response_id?: string | null; responder_id: string; item_id: string; text_start: number; text_end: number; quoted_excerpt: string; comment_text: string; created_at?: string };
+        Update: { id?: string; request_id?: string; response_id?: string | null; responder_id?: string; item_id?: string; text_start?: number; text_end?: number; quoted_excerpt?: string; comment_text?: string };
+        Relationships: [{ foreignKeyName: 'community_feedback_annotations_request_id_fkey'; columns: ['request_id']; isOneToOne: false; referencedRelation: 'community_feedback_requests'; referencedColumns: ['id'] }, { foreignKeyName: 'community_feedback_annotations_response_id_fkey'; columns: ['response_id']; isOneToOne: false; referencedRelation: 'community_feedback_responses'; referencedColumns: ['id'] }];
+      };
+      community_feedback_reader_progress: {
+        Row: { request_id: string; user_id: string; item_index: number; word_offset: number; updated_at: string };
+        Insert: { request_id: string; user_id: string; item_index?: number; word_offset?: number; updated_at?: string };
+        Update: { request_id?: string; user_id?: string; item_index?: number; word_offset?: number; updated_at?: string };
+        Relationships: [{ foreignKeyName: 'community_feedback_reader_progress_request_id_fkey'; columns: ['request_id']; isOneToOne: false; referencedRelation: 'community_feedback_requests'; referencedColumns: ['id'] }];
+      };
       projects: {
         Row: { id: string; user_id: string; title: string; writing_type: string; target_words: number | null; target_chapters: number | null; status: string; current_word_count: number; revision: number; deleted_at: string | null; created_at: string; updated_at: string };
         Insert: { id?: string; user_id: string; title?: string; writing_type: string; target_words?: number | null; target_chapters?: number | null; status?: string; current_word_count?: number; revision?: number; deleted_at?: string | null; created_at?: string; updated_at?: string };
