@@ -1,22 +1,33 @@
 import { StatusBar } from 'expo-status-bar';
 import { LinearGradient } from 'expo-linear-gradient';
-import Reanimated, { Extrapolation, interpolate as reanimatedInterpolate, useAnimatedScrollHandler, useAnimatedStyle, useSharedValue } from 'react-native-reanimated';
+import Reanimated, { useAnimatedScrollHandler, useSharedValue } from 'react-native-reanimated';
 import type { SharedValue } from 'react-native-reanimated';
 import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system/legacy';
+import * as MailComposer from 'expo-mail-composer';
+import * as Print from 'expo-print';
 import * as Speech from 'expo-speech';
+import * as Sharing from 'expo-sharing';
 import * as Haptics from 'expo-haptics';
 import * as Linking from 'expo-linking';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
-import { AccessibilityInfo, ActivityIndicator, Alert, Animated, AppState, Easing, Image, KeyboardAvoidingView, Modal, Platform, Pressable, SafeAreaView, ScrollView, Share, StyleSheet, Text, TextInput, TextInputProps, View, useWindowDimensions } from 'react-native';
+import * as Notifications from 'expo-notifications';
+import { Fragment, type Dispatch, type SetStateAction, useEffect, useMemo, useRef, useState } from 'react';
+import { AccessibilityInfo, ActivityIndicator, Alert, Animated, AppState, Easing, Image, Keyboard, KeyboardAvoidingView, Modal, Platform, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
 import * as Sentry from '@sentry/react-native';
 import { supabase } from './src/lib/supabase';
+import { bookezSecureStorage } from './src/lib/secure-storage';
 import Community, { type CommunityProject } from './src/components/Community';
 import { FeedbackRequestBuilder } from './src/components/CommunityFeedback';
-import { deleteBookezData, ensureBookezProfile, handleBookezAuthUrl, resendSignupConfirmation, sendPasswordReset, signInWithEmail, signOutBookez, signUpWithEmail } from './src/lib/bookez-auth';
-import { uploadBookezFile } from './src/lib/bookez-storage';
+import DictationInput from './src/components/DictationInput';
+import AIWritingTools from './src/components/AIWritingTools';
+import WriteToolBelt, { sanitizeWriteToolBeltConfig, WRITE_TOOL_BELT_STORAGE_KEY, WRITE_TOOL_DEFAULTS, type WriteToolBeltConfig, type WriteToolDefinition } from './src/components/WriteToolBelt';
+import JourneyEnvironment from './src/components/JourneyEnvironment';
+import type { AIWritingOperation } from './src/lib/ai-writing';
+import { deleteBookezData, ensureBookezProfile, handleBookezAuthUrl, isBookezPasswordValid, resendSignupConfirmation, sendPasswordReset, signInWithEmail, signOutBookez, signUpWithEmail, updateBookezPassword } from './src/lib/bookez-auth';
+import { uploadBookezFile, uploadBookezProfileAvatar } from './src/lib/bookez-storage';
+import { BOOK_EXPORT_FORMATS, buildBookHtml, buildBookMarkdown, buildBookText, buildDocx, buildEpub, bytesToBase64, type BookExportFormat } from './src/lib/bookez-export';
 import { clearBookezLocalSyncData, commitBookezProjectCursor, flushBookezQueue, getBookezStorageSummary, getBookezSyncSnapshot, keepBookezLocalConflict, loadBookezProjectChapters, pullBookezProjectSummaries, saveBookezChapter, saveBookezPlanSettings, saveBookezProject } from './src/lib/bookez-sync';
+import { requestBookezNotificationPermissions, syncBookezWritingNotifications, type BookezWritingReminder } from './src/lib/bookez-notifications';
 
 const sentryEnvironment = __DEV__ ? 'development' : 'production';
 const sentryDsn = process.env.EXPO_PUBLIC_SENTRY_DSN ?? 'https://497d40f44bc1b5561701ddc89e23fa99@o4511657628008448.ingest.us.sentry.io/4511850507075584';
@@ -53,6 +64,7 @@ Sentry.init({
 });
 
 type StudioSection = 'assemble' | 'read' | 'listen' | 'export';
+type InputMode = 'dictation' | 'writing';
 type Page = 'Library' | 'Plan' | 'Write' | 'Journey' | 'Community' | 'Profile' | 'Stats' | 'BookStudio';
 
 const C = {
@@ -156,26 +168,11 @@ const syncS = StyleSheet.create({
 
 const projectStorageKey = 'bookez.projects.v1';
 const localProjectBackupKey = (ownerId: string) => `bookez.projects.backup.${ownerId}`;
+const onboardingVersion = '2026-08-12.v3';
+const onboardingStorageKey = (ownerId: string) => `bookez.onboarding.${ownerId}`;
 const createLocalUuid = () => 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (character) => { const random = Math.random() * 16 | 0; const value = character === 'x' ? random : (random & 0x3 | 0x8); return value.toString(16); });
 const stableUuidFrom = (seed: string) => { let hash = 2166136261; for (let index = 0; index < seed.length; index += 1) hash = Math.imul(hash ^ seed.charCodeAt(index), 16777619); const hex = Math.abs(hash).toString(16).padStart(8, '0').repeat(4).slice(0, 32); return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-${(parseInt(hex.slice(16, 17), 16) & 0x3 | 0x8).toString(16)}${hex.slice(17, 20)}-${hex.slice(20)}`; };
 const cloudPlanSnapshot = (plan: ProjectPlan) => { const { drafts: _drafts, ...rest } = plan; return rest; };
-
-type InputMode = 'dictation' | 'writing';
-type DictationInputProps = TextInputProps & { grow?: boolean; onInputMode?: (mode: InputMode) => void };
-
-function DictationInput({ style, accessibilityLabel, grow = false, onInputMode, onKeyPress, ...props }: DictationInputProps) {
-  const inputRef = useRef<TextInput>(null);
-  const openKeyboardForDictation = () => {
-    onInputMode?.('dictation');
-    inputRef.current?.focus();
-  };
-  return <View style={[s.dictationField, grow && s.dictationFieldGrow]}>
-    <TextInput ref={inputRef} {...props} showSoftInputOnFocus onKeyPress={(event) => { onKeyPress?.(event); onInputMode?.('writing'); }} accessibilityLabel={accessibilityLabel} style={[style, s.dictationTextInput]} />
-    <Pressable onPress={openKeyboardForDictation} hitSlop={8} style={s.dictationButton} accessibilityRole="button" accessibilityLabel={`Open phone dictation${accessibilityLabel ? ` for ${accessibilityLabel}` : ''}`} accessibilityHint="Focuses the writing field and opens the keyboard. Tap the keyboard microphone to dictate.">
-      <Text style={s.dictationIcon}>🎙</Text>
-    </Pressable>
-  </View>;
-}
 
 const pageMeta: Record<Page, { icon: string; short: string }> = {
   Library: { icon: '▦', short: 'Library' }, Plan: { icon: '⌘', short: 'Plan' }, Write: { icon: '✎', short: 'Write' },
@@ -227,7 +224,7 @@ type ProjectPlan = {
 };
 
 type ImageMode = 'NONE' | 'OPTIONAL' | 'FREQUENT' | 'IMAGE_LED';
-type ImagePlacement = 'inline' | 'fullWidth' | 'fullPage' | 'facingPage' | 'spread' | 'chapterOpener' | 'background' | 'divider' | 'cover' | 'backCover';
+type ImagePlacement = 'inline' | 'sectionTop' | 'sectionBottom' | 'fullWidth' | 'fullPage' | 'facingPage' | 'spread' | 'chapterOpener' | 'background' | 'divider' | 'cover' | 'backCover';
 type ImageTextPlacement = 'top' | 'bottom' | 'left' | 'right' | 'over' | 'separate';
 type ImageStatus = 'notStarted' | 'idea' | 'briefReady' | 'sketch' | 'revision' | 'final';
 type ImageRole = 'instructional' | 'example' | 'worksheet' | 'chart' | 'decorative' | 'activity';
@@ -258,8 +255,8 @@ type BookezImage = {
   height?: number;
   fileSize?: number;
   title: string;
-  caption: string;
-  captionRequested: boolean;
+  caption?: string;
+  captionRequested?: boolean;
   altText: string;
   credit: string;
   source: string;
@@ -272,14 +269,14 @@ type BookezImage = {
   imageCitation?: ImageCitation;
   notes: string;
   connectedPartKey?: string;
-  placement: ImagePlacement;
+  placement?: ImagePlacement;
   textPlacement: ImageTextPlacement;
   fullBleed: boolean;
   includeInExport: boolean;
   referenceOnly: boolean;
   status: ImageStatus;
   role?: ImageRole;
-  order: number;
+  order?: number;
   createdAt: number;
   updatedAt: number;
 };
@@ -302,6 +299,7 @@ type ImageSystemConfig = {
 
 const commonImagePlacements: ImagePlacement[] = ['inline', 'fullWidth', 'fullPage', 'chapterOpener', 'divider', 'cover', 'backCover'];
 const imageLedPlacements: ImagePlacement[] = ['fullPage', 'facingPage', 'spread', 'inline', 'background', 'cover', 'backCover'];
+const coreImagePlacements: ImagePlacement[] = ['inline', 'sectionTop', 'sectionBottom', 'fullPage'];
 const imageSystemByType: Record<string, ImageSystemConfig> = {
   'Fiction Book': { mode: 'OPTIONAL', label: 'Visuals & Maps', itemLabel: 'Visual', defaultEnabled: false, captionsRecommended: false, creditsRecommended: false, dateLocationRelevant: false, includeInExportByDefault: false, placeholders: false, supportsFacingPages: false, supportsSpreads: false, placements: commonImagePlacements, roles: ['decorative'] },
   'Nonfiction Book': { mode: 'FREQUENT', label: 'Figures & Media', itemLabel: 'Figure', defaultEnabled: true, captionsRecommended: true, creditsRecommended: true, dateLocationRelevant: false, includeInExportByDefault: true, placeholders: true, supportsFacingPages: false, supportsSpreads: false, placements: commonImagePlacements, roles: ['instructional', 'example', 'chart', 'decorative'] },
@@ -319,11 +317,19 @@ const imageSystemByType: Record<string, ImageSystemConfig> = {
 
 const getImageSystemConfig = (type: string): ImageSystemConfig => imageSystemByType[type] ?? imageSystemByType['Custom Project'];
 const imageModeLabel = (mode: ImageMode) => mode === 'IMAGE_LED' ? 'Image-led' : mode === 'FREQUENT' ? 'Images encouraged' : mode === 'OPTIONAL' ? 'Images optional' : 'Images off';
-const imagePlacementLabel = (placement: ImagePlacement) => ({ inline: 'Inline', fullWidth: 'Full width', fullPage: 'Full page', facingPage: 'Facing page', spread: 'Two-page spread', chapterOpener: 'Chapter opener', background: 'Page background', divider: 'Decorative divider', cover: 'Front cover', backCover: 'Back cover' }[placement]);
+const imagePlacementLabel = (placement?: ImagePlacement) => ({ inline: 'Inline', sectionTop: 'Section top', sectionBottom: 'Section bottom', fullWidth: 'Full width', fullPage: 'Full page', facingPage: 'Facing page', spread: 'Two-page spread', chapterOpener: 'Chapter opener', background: 'Page background', divider: 'Decorative divider', cover: 'Front cover', backCover: 'Back cover' }[placement ?? 'inline'] ?? 'Inline');
 const imageStatusLabel = (status: ImageStatus) => ({ notStarted: 'Not started', idea: 'Idea', briefReady: 'Brief ready', sketch: 'Sketch', revision: 'Revision', final: 'Final' }[status]);
 const imagePermissionLabel = (status: PermissionStatus) => ({ unknown: 'Permission not checked', owned: 'I own this', licensed: 'Licensed', permissionNeeded: 'Permission needed', publicDomain: 'Public domain' }[status]);
 const imageToolsVisible = (project: Project) => getImageSystemConfig(project.type).mode !== 'NONE' || Boolean(project.imageEnabled);
-const publicationImages = (project: Project) => (project.images ?? []).filter((image) => image.includeInExport && !image.referenceOnly).sort((a, b) => a.order - b.order);
+const publicationImages = (project: Project) => (project.images ?? []).filter((image) => image.includeInExport && !image.referenceOnly).sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || a.createdAt - b.createdAt);
+
+const normalizeBookezImage = (image: BookezImage): BookezImage => ({
+  ...image,
+  placement: image.placement ?? 'inline',
+  caption: image.caption ?? '',
+  captionRequested: Boolean(image.captionRequested ?? image.caption),
+  order: image.order ?? 0,
+});
 
 type WritingFrequency = 'everyday' | 'weekdays' | 'weekends' | 'custom';
 type WritingReminderTime = 'morning' | 'afternoon' | 'evening';
@@ -1073,7 +1079,8 @@ const makeBookezImage = (project: Project, asset: ImagePicker.ImagePickerAsset, 
     sourceCitation: '',
     notes: '',
     connectedPartKey,
-    placement: config.placements[0] ?? 'inline',
+    // Inline is the least surprising logical position for both existing and new projects.
+    placement: 'inline',
     textPlacement: 'bottom',
     fullBleed: config.mode === 'IMAGE_LED',
     includeInExport,
@@ -1105,29 +1112,103 @@ type ImageSystemCardProps = {
   onUpdateImage: (id: string, changes: Partial<BookezImage>) => void;
   onRemoveImage: (id: string) => void;
   onEnableImages?: () => void;
+  coverImage?: BookezImage;
+  onAddCoverImage?: () => void;
+  onReplaceCoverImage?: (image: BookezImage) => void;
+  onRemoveCoverImage?: (id: string) => void;
   compact?: boolean;
   emptyLabel?: string;
   initialExpandedId?: string | null;
 };
 
-function ImageSystemCard({ project, images, connectedPartKey, onAddImage, onReplaceImage, onUpdateImage, onRemoveImage, onEnableImages, compact = false, emptyLabel, initialExpandedId }: ImageSystemCardProps) {
+const placementPickerOptions: Array<{ placement: ImagePlacement; label: string; diagram: string[] }> = [
+  { placement: 'inline', label: 'Inline', diagram: ['text / image', 'mixed'] },
+  { placement: 'sectionTop', label: 'Section top', diagram: ['image', 'text'] },
+  { placement: 'sectionBottom', label: 'Section bottom', diagram: ['text', 'image'] },
+  { placement: 'fullPage', label: 'Full page', diagram: ['LARGE', 'IMAGE'] },
+];
+
+function ImagePlacementPicker({ value, onChange }: { value: ImagePlacement; onChange: (placement: ImagePlacement) => void }) {
+  return <View style={imagePlacementS.placementPicker} accessibilityLabel="Image placement options">
+    {placementPickerOptions.map((option) => <Pressable key={option.placement} onPress={() => onChange(option.placement)} style={[imagePlacementS.placementChoice, value === option.placement && imagePlacementS.placementChoiceSelected]} accessibilityRole="button" accessibilityState={{ selected: value === option.placement }} accessibilityLabel={`Set image placement to ${option.label}`}>
+      <View style={imagePlacementS.placementDiagram}>{option.diagram.map((line, index) => <Text key={`${option.placement}-${index}`} style={[imagePlacementS.placementDiagramText, option.placement === 'fullPage' && imagePlacementS.placementDiagramLarge]}>{line}</Text>)}</View>
+      <Text style={[imagePlacementS.placementChoiceLabel, value === option.placement && imagePlacementS.placementChoiceLabelSelected]}>{option.label}</Text>
+      {value === option.placement && <Text style={imagePlacementS.placementChoiceCheck}>✓</Text>}
+    </Pressable>)}
+  </View>;
+}
+
+function LegacyImageSystemCard({ project, images, connectedPartKey, onAddImage, onReplaceImage, onUpdateImage, onRemoveImage, onEnableImages, compact = false, emptyLabel, initialExpandedId }: ImageSystemCardProps) {
   const config = getImageSystemConfig(project.type);
   const [expandedId, setExpandedId] = useState<string | null>(initialExpandedId ?? null);
   const [captionOpenIds, setCaptionOpenIds] = useState<string[]>([]);
-  const scopedImages = connectedPartKey ? images.filter((image) => image.connectedPartKey === connectedPartKey) : images;
+  const [placementOpenIds, setPlacementOpenIds] = useState<string[]>([]);
+  const scopedImages = (connectedPartKey ? images.filter((image) => image.connectedPartKey === connectedPartKey) : images).slice().sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || a.createdAt - b.createdAt);
   const label = connectedPartKey ? `${config.itemLabel} for this part` : config.label;
   const visible = imageToolsVisible(project);
   if (!visible) return <View style={imageS.hiddenCard}><View style={imageS.hiddenIcon}><Text style={imageS.hiddenIconText}>＋</Text></View><View style={imageS.cardCopy}><Text style={imageS.cardTitle}>Add {config.label.toLowerCase()} when you need them</Text><Text style={imageS.cardHint}>Visual tools are off for this project type until you enable them.</Text></View><Pressable onPress={onEnableImages} style={imageS.enableButton} accessibilityLabel="Enable image tools"><Text style={imageS.enableButtonText}>Enable</Text></Pressable></View>;
 
   return <View style={[imageS.card, compact && imageS.cardCompact]}>
-    <View style={imageS.cardHeader}><View style={imageS.cardIcon}><Text style={imageS.cardIconText}>▧</Text></View><View style={imageS.cardCopy}><Text style={imageS.cardKicker}>{config.mode === 'IMAGE_LED' ? 'VISUAL PLAN' : 'OPTIONAL VISUALS'}</Text><Text style={imageS.cardTitle}>{label}</Text><Text style={imageS.cardHint}>{scopedImages.length ? `${scopedImages.length} added · ${imageModeLabel(config.mode)}` : config.mode === 'IMAGE_LED' ? 'Every page can carry an illustration slot.' : 'Keep image tools close without making them take over.'}</Text></View><Pressable onPress={onAddImage} style={imageS.addButton} accessibilityRole="button" accessibilityLabel={`Add ${config.itemLabel}`}><Text style={imageS.addButtonText}>＋</Text></Pressable></View>
-    {!scopedImages.length && <Pressable onPress={onAddImage} style={imageS.emptyButton} accessibilityRole="button"><Text style={imageS.emptyIcon}>▧</Text><View style={imageS.emptyCopy}><Text style={imageS.emptyTitle}>{emptyLabel ?? `Add ${config.itemLabel}`}</Text><Text style={imageS.emptyHint}>{config.mode === 'IMAGE_LED' ? 'Start with an idea, sketch, or finished image.' : 'Choose a photo or visual from your device.'}</Text></View><Text style={imageS.emptyArrow}>›</Text></Pressable>}
+    <View style={imageS.cardHeader}><View style={imageS.cardIcon}><Text style={imageS.cardIconText}>▧</Text></View><View style={imageS.cardCopy}><Text style={imageS.cardKicker}>{config.mode === 'IMAGE_LED' ? 'VISUAL PLAN' : 'OPTIONAL VISUALS'}</Text><Text style={imageS.cardTitle}>{label}</Text><Text style={imageS.cardHint}>{scopedImages.length ? `${scopedImages.length} added · ${imageModeLabel(config.mode)}` : config.mode === 'IMAGE_LED' ? 'Every page can carry an illustration slot.' : connectedPartKey ? 'Add a visual to this part of the book.' : compact ? 'Add a front-cover image here, then place visuals throughout the book.' : 'Keep image tools close without making them take over.'}</Text></View><Pressable onPress={onAddImage} style={imageS.addButton} accessibilityRole="button" accessibilityLabel={`Add ${config.itemLabel}`}><Text style={imageS.addButtonText}>＋</Text></Pressable></View>
+    {!scopedImages.length && <Pressable onPress={onAddImage} style={imageS.emptyButton} accessibilityRole="button"><Text style={imageS.emptyIcon}>▧</Text><View style={imageS.emptyCopy}><Text style={imageS.emptyTitle}>{compact && config.mode !== 'IMAGE_LED' ? `Add a front cover or ${config.itemLabel.toLowerCase()}` : emptyLabel ?? `Add ${config.itemLabel}`}</Text><Text style={imageS.emptyHint}>{config.mode === 'IMAGE_LED' ? 'Start with an idea, sketch, or finished image.' : compact ? 'Choose an image, then set it to Front cover or inside the book.' : 'Choose a photo or visual from your device.'}</Text></View><Text style={imageS.emptyArrow}>›</Text></Pressable>}
     {scopedImages.map((image) => <View key={image.id} style={imageS.imageRow}>
       <Image source={{ uri: image.uri }} style={imageS.thumbnail} resizeMode="cover" />
       <View style={imageS.imageCopy}><Text numberOfLines={1} style={imageS.imageTitle}>{image.title || config.itemLabel}</Text><Text numberOfLines={1} style={imageS.imageMeta}>{image.referenceOnly ? 'Private reference' : imagePlacementLabel(image.placement)}{image.status ? ` · ${imageStatusLabel(image.status)}` : ''}</Text><View style={imageS.imageActions}><Pressable onPress={() => setExpandedId(expandedId === image.id ? null : image.id)} style={imageS.detailButton}><Text style={imageS.detailButtonText}>{expandedId === image.id ? 'Hide details' : 'Image details'}</Text></Pressable><Pressable onPress={() => { setCaptionOpenIds((current) => current.includes(image.id) ? current.filter((id) => id !== image.id) : [...current, image.id]); setExpandedId(image.id); }} style={imageS.captionButton} accessibilityLabel={image.captionRequested ? 'Hide caption options' : 'Add image caption'}><Text style={imageS.captionButtonText}>{image.captionRequested ? (captionOpenIds.includes(image.id) ? 'Hide caption' : 'Caption') : '＋ Caption'}</Text></Pressable><Pressable onPress={() => onReplaceImage(image)} style={imageS.replaceButton}><Text style={imageS.replaceButtonText}>Replace</Text></Pressable></View></View>
       <Pressable onPress={() => onRemoveImage(image.id)} style={imageS.removeButton} accessibilityLabel={`Remove ${image.title || config.itemLabel}`}><Text style={imageS.removeButtonText}>×</Text></Pressable>
       {expandedId === image.id && <View style={imageS.details}><TextInput value={image.title} onChangeText={(value) => onUpdateImage(image.id, { title: value })} placeholder="Image title" placeholderTextColor="#A0A3BB" style={imageS.detailInput} accessibilityLabel="Image title" />{(Boolean(image.caption?.trim()) || captionOpenIds.includes(image.id)) && <View style={imageS.captionEditor}><TextInput value={image.caption} onChangeText={(value) => onUpdateImage(image.id, { caption: value, captionRequested: true })} placeholder="Example: Figure 1. A quiet morning in the garden." placeholderTextColor="#A0A3BB" style={imageS.detailInput} accessibilityLabel="Image caption" /><Pressable onPress={() => { onUpdateImage(image.id, { caption: '', captionRequested: false }); setCaptionOpenIds((current) => current.filter((id) => id !== image.id)); }} style={imageS.removeCaptionButton}><Text style={imageS.removeCaptionText}>Remove caption requirement</Text></Pressable></View>}<TextInput value={image.altText} onChangeText={(value) => onUpdateImage(image.id, { altText: value })} placeholder="Alt text for accessibility" placeholderTextColor="#A0A3BB" style={imageS.detailInput} accessibilityLabel="Image alt text" /><View style={imageS.detailFieldRow}><Text style={imageS.detailLabel}>PLACEMENT</Text><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={imageS.detailPills}>{config.placements.map((placement) => <Pressable key={placement} onPress={() => onUpdateImage(image.id, { placement })} style={[imageS.detailPill, image.placement === placement && imageS.detailPillSelected]}><Text style={[imageS.detailPillText, image.placement === placement && imageS.detailPillTextSelected]}>{imagePlacementLabel(placement)}</Text></Pressable>)}</ScrollView></View>{config.mode === 'IMAGE_LED' && <View style={imageS.detailFieldRow}><Text style={imageS.detailLabel}>ILLUSTRATION STATUS</Text><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={imageS.detailPills}>{(['notStarted', 'idea', 'briefReady', 'sketch', 'revision', 'final'] as ImageStatus[]).map((status) => <Pressable key={status} onPress={() => onUpdateImage(image.id, { status })} style={[imageS.detailPill, image.status === status && imageS.detailPillSelected]}><Text style={[imageS.detailPillText, image.status === status && imageS.detailPillTextSelected]}>{imageStatusLabel(status)}</Text></Pressable>)}</ScrollView></View>}{config.dateLocationRelevant && <View style={imageS.detailTwoColumn}><TextInput value={image.date} onChangeText={(value) => onUpdateImage(image.id, { date: value })} placeholder="Date" placeholderTextColor="#A0A3BB" style={[imageS.detailInput, imageS.detailHalf]} accessibilityLabel="Image date" /><TextInput value={image.location} onChangeText={(value) => onUpdateImage(image.id, { location: value })} placeholder="Location" placeholderTextColor="#A0A3BB" style={[imageS.detailInput, imageS.detailHalf]} accessibilityLabel="Image location" /></View>}<TextInput value={image.credit} onChangeText={(value) => onUpdateImage(image.id, { credit: value })} placeholder={config.creditsRecommended ? 'Credit / source (recommended)' : 'Credit / source (optional)'} placeholderTextColor="#A0A3BB" style={imageS.detailInput} accessibilityLabel="Image credit" /><View style={imageS.detailSwitchRow}><View style={imageS.detailSwitchCopy}><Text style={imageS.detailSwitchTitle}>Include in Book Studio</Text><Text style={imageS.detailSwitchHint}>{image.referenceOnly ? 'Private reference images stay out of publication preview.' : 'This image can appear in the publication preview.'}</Text></View><Switch value={image.includeInExport && !image.referenceOnly} onValueChange={(value) => onUpdateImage(image.id, { includeInExport: value, referenceOnly: !value })} trackColor={{ false: '#D7D9E6', true: '#BAB6F1' }} thumbColor={image.includeInExport && !image.referenceOnly ? C.periwinkle : '#FFF'} /></View><View style={imageS.detailSwitchRow}><View style={imageS.detailSwitchCopy}><Text style={imageS.detailSwitchTitle}>Full bleed</Text><Text style={imageS.detailSwitchHint}>Let the visual run to the page edge when the format supports it.</Text></View><Switch value={image.fullBleed} onValueChange={(value) => onUpdateImage(image.id, { fullBleed: value })} trackColor={{ false: '#D7D9E6', true: '#BAB6F1' }} thumbColor={image.fullBleed ? C.periwinkle : '#FFF'} /></View><Text style={imageS.detailResolution}>{image.width && image.height ? `${image.width} × ${image.height}px` : 'Resolution not available'} · {imagePermissionLabel(image.permissionStatus)}</Text></View>}
     </View>)}
+  </View>;
+}
+
+function ImageSystemCard({ project, images, connectedPartKey, onAddImage, onReplaceImage, onUpdateImage, onRemoveImage, onEnableImages, coverImage, onAddCoverImage, onReplaceCoverImage, onRemoveCoverImage, compact = false, emptyLabel, initialExpandedId }: ImageSystemCardProps) {
+  const config = getImageSystemConfig(project.type);
+  const [expandedId, setExpandedId] = useState<string | null>(initialExpandedId ?? null);
+  const [captionOpenIds, setCaptionOpenIds] = useState<string[]>([]);
+  const [placementOpenIds, setPlacementOpenIds] = useState<string[]>([]);
+  const projectVisualHome = !connectedPartKey && Boolean(onAddCoverImage);
+  const scopedImages = (connectedPartKey ? images.filter((image) => image.connectedPartKey === connectedPartKey) : projectVisualHome ? images.filter((image) => image.placement !== 'cover') : images).slice().sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || a.createdAt - b.createdAt);
+  const label = connectedPartKey ? `${config.itemLabel} for this part` : config.label;
+  if (!imageToolsVisible(project)) return <View style={imageS.hiddenCard}><View style={imageS.hiddenIcon}><Text style={imageS.hiddenIconText}>＋</Text></View><View style={imageS.cardCopy}><Text style={imageS.cardTitle}>Add {config.label.toLowerCase()} when you need them</Text><Text style={imageS.cardHint}>Visual tools are off for this project type until you enable them.</Text></View><Pressable onPress={onEnableImages} style={imageS.enableButton} accessibilityLabel="Enable image tools"><Text style={imageS.enableButtonText}>Enable</Text></Pressable></View>;
+
+  const renderDetails = (image: BookezImage) => {
+    const currentPlacement = image.placement ?? 'inline';
+    const advancedPlacements = Array.from(new Set(config.placements.filter((placement) => !coreImagePlacements.includes(placement)).concat(!coreImagePlacements.includes(currentPlacement) ? [currentPlacement] : [])));
+    return <View style={imageS.details}>
+      <TextInput value={image.title} onChangeText={(value) => onUpdateImage(image.id, { title: value })} placeholder="Image title" placeholderTextColor="#A0A3BB" style={imageS.detailInput} accessibilityLabel="Image title" />
+      {(Boolean(image.caption?.trim()) || captionOpenIds.includes(image.id)) && <View style={imageS.captionEditor}><TextInput value={image.caption ?? ''} onChangeText={(value) => onUpdateImage(image.id, { caption: value, captionRequested: true })} placeholder="Add an optional caption…" placeholderTextColor="#A0A3BB" style={imageS.detailInput} accessibilityLabel="Edit image caption" /><Pressable onPress={() => { onUpdateImage(image.id, { caption: '', captionRequested: false }); setCaptionOpenIds((current) => current.filter((id) => id !== image.id)); }} style={imageS.removeCaptionButton}><Text style={imageS.removeCaptionText}>Remove caption</Text></Pressable></View>}
+      <TextInput value={image.altText} onChangeText={(value) => onUpdateImage(image.id, { altText: value })} placeholder="Alt text for accessibility" placeholderTextColor="#A0A3BB" style={imageS.detailInput} accessibilityLabel="Image alt text" />
+      <View style={imageS.detailFieldRow}><View style={imageS.placementHeader}><Text style={imageS.detailLabel}>PLACEMENT</Text><Pressable onPress={() => setPlacementOpenIds((current) => current.includes(image.id) ? current.filter((id) => id !== image.id) : [...current, image.id])} style={imageS.placementToggle} accessibilityRole="button" accessibilityLabel="Change image placement" accessibilityState={{ expanded: placementOpenIds.includes(image.id) }}><Text style={imageS.placementToggleText}>{imagePlacementLabel(currentPlacement)} ⌄</Text></Pressable></View>{placementOpenIds.includes(image.id) && <ImagePlacementPicker value={currentPlacement} onChange={(placement) => onUpdateImage(image.id, { placement })} />}{advancedPlacements.length > 0 && <><Text style={imageS.advancedPlacementLabel}>More layout options</Text><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={imageS.detailPills}>{advancedPlacements.map((placement) => <Pressable key={placement} onPress={() => onUpdateImage(image.id, { placement })} style={[imageS.detailPill, currentPlacement === placement && imageS.detailPillSelected]} accessibilityLabel={`Set image placement to ${imagePlacementLabel(placement)}`}><Text style={[imageS.detailPillText, currentPlacement === placement && imageS.detailPillTextSelected]}>{imagePlacementLabel(placement)}</Text></Pressable>)}</ScrollView></>}</View>
+      {config.mode === 'IMAGE_LED' && <View style={imageS.detailFieldRow}><Text style={imageS.detailLabel}>ILLUSTRATION STATUS</Text><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={imageS.detailPills}>{(['notStarted', 'idea', 'briefReady', 'sketch', 'revision', 'final'] as ImageStatus[]).map((status) => <Pressable key={status} onPress={() => onUpdateImage(image.id, { status })} style={[imageS.detailPill, image.status === status && imageS.detailPillSelected]}><Text style={[imageS.detailPillText, image.status === status && imageS.detailPillTextSelected]}>{imageStatusLabel(status)}</Text></Pressable>)}</ScrollView></View>}
+      {config.dateLocationRelevant && <View style={imageS.detailTwoColumn}><TextInput value={image.date} onChangeText={(value) => onUpdateImage(image.id, { date: value })} placeholder="Date" placeholderTextColor="#A0A3BB" style={[imageS.detailInput, imageS.detailHalf]} accessibilityLabel="Image date" /><TextInput value={image.location} onChangeText={(value) => onUpdateImage(image.id, { location: value })} placeholder="Location" placeholderTextColor="#A0A3BB" style={[imageS.detailInput, imageS.detailHalf]} accessibilityLabel="Image location" /></View>}
+      <TextInput value={image.credit} onChangeText={(value) => onUpdateImage(image.id, { credit: value })} placeholder={config.creditsRecommended ? 'Credit / source (recommended)' : 'Credit / source (optional)'} placeholderTextColor="#A0A3BB" style={imageS.detailInput} accessibilityLabel="Image credit" />
+      <View style={imageS.detailSwitchRow}><View style={imageS.detailSwitchCopy}><Text style={imageS.detailSwitchTitle}>Include in Book Studio</Text><Text style={imageS.detailSwitchHint}>{image.referenceOnly ? 'Private reference images stay out of publication preview.' : 'This image can appear in the publication preview.'}</Text></View><Switch value={Boolean(image.includeInExport && !image.referenceOnly)} onValueChange={(value) => onUpdateImage(image.id, { includeInExport: value, referenceOnly: !value })} trackColor={{ false: '#D7D9E6', true: '#BAB6F1' }} thumbColor={image.includeInExport && !image.referenceOnly ? C.periwinkle : '#FFF'} /></View>
+      <View style={imageS.detailSwitchRow}><View style={imageS.detailSwitchCopy}><Text style={imageS.detailSwitchTitle}>Full bleed</Text><Text style={imageS.detailSwitchHint}>Let the visual run to the page edge when the format supports it.</Text></View><Switch value={Boolean(image.fullBleed)} onValueChange={(value) => onUpdateImage(image.id, { fullBleed: value })} trackColor={{ false: '#D7D9E6', true: '#BAB6F1' }} thumbColor={image.fullBleed ? C.periwinkle : '#FFF'} /></View>
+      <Text style={imageS.detailResolution}>{image.width && image.height ? `${image.width} × ${image.height}px` : 'Resolution not available'} · {imagePermissionLabel(image.permissionStatus)}</Text>
+    </View>;
+  };
+
+  return <View style={[imageS.card, compact && imageS.cardCompact]}>
+    <View style={imageS.cardHeader}><View style={imageS.cardIcon}><Text style={imageS.cardIconText}>▧</Text></View><View style={imageS.cardCopy}><Text style={imageS.cardKicker}>{config.mode === 'IMAGE_LED' ? 'VISUAL PLAN' : 'OPTIONAL VISUALS'}</Text><Text style={imageS.cardTitle}>{label}</Text><Text style={imageS.cardHint}>{scopedImages.length ? `${scopedImages.length} added · ${imageModeLabel(config.mode)}` : projectVisualHome ? 'Add a photo, illustration, or cover—then choose where it belongs.' : connectedPartKey ? 'Add a visual to this part of the book.' : 'Keep image tools close without making them take over.'}</Text></View><Pressable onPress={onAddImage} style={imageS.addButton} accessibilityRole="button" accessibilityLabel={`Add ${config.itemLabel}`}><Text style={imageS.addButtonText}>＋</Text></Pressable></View>
+    {projectVisualHome && <View style={imageS.guideCard}>
+      <Text style={imageS.guideEyebrow}>WHAT YOUR VISUALS CAN DO</Text>
+      <Text style={imageS.guideTitle}>Give each image a place in the book.</Text>
+      <View style={imageS.guideGrid}>
+        <View style={imageS.guideItem}><Text style={imageS.guideIcon}>↕</Text><View style={imageS.guideCopy}><Text style={imageS.guideItemTitle}>In the story</Text><Text style={imageS.guideItemHint}>Top, inline, bottom, or full page.</Text></View></View>
+        <View style={imageS.guideItem}><Text style={imageS.guideIcon}>▣</Text><View style={imageS.guideCopy}><Text style={imageS.guideItemTitle}>On the cover</Text><Text style={imageS.guideItemHint}>A title image reused in Community.</Text></View></View>
+        <View style={imageS.guideItem}><Text style={imageS.guideIcon}>✦</Text><View style={imageS.guideCopy}><Text style={imageS.guideItemTitle}>For reference</Text><Text style={imageS.guideItemHint}>Keep it close without publishing it.</Text></View></View>
+      </View>
+    </View>}
+    {projectVisualHome && <View style={imageS.coverSection}>
+      <View style={imageS.coverSectionHeader}><View><Text style={imageS.coverEyebrow}>BOOK IDENTITY</Text><Text style={imageS.coverTitle}>Book cover image</Text></View>{coverImage && <Text style={imageS.coverReady}>{coverImage.storagePath ? 'READY TO SHARE' : 'ON THIS DEVICE'}</Text>}</View>
+      {coverImage ? <View style={imageS.coverRow}>
+        <Image source={{ uri: coverImage.uri }} style={imageS.coverThumbnail} resizeMode="cover" />
+        <View style={imageS.coverCopy}><Text numberOfLines={1} style={imageS.coverName}>{coverImage.title || `${project.title} cover`}</Text><Text style={imageS.coverHint}>{coverImage.storagePath ? 'Used in Book Studio and Community when you choose to share.' : 'Used in Book Studio. Connect to reuse it in Community.'}</Text><View style={imageS.coverActions}><Pressable onPress={() => onReplaceCoverImage?.(coverImage)} style={imageS.coverReplaceButton}><Text style={imageS.coverReplaceText}>Replace</Text></Pressable><Pressable onPress={() => onRemoveCoverImage?.(coverImage.id)} style={imageS.coverRemoveButton}><Text style={imageS.coverRemoveText}>Remove</Text></Pressable></View></View>
+      </View> : <Pressable onPress={onAddCoverImage} style={imageS.coverEmpty} accessibilityRole="button" accessibilityLabel="Add a book cover image">
+        <View style={imageS.coverEmptyIcon}><Text style={imageS.coverEmptyIconText}>▣</Text></View><View style={imageS.coverCopy}><Text style={imageS.coverName}>Add a book cover image</Text><Text style={imageS.coverHint}>It can appear in your book and on Community when you connect.</Text></View><Text style={imageS.coverArrow}>›</Text>
+      </Pressable>}
+    </View>}
+    {!scopedImages.length && <Pressable onPress={onAddImage} style={imageS.emptyButton} accessibilityRole="button"><Text style={imageS.emptyIcon}>▧</Text><View style={imageS.emptyCopy}><Text style={imageS.emptyTitle}>{emptyLabel ?? `Add ${config.itemLabel}`}</Text><Text style={imageS.emptyHint}>Choose a photo or visual from your device.</Text></View><Text style={imageS.emptyArrow}>›</Text></Pressable>}
+    {scopedImages.map((image) => <View key={image.id} style={imageS.imageRow}><Image source={{ uri: image.uri }} style={imageS.thumbnail} resizeMode="contain" /><View style={imageS.imageCopy}><Text numberOfLines={1} style={imageS.imageTitle}>{image.title || config.itemLabel}</Text><Text numberOfLines={1} style={imageS.imageMeta}>{image.referenceOnly ? 'Private reference' : imagePlacementLabel(image.placement)}{image.status ? ` · ${imageStatusLabel(image.status)}` : ''}</Text><View style={imageS.imageActions}><Pressable onPress={() => setExpandedId(expandedId === image.id ? null : image.id)} style={imageS.detailButton} accessibilityLabel={expandedId === image.id ? 'Hide image details' : 'Show image details'}><Text style={imageS.detailButtonText}>{expandedId === image.id ? 'Hide details' : 'Image details'}</Text></Pressable><Pressable onPress={() => { setCaptionOpenIds((current) => current.includes(image.id) ? current.filter((id) => id !== image.id) : [...current, image.id]); setExpandedId(image.id); }} style={imageS.captionButton} accessibilityLabel={image.caption ? 'Edit image caption' : 'Add image caption'}><Text style={imageS.captionButtonText}>{image.caption ? 'Caption' : '＋ Caption'}</Text></Pressable><Pressable onPress={() => onReplaceImage(image)} style={imageS.replaceButton}><Text style={imageS.replaceButtonText}>Replace</Text></Pressable></View></View><Pressable onPress={() => onRemoveImage(image.id)} style={imageS.removeButton} accessibilityLabel={`Remove ${image.title || config.itemLabel}`}><Text style={imageS.removeButtonText}>×</Text></Pressable>{expandedId === image.id && renderDetails(image)}</View>)}
   </View>;
 }
 
@@ -1213,9 +1294,10 @@ const copy: Project = { ...project, cloudId: createLocalUuid(), cloudRevision: 0
   const renderProjectCard = (project: Project, index: number) => {
     const projectSnapshot = getJourneySnapshot(project);
     const currentPart = projectSnapshot.nextPart?.title ?? (projectSnapshot.parts[projectSnapshot.parts.length - 1]?.title ?? 'No section selected');
+    const coverImage = project.images?.find((image) => image.placement === 'cover');
     return <View key={projectKey(project, index)} style={[s.libraryProjectCard, project.archived && s.libraryProjectCardArchived]}>
       <Pressable onPress={() => onSelectProject(project.title)} style={s.libraryProjectTop} accessibilityLabel={`Select ${project.title}`}>
-        <View style={[s.projectMark, { backgroundColor: project.color }]}><Text style={s.projectMarkText}>{project.mark}</Text></View>
+        <View style={[s.projectMark, { backgroundColor: project.color }]}>{coverImage ? <Image source={{ uri: coverImage.uri }} style={s.libraryProjectCover} resizeMode="cover" accessibilityLabel={`${project.title} cover image`} /> : <Text style={s.projectMarkText}>{project.mark}</Text>}</View>
         <View style={s.projectCopy}><Text numberOfLines={1} style={s.projectTitle}>{project.title}</Text><Text numberOfLines={1} style={s.projectType}>{project.type}{project.archived ? ' · Archived' : ''}</Text><Text numberOfLines={1} style={s.projectDetail}>{projectSnapshot.stage} · {projectSnapshot.progressPercent}% complete</Text></View>
         <Pressable onPress={() => setMenuProject(project)} style={s.projectOverflowButton} accessibilityLabel={`More actions for ${project.title}`}><Text style={s.projectOverflowText}>•••</Text></Pressable>
       </Pressable>
@@ -1282,7 +1364,7 @@ const copy: Project = { ...project, cloudId: createLocalUuid(), cloudRevision: 0
   </>;
 }
 
-function Plan({ projects, activeProject, onSelectProject, onUpdateProject, onPage }: { projects: Project[]; activeProject: string; onSelectProject: (title: string) => void; onUpdateProject: (title: string, changes: Partial<Project>) => void; onPage: (page: Page) => void }) {
+function Plan({ projects, activeProject, userId, onSelectProject, onUpdateProject, onPage }: { projects: Project[]; activeProject: string; userId: string | null; onSelectProject: (title: string) => void; onUpdateProject: (title: string, changes: Partial<Project>) => void; onPage: (page: Page) => void }) {
   const currentProject = projects.find((project) => project.title === activeProject) ?? projects[0];
   const currentPlan = currentProject?.plan ?? defaultPlanFor(currentProject?.type ?? 'Custom Project');
   const { width: windowWidth } = useWindowDimensions();
@@ -1482,6 +1564,24 @@ function Plan({ projects, activeProject, onSelectProject, onUpdateProject, onPag
     if (!currentProject) return;
     requestImage(currentProject, (asset) => onUpdateProject(activeProject, { images: [...(currentProject.images ?? []), makeBookezImage(currentProject, asset)] }));
   };
+  const addProjectCoverImage = () => {
+    if (!currentProject) return;
+    requestImage(currentProject, (asset) => {
+      const image = { ...makeBookezImage(currentProject, asset), title: `${currentProject.title} cover`, placement: 'cover' as ImagePlacement, includeInExport: true, referenceOnly: false };
+      const nextImages = [...projectImages.filter((item) => item.placement !== 'cover'), image];
+      onUpdateProject(activeProject, { images: nextImages });
+      if (userId && currentProject.cloudId) void uploadBookezFile(userId, currentProject.cloudId, asset.uri, `community-cover-${image.id}${asset.fileName?.match(/\.[^.]+$/)?.[0] ?? '.jpg'}`, asset.mimeType ?? 'image/jpeg').then(({ path }) => onUpdateProject(activeProject, { images: [...projectImages.filter((item) => item.placement !== 'cover'), { ...image, storagePath: path }] })).catch(() => Alert.alert('Cover saved on this device', 'Bookez could not upload the cover for Community yet. It will still appear in your title-page preview.'));
+    });
+  };
+  const replaceProjectCoverImage = (coverImage: BookezImage) => {
+    if (!currentProject) return;
+    requestImage(currentProject, (asset) => {
+      const replacement = { ...makeBookezImage(currentProject, asset), id: coverImage.id, storagePath: coverImage.storagePath, title: coverImage.title || `${currentProject.title} cover`, placement: 'cover' as ImagePlacement, includeInExport: true, referenceOnly: false, updatedAt: Date.now() };
+      const nextImages = projectImages.map((item) => item.id === coverImage.id ? replacement : item);
+      onUpdateProject(activeProject, { images: nextImages });
+      if (userId && currentProject.cloudId) void uploadBookezFile(userId, currentProject.cloudId, asset.uri, `community-cover-${coverImage.id}${asset.fileName?.match(/\.[^.]+$/)?.[0] ?? '.jpg'}`, asset.mimeType ?? 'image/jpeg').then(({ path }) => onUpdateProject(activeProject, { images: nextImages.map((item) => item.id === coverImage.id ? { ...replacement, storagePath: path } : item) })).catch(() => Alert.alert('Cover updated on this device', 'Bookez could not refresh the Community copy yet.'));
+    });
+  };
   const replaceProjectImage = (image: BookezImage) => {
     if (!currentProject) return;
     requestImage(currentProject, (asset) => onUpdateProject(activeProject, { images: projectImages.map((item) => item.id === image.id ? { ...item, ...makeBookezImage(currentProject, asset), id: item.id, title: item.title, caption: item.caption, altText: item.altText, credit: item.credit, placement: item.placement, includeInExport: item.includeInExport, referenceOnly: item.referenceOnly, connectedPartKey: item.connectedPartKey, updatedAt: Date.now() } : item) }));
@@ -1545,7 +1645,7 @@ function Plan({ projects, activeProject, onSelectProject, onUpdateProject, onPag
       <View style={{ flex: 1 }}><Text style={s.planSelectedOverline}>PLANNING</Text><Text style={s.planSelectedTitle}>{selectedType.name}</Text><Text style={s.planSelectedSub}>{blueprint.unitLabelPlural} · {estimatedTargetPages || '—'} pages</Text></View>
       <Pressable onPress={() => onPage('Journey')} style={s.planJourneyLink}><Text style={s.planJourneyLinkText}>Journey</Text><Text style={s.planSelectedArrow}>✦</Text></Pressable>
     </View>
-    <ImageSystemCard project={currentProject} images={projectImages} onAddImage={addProjectImage} onReplaceImage={replaceProjectImage} onUpdateImage={updateProjectImage} onRemoveImage={removeProjectImage} onEnableImages={() => onUpdateProject(activeProject, { imageEnabled: true })} compact emptyLabel={`Add ${imageConfig.itemLabel} to this project`} />
+    <ImageSystemCard project={currentProject} images={projectImages} onAddImage={addProjectImage} onReplaceImage={replaceProjectImage} onUpdateImage={updateProjectImage} onRemoveImage={removeProjectImage} onEnableImages={() => onUpdateProject(activeProject, { imageEnabled: true })} coverImage={projectImages.find((image) => image.placement === 'cover')} onAddCoverImage={addProjectCoverImage} onReplaceCoverImage={replaceProjectCoverImage} onRemoveCoverImage={removeProjectImage} compact emptyLabel={`Add ${imageConfig.itemLabel} to this project`} />
 
     <View style={s.planSteps}>
       {stepMeta.map((item, index) => <Pressable key={item.label} onPress={() => setStep(index)} style={[s.planStep, step === index && s.planStepActive]}>
@@ -1747,14 +1847,14 @@ function getBookStudioState(project: Project): BookStudioState {
 
 function assembleBook(project: Project, studio: BookStudioState): AssembledBook {
   const blueprint = planBlueprints[project.type] ?? planBlueprints['Custom Project'];
-  const images = publicationImages(project);
+  const images = publicationImages(project).map(normalizeBookezImage);
   const parts = getWriteParts(project, blueprint);
   const partMap = new Map(parts.map((part) => [part.key, part]));
   const orderedKeys = [...studio.chapterOrder.filter((key) => partMap.has(key)), ...parts.map((part) => part.key).filter((key) => !studio.chapterOrder.includes(key))];
   const chapters = orderedKeys.map((key) => {
     const part = partMap.get(key)!;
     const content = project.plan.drafts[key]?.trim() ?? '';
-    return { key, title: part.title, content, words: countWords(content), complete: Boolean(content), kind: part.kind, images: images.filter((image) => image.connectedPartKey === key) };
+    return { key, title: part.title, content, words: countWords(content), complete: Boolean(content), kind: part.kind, images: images.filter((image) => image.connectedPartKey === key).sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || a.createdAt - b.createdAt) };
   });
   const tableOfContents = chapters.map((chapter, index) => `${index + 1}. ${chapter.title}`).join('\n');
   const frontMatter = studioFrontMatter.map((item) => ({
@@ -1775,7 +1875,6 @@ function assembleBook(project: Project, studio: BookStudioState): AssembledBook 
   return { bookId: project.title, title: project.title, status, frontMatter, chapters, backMatter, images, totalWords, generatedAt: new Date().toISOString(), sourceRevision: String(project.updatedAt ?? totalWords) };
 }
 
-const buildBookText = (book: AssembledBook) => [...book.images.filter((image) => image.placement === 'cover').map((image) => ({ content: `[Front cover: ${image.caption || image.title}]` })), ...book.frontMatter.filter((section) => section.included && section.content), ...book.chapters.map((chapter) => ({ content: `${chapter.title}\n\n${chapter.images.map((image) => `[${imagePlacementLabel(image.placement)}: ${image.caption || image.title}]`).join('\n')}\n${chapter.content}` })), ...book.backMatter.filter((section) => section.included && section.content), ...book.images.filter((image) => image.placement === 'backCover').map((image) => ({ content: `[Back cover: ${image.caption || image.title}]` }))].map((section) => section.content).join('\n\n\n').trim();
 const splitSpeechText = (value: string) => {
   const maxLength = Math.max(500, Math.min(3500, Speech.maxSpeechInputLength || 3500));
   if (value.length <= maxLength) return [value];
@@ -1924,14 +2023,20 @@ function getJourneyMilestones(snapshot: JourneySnapshot): JourneyMilestone[] {
   const drafts: JourneyDraft[] = [];
   const addCheckpoint = (id: string, title: string, detail: string, icon: string, completed: boolean, miniCheckpoints: JourneyMiniCheckpoint[]) => drafts.push({ id, title, detail, icon, kind: 'area', completed, miniCheckpoints });
   const hasOutlineNotes = Boolean(snapshot.outlineReady);
-  const chapterProgressCheckpoints = (prefix: string, targetParts = snapshot.requiredPartCount) => {
-    const draftableParts = snapshot.parts.filter((part) => part.required);
-    const target = Math.max(1, Math.min(targetParts, draftableParts.length || 1));
-    return Array.from({ length: target }, (_, index) => {
-      const part = draftableParts[index];
-      return { id: prefix + '-' + (index + 1), title: part?.title ?? `Part ${index + 1}`, description: part ? `Complete the first draft of ${part.title}.` : `Draft part ${index + 1} to keep moving.`, estimatedTime: 'About 20 minutes', partKey: part?.key, completed: Boolean(part && snapshot.requiredDraftedPartKeys.includes(part.key)) };
-    });
-  };
+  const draftableParts = snapshot.parts.filter((part) => part.required);
+  const draftCheckpoint = (part: WritePart, index: number): JourneyMiniCheckpoint => ({
+    id: `chapter-progress-${index + 1}`,
+    title: part.title,
+    description: `Complete the first draft of ${part.title}.`,
+    estimatedTime: 'About 20 minutes',
+    partKey: part.key,
+    completed: snapshot.requiredDraftedPartKeys.includes(part.key),
+  });
+  const firstDraftBreak = Math.min(draftableParts.length, Math.max(1, Math.ceil(draftableParts.length * 0.25)));
+  const halfwayBreak = Math.min(draftableParts.length, Math.max(firstDraftBreak, Math.ceil(draftableParts.length * 0.5)));
+  const firstDraftCheckpoints = draftableParts.slice(0, firstDraftBreak).map((part, index) => draftCheckpoint(part, index));
+  const halfwayCheckpoints = draftableParts.slice(firstDraftBreak, halfwayBreak).map((part, index) => draftCheckpoint(part, firstDraftBreak + index));
+  const finishDraftCheckpoints = draftableParts.slice(halfwayBreak).map((part, index) => draftCheckpoint(part, halfwayBreak + index));
 
   addCheckpoint('book-started', 'Book started', snapshot.ideaReady ? 'The promise of this book is written down.' : 'Give the work a clear promise to follow.', '✦', snapshot.ideaReady, [
     { id: 'idea', title: 'Book idea captured', completed: snapshot.ideaReady },
@@ -1946,9 +2051,9 @@ function getJourneyMilestones(snapshot: JourneySnapshot): JourneyMilestone[] {
     { id: 'part-ideas', title: 'At least one part has a note', completed: snapshot.outlineReady },
     { id: 'opening-direction', title: 'The opening has a direction', completed: snapshot.outlineReady },
   ]);
-  addCheckpoint('first-draft', 'First draft underway', snapshot.firstDraftStarted ? `${snapshot.draftedParts} of ${snapshot.requiredPartCount} required parts have words in them.` : 'Open the manuscript and make the first part real.', '✎', snapshot.firstDraftStarted, chapterProgressCheckpoints('chapter-progress'));
-  addCheckpoint('halfway-point', 'Halfway drafted', snapshot.halfwayReady ? 'The middle of the route is behind you.' : `Keep going until ${Math.ceil(snapshot.requiredPartCount / 2) || 'the first'} required parts have a draft.`, '◌', snapshot.halfwayReady, chapterProgressCheckpoints('chapter-progress-halfway', Math.max(1, Math.ceil(snapshot.requiredPartCount / 2))));
-  addCheckpoint('draft-complete', 'First draft complete', snapshot.draftComplete ? 'Every required writing part has a draft.' : `${snapshot.draftedParts} of ${snapshot.requiredPartCount} required parts are drafted.`, '✓', snapshot.draftComplete, chapterProgressCheckpoints('chapter-progress-complete'));
+  addCheckpoint('first-draft', 'First draft underway', snapshot.firstDraftStarted ? `${snapshot.draftedParts} of ${snapshot.requiredPartCount} required parts have words in them.` : 'Open the manuscript and make the first part real.', '✎', snapshot.firstDraftStarted, firstDraftCheckpoints);
+  addCheckpoint('halfway-point', 'Halfway drafted', snapshot.halfwayReady ? 'The middle of the route is behind you.' : `Keep going until ${Math.ceil(snapshot.requiredPartCount / 2) || 'the first'} required parts have a draft.`, '◌', snapshot.halfwayReady, halfwayCheckpoints);
+  addCheckpoint('draft-complete', 'First draft complete', snapshot.draftComplete ? 'Every required writing part has a draft.' : `${snapshot.draftedParts} of ${snapshot.requiredPartCount} required parts are drafted.`, '✓', snapshot.draftComplete, finishDraftCheckpoints);
   addCheckpoint('manuscript-complete', 'FINAL MANUSCRIPT COMPLETE', snapshot.manuscriptComplete ? 'You reached the end of the writing path.' : 'Move through the completed draft and make the last pass.', '✧', snapshot.manuscriptComplete, [
     { id: 'full-draft', title: 'The full draft is assembled', completed: snapshot.draftComplete },
     { id: 'review', title: 'The manuscript is ready to share', completed: snapshot.manuscriptComplete },
@@ -1986,6 +2091,7 @@ function getJourneyCheckpointProgress(snapshot: JourneySnapshot, milestone: Jour
 function getJourneyMiniCheckpointProgress(snapshot: JourneySnapshot, milestone: JourneyMilestone, checkpoint: JourneyMiniCheckpoint, plan: ProjectPlan) {
   if (checkpoint.completed) return { progress: 100, estimateLabel: 'Complete', estimateDetail: `This step is complete within “${milestone.title}”.` };
   const finishEstimate = getJourneyCompletionEstimate(plan, snapshot.wordCount, snapshot.targetWords);
+  if (checkpoint.partKey) return { progress: 0, estimateLabel: checkpoint.estimatedTime ?? finishEstimate.label, estimateDetail: `Draft ${checkpoint.title} to complete this step.` };
   const draftedPercent = snapshot.requiredPartCount ? Math.round((snapshot.draftedParts / snapshot.requiredPartCount) * 100) : 0;
   const progressForDraft = (threshold = 100) => Math.min(99, Math.round((draftedPercent / threshold) * 100));
   if (checkpoint.id.startsWith('chapter-progress-')) {
@@ -2058,98 +2164,6 @@ function JourneyCelebration({ celebration, reduceMotion, onDismiss, onPrimary }:
   </Animated.View>;
 }
 
-type JourneyLandscapeStage = 'foothills' | 'ridges' | 'highlands' | 'summit';
-
-const journeyWorlds = require('./assets/journey-worlds-night.png');
-
-const journeyLandscapeStageIndex: Record<JourneyLandscapeStage, number> = { foothills: 0, ridges: 1, highlands: 2, summit: 3 };
-
-function useJourneyLandscapeStage(snapshot: JourneySnapshot): JourneyLandscapeStage {
-  return useMemo(() => {
-    if (snapshot.manuscriptComplete || snapshot.progressPercent >= 90) return 'summit';
-    if (snapshot.draftComplete || snapshot.progressPercent >= 60) return 'highlands';
-    if (snapshot.firstDraftStarted || snapshot.progressPercent >= 20) return 'ridges';
-    return 'foothills';
-  }, [snapshot.draftComplete, snapshot.firstDraftStarted, snapshot.manuscriptComplete, snapshot.progressPercent]);
-}
-
-const journeyLandscapePalettes: Record<JourneyLandscapeStage, { sky: [string, string]; glow: string }> = {
-  foothills: { sky: ['#F8F8FF', '#EFF7FF'], glow: '#E8E2FF' },
-  ridges: { sky: ['#F5F8FF', '#EEF8F1'], glow: '#DCEFE1' },
-  highlands: { sky: ['#F5F5FF', '#FFF5EC'], glow: '#F3DEC0' },
-  summit: { sky: ['#F5F2FF', '#FFF7E4'], glow: '#FFE4A5' },
-};
-
-type JourneyBiomeId = 'meadow' | 'lake' | 'forestLake' | 'desert' | 'sunset';
-type JourneyAmbientPreset = 'meadow' | 'lake' | 'forest' | 'desert' | 'sunset';
-type JourneyBiome = { id: JourneyBiomeId; label: string; start: number; end: number; wash: string; edge: string; accent: string; ambientPreset: JourneyAmbientPreset };
-
-const journeyBiomes: JourneyBiome[] = [
-  { id: 'meadow', label: 'Grassy hills', start: 0, end: 0.2, wash: '#D7EBD1', edge: '#A8C998', accent: '#C3DEB5', ambientPreset: 'meadow' },
-  { id: 'lake', label: 'Calm lake', start: 0.2, end: 0.4, wash: '#D4ECF4', edge: '#9FC8D5', accent: '#B9DDE6', ambientPreset: 'lake' },
-  { id: 'forestLake', label: 'Forest mountain-lake', start: 0.4, end: 0.6, wash: '#D3E7DE', edge: '#98BFAF', accent: '#B7D6C2', ambientPreset: 'forest' },
-  { id: 'desert', label: 'Desert canyon', start: 0.6, end: 0.8, wash: '#F2D7B5', edge: '#C98F68', accent: '#E5B17A', ambientPreset: 'desert' },
-  { id: 'sunset', label: 'Sunset mountains', start: 0.8, end: 1, wash: '#EBD9D0', edge: '#9C7182', accent: '#D8A05F', ambientPreset: 'sunset' },
-];
-
-function JourneyBiomeElements({ biome, side, width, height }: { biome: JourneyBiome; side: 'left' | 'right'; width: number; height: number }) {
-  const mirrored = side === 'right';
-  const fieldStyle = [journeyLandscapeS.elementField, mirrored ? journeyLandscapeS.elementFieldRight : journeyLandscapeS.elementFieldLeft, { width: width * 0.32, height, opacity: 0.78 }];
-  const positions = [0.04, 0.28, 0.55, 0.75];
-
-  if (biome.id === 'meadow') return <View style={fieldStyle}><View style={journeyLandscapeS.meadowHorizon} />{positions.slice(0, 2).map((position, index) => <View key={`meadow-hill-${index}`} style={[journeyLandscapeS.meadowHillCluster, { left: `${position * 100}%`, bottom: -28 + index * 27, transform: [{ scale: 0.82 + index * 0.1 }] }]}><View style={[journeyLandscapeS.meadowHillBack, { backgroundColor: index ? biome.accent : biome.edge }]} /><View style={[journeyLandscapeS.meadowHillFront, { backgroundColor: biome.wash }]} /></View>)}{positions.map((position, index) => <View key={`meadow-grass-${index}`} style={[journeyLandscapeS.grassTuft, { left: `${position * 100}%`, bottom: 13 + (index % 2) * 24 }]}><View style={[journeyLandscapeS.grassBlade, { transform: [{ rotate: '-26deg' }] }]} /><View style={[journeyLandscapeS.grassBlade, { transform: [{ rotate: '21deg' }] }]} /><View style={journeyLandscapeS.grassBase} />{index % 2 === 0 && <Text style={journeyLandscapeS.meadowFlower}>✦</Text>}</View>)}</View>;
-  if (biome.id === 'lake') return <View style={fieldStyle}><View style={journeyLandscapeS.lakeHaze} />{positions.slice(0, 3).map((position, index) => <View key={`lake-shore-${index}`} style={[journeyLandscapeS.lakeShoreCluster, { left: `${position * 100}%`, bottom: 15 + (index % 2) * 35 }]}><View style={[journeyLandscapeS.lakeShore, { backgroundColor: index ? biome.accent : biome.edge }]} /><View style={journeyLandscapeS.lakeRipple} /><View style={[journeyLandscapeS.lakeRipple, journeyLandscapeS.lakeRippleSmall]} /></View>)}<View style={[journeyLandscapeS.lakeCloud, { left: `${mirrored ? 20 : 3}%`, top: 30 }]} /><View style={[journeyLandscapeS.lakeCloud, journeyLandscapeS.lakeCloudSmall, { left: `${mirrored ? 4 : 30}%`, top: 78 }]} /></View>;
-  if (biome.id === 'forestLake') return <View style={fieldStyle}>{positions.slice(0, 2).map((position, index) => <View key={`forest-ridge-${index}`} style={[journeyLandscapeS.forestRidge, { left: `${position * 100}%`, bottom: 80 + index * 23, backgroundColor: index ? biome.accent : biome.edge, transform: [{ rotate: index ? '-8deg' : '-14deg' }] }]} />)}{positions.map((position, index) => <View key={`forest-tree-${index}`} style={[journeyLandscapeS.tree, { left: `${position * 100}%`, bottom: 13 + (index % 2) * 28, transform: [{ scale: 0.7 + (index % 3) * 0.12 }] }]}><View style={journeyLandscapeS.treeTrunk} /><View style={[journeyLandscapeS.treeCanopy, index % 2 === 0 && journeyLandscapeS.treeCanopyLight]} /><View style={[journeyLandscapeS.treeCanopySmall, { left: index % 2 ? 17 : -3, top: 7 }]} /></View>)}{positions.slice(1, 4).map((position, index) => <View key={`forest-pine-${index}`} style={[journeyLandscapeS.pineTree, { left: `${position * 100}%`, bottom: 5 + (index % 2) * 24, transform: [{ scale: 0.72 + index * 0.1 }] }]}><View style={[journeyLandscapeS.pineLayer, journeyLandscapeS.pineLayerTop]} /><View style={[journeyLandscapeS.pineLayer, journeyLandscapeS.pineLayerMiddle]} /><View style={[journeyLandscapeS.pineLayer, journeyLandscapeS.pineLayerBottom]} /><View style={journeyLandscapeS.pineTrunk} /></View>)}</View>;
-  if (biome.id === 'desert') return <View style={fieldStyle}>{positions.slice(0, 2).map((position, index) => <View key={`canyon-${index}`} style={[journeyLandscapeS.canyonTower, { left: `${position * 100}%`, bottom: -20 + index * 31, transform: [{ scale: 0.8 + index * 0.08 }] }]}><View style={[journeyLandscapeS.canyonWall, { backgroundColor: index ? biome.accent : biome.edge }]} /><View style={[journeyLandscapeS.canyonLedge, { backgroundColor: biome.wash }]} /><View style={[journeyLandscapeS.canyonLedge, journeyLandscapeS.canyonLedgeLower, { backgroundColor: index ? biome.edge : biome.accent }]} /></View>)}{positions.map((position, index) => <View key={`cactus-${index}`} style={[journeyLandscapeS.cactus, { left: `${position * 100}%`, bottom: 9 + (index % 2) * 26, transform: [{ scale: 0.65 + (index % 3) * 0.12 }] }]}><View style={journeyLandscapeS.cactusStem} /><View style={[journeyLandscapeS.cactusArm, journeyLandscapeS.cactusArmTop]} /><View style={[journeyLandscapeS.cactusArm, journeyLandscapeS.cactusArmLow]} /><View style={journeyLandscapeS.desertShrub} /></View>)}</View>;
-  return <View style={fieldStyle}><View style={[journeyLandscapeS.sunsetGlow, { left: `${mirrored ? 4 : 17}%`, top: 24 }]} />{positions.slice(0, 2).map((position, index) => <View key={`sunset-ridge-${index}`} style={[journeyLandscapeS.sunsetRidgeGroup, { left: `${position * 100}%`, bottom: -30 + index * 25, transform: [{ scale: 0.76 + index * 0.08 }] }]}><View style={[journeyLandscapeS.sunsetRidgeBack, { backgroundColor: index ? biome.accent : biome.edge }]} /><View style={[journeyLandscapeS.sunsetRidgeMain, { backgroundColor: biome.wash }]} /><View style={[journeyLandscapeS.sunsetRidgeFace, { backgroundColor: index ? biome.edge : biome.accent }]} /></View>)}{positions.slice(1, 4).map((position, index) => <View key={`sunset-pine-${index}`} style={[journeyLandscapeS.pineTree, journeyLandscapeS.pineTreeSunset, { left: `${position * 100}%`, bottom: 7 + (index % 2) * 27, transform: [{ scale: 0.7 + index * 0.11 }] }]}><View style={[journeyLandscapeS.pineLayer, journeyLandscapeS.pineLayerTop]} /><View style={[journeyLandscapeS.pineLayer, journeyLandscapeS.pineLayerMiddle]} /><View style={[journeyLandscapeS.pineLayer, journeyLandscapeS.pineLayerBottom]} /><View style={journeyLandscapeS.pineTrunk} /></View>)}</View>;
-}
-
-function JourneyBiomeSection({ biome, width, height }: { biome: JourneyBiome; width: number; height: number }) {
-  return <View pointerEvents="none" style={[journeyLandscapeS.biomeSection, { top: height * biome.start, height: height * (biome.end - biome.start) }]}><LinearGradient colors={[`${biome.wash}12`, `${biome.wash}38`, `${biome.wash}00`]} start={{ x: 0.5, y: 0 }} end={{ x: 0.5, y: 1 }} style={journeyLandscapeS.biomeTint} /><LinearGradient colors={[`${biome.edge}DD`, `${biome.edge}00`]} start={{ x: 0, y: 0.5 }} end={{ x: 1, y: 0.5 }} style={[journeyLandscapeS.sideWash, { width: width * 0.4, opacity: 0.24 }]} /><LinearGradient colors={[`${biome.edge}00`, `${biome.edge}DD`]} start={{ x: 0, y: 0.5 }} end={{ x: 1, y: 0.5 }} style={[journeyLandscapeS.sideWash, journeyLandscapeS.sideWashRight, { width: width * 0.4, opacity: 0.24 }]} /><JourneyBiomeElements biome={biome} side="left" width={width} height={height * (biome.end - biome.start)} /><JourneyBiomeElements biome={biome} side="right" width={width} height={height * (biome.end - biome.start)} /></View>;
-}
-
-function JourneyAmbientLife({ reduceMotion, biomes }: { reduceMotion: boolean; biomes: JourneyBiome[] }) {
-  const drift = useRef(new Animated.Value(0)).current;
-  const particles: Array<{ preset: JourneyAmbientPreset; left: `${number}%`; top: `${number}%`; kind: 'sparkle' | 'dot'; color: string; size: number }> = [
-    { preset: 'meadow', left: '9%', top: '8%', kind: 'sparkle', color: '#B6A9F5', size: 12 },
-    { preset: 'meadow', left: '87%', top: '15%', kind: 'dot', color: '#A8D3BE', size: 5 },
-    { preset: 'lake', left: '14%', top: '27%', kind: 'dot', color: '#A8D9E5', size: 4 },
-    { preset: 'lake', left: '83%', top: '35%', kind: 'sparkle', color: '#A9C9D9', size: 11 },
-    { preset: 'forest', left: '7%', top: '47%', kind: 'dot', color: '#B9D7A7', size: 5 },
-    { preset: 'forest', left: '91%', top: '55%', kind: 'sparkle', color: '#9BC9B4', size: 10 },
-    { preset: 'desert', left: '17%', top: '67%', kind: 'dot', color: '#D8BFA0', size: 4 },
-    { preset: 'desert', left: '87%', top: '75%', kind: 'dot', color: '#E8B879', size: 5 },
-    { preset: 'sunset', left: '9%', top: '87%', kind: 'sparkle', color: '#D8B4CA', size: 11 },
-    { preset: 'sunset', left: '91%', top: '94%', kind: 'dot', color: '#E6C48C', size: 4 },
-  ];
-  const activePresets = new Set(biomes.map((biome) => biome.ambientPreset));
-
-  useEffect(() => {
-    drift.setValue(reduceMotion ? 0.5 : 0);
-    if (reduceMotion) return undefined;
-    const loop = Animated.loop(Animated.timing(drift, { toValue: 1, duration: 7200, easing: Easing.inOut(Easing.ease), useNativeDriver: true }));
-    loop.start();
-    return () => loop.stop();
-  }, [drift, reduceMotion]);
-
-  return <View pointerEvents="none" style={StyleSheet.absoluteFill}>{particles.filter((particle) => activePresets.has(particle.preset)).map((particle, index) => <Animated.View key={`${particle.preset}-${particle.kind}-${index}`} style={[journeyLandscapeS.ambientParticle, { left: particle.left as `${number}%`, top: particle.top as `${number}%`, opacity: drift.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0.26, particle.kind === 'sparkle' ? 0.74 : 0.52, 0.26] }), transform: [{ translateY: drift.interpolate({ inputRange: [0, 1], outputRange: [index % 2 ? 4 : 0, index % 2 ? -8 : -4] }) }, { translateX: drift.interpolate({ inputRange: [0, 1], outputRange: [index % 2 ? -3 : 2, index % 2 ? 3 : -2] }) }] }]}>{particle.kind === 'sparkle' ? <Text style={[journeyLandscapeS.ambientSparkle, { color: particle.color, fontSize: particle.size }]}>✦</Text> : <View style={[journeyLandscapeS.ambientDot, { width: particle.size, height: particle.size, borderRadius: particle.size / 2, backgroundColor: particle.color }]} />}</Animated.View>)}</View>;
-}
-
-function JourneyLandscapeBackground({ width, height, stage, progress, reduceMotion, scrollY, celebrating }: { width: number; height: number; stage: JourneyLandscapeStage; progress: number; reduceMotion: boolean; scrollY?: SharedValue<number>; celebrating?: boolean }) {
-  const palette = journeyLandscapePalettes[stage];
-  const stageIndex = journeyLandscapeStageIndex[stage];
-  const environmentalGlow = useRef(new Animated.Value(0)).current;
-  const worldParallaxStyle = useAnimatedStyle(() => ({ transform: [{ translateY: scrollY ? reanimatedInterpolate(scrollY.value, [0, 260, 900, 1800], [0, -8, -24, -46], Extrapolation.CLAMP) : 0 }] }));
-  const lightParallaxStyle = useAnimatedStyle(() => ({ transform: [{ translateY: scrollY ? reanimatedInterpolate(scrollY.value, [0, 260, 900, 1800], [0, -3, -10, -20], Extrapolation.CLAMP) : 0 }] }));
-  useEffect(() => {
-    if (reduceMotion) { environmentalGlow.setValue(celebrating ? 1 : 0); return undefined; }
-    const animation = Animated.timing(environmentalGlow, { toValue: celebrating ? 1 : 0, duration: celebrating ? 520 : 260, useNativeDriver: true });
-    animation.start();
-    return () => animation.stop();
-  }, [celebrating, environmentalGlow, reduceMotion]);
-  return <View pointerEvents="none" style={[journeyLandscapeS.background, { width, height }]}><LinearGradient colors={palette.sky} start={{ x: 0.12, y: 0 }} end={{ x: 0.88, y: 1 }} style={StyleSheet.absoluteFill} /><Reanimated.View style={[journeyLandscapeS.worldImageFrame, worldParallaxStyle]}><Image source={journeyWorlds} resizeMode="stretch" style={journeyLandscapeS.worldImage} /></Reanimated.View><View style={[journeyLandscapeS.atmosphere, { backgroundColor: palette.glow, opacity: 0.05 + Math.min(0.09, progress / 1200) }]} /><LinearGradient colors={['rgba(251,250,255,0.08)', 'rgba(251,250,255,0.48)', 'rgba(251,250,255,0.08)']} start={{ x: 0, y: 0.5 }} end={{ x: 1, y: 0.5 }} style={journeyLandscapeS.worldCenterVeil} /><Reanimated.View style={[journeyLandscapeS.worldLight, lightParallaxStyle]}><LinearGradient colors={['rgba(255,255,255,0)', 'rgba(255,255,255,0.2)', 'rgba(255,255,255,0)']} start={{ x: 0.12, y: 0 }} end={{ x: 0.88, y: 1 }} style={StyleSheet.absoluteFill} /></Reanimated.View><Animated.View style={[journeyLandscapeS.worldReaction, { opacity: environmentalGlow.interpolate({ inputRange: [0, 1], outputRange: [0, 0.5] }), transform: [{ scale: environmentalGlow.interpolate({ inputRange: [0, 1], outputRange: [0.96, 1.04] }) }] }]}><LinearGradient colors={['rgba(255,225,154,0)', 'rgba(255,225,154,0.34)', 'rgba(255,225,154,0)']} start={{ x: 0.5, y: 0 }} end={{ x: 0.5, y: 1 }} style={StyleSheet.absoluteFill} /></Animated.View><JourneyAmbientLife reduceMotion={reduceMotion} biomes={journeyBiomes} />{stageIndex >= 3 && <LinearGradient colors={['rgba(255,228,165,0)', 'rgba(255,228,165,0.18)', 'rgba(255,228,165,0)']} start={{ x: 0.5, y: 0 }} end={{ x: 0.5, y: 1 }} style={[journeyLandscapeS.summitLight, { top: height * 0.82, height: height * 0.18 }]} />}</View>;
-}
-
 type JourneyPoint = { x: number; y: number };
 type JourneyLayout = {
   height: number;
@@ -2158,88 +2172,90 @@ type JourneyLayout = {
   miniSteps: { point: JourneyPoint; milestoneId: string; checkpoint: JourneyMiniCheckpoint; index: number }[];
 };
 
-function buildJourneyLayout(milestones: JourneyMilestone[], width: number, milestoneProgress: number[]): JourneyLayout {
+function buildJourneyLayout(milestones: JourneyMilestone[], width: number, milestoneProgress: number[], miniProgress: Record<string, number>): JourneyLayout {
   const mapWidth = Math.max(240, width);
-  const center = mapWidth / 2;
-  const side = Math.min(82, Math.max(48, mapWidth * 0.24));
-  const milestonePoints: JourneyPoint[] = [];
-  const sectionPoints: JourneyPoint[][] = [];
+  // Keep the actual route in a gently meandering central river lane. The banks
+  // stay visually free for the scenery and checkpoint labels on either side.
+  const safeMargin = Math.min(138, Math.max(64, mapWidth * 0.22));
+  const minX = safeMargin;
+  const maxX = mapWidth - safeMargin;
+  const centerX = mapWidth / 2;
+  const riverSway = Math.max(17, Math.min(30, mapWidth * 0.075));
+  const majorPattern = [0, -0.42, 0.35, -0.22, 0.18, -0.34, 0.28] as const;
+  const miniPattern = [0.18, -0.28, 0.4, -0.16, -0.42, 0.24, 0.46, -0.31, -0.08, 0.34] as const;
+  const majorGapPattern = [156, 194, 174, 216, 166, 202, 184] as const;
+  const miniGapPattern = [116, 148, 128, 164, 140, 154, 122, 144] as const;
+  const mapScale = Math.max(0.94, Math.min(1.16, mapWidth / 360));
+  const majorX = (index: number) => Math.max(minX, Math.min(maxX, centerX + riverSway * majorPattern[index % majorPattern.length]));
+  const milestonePoints: JourneyPoint[] = new Array(milestones.length);
   const miniSteps: JourneyLayout['miniSteps'] = [];
-  let y = 58;
-  const majorX = [0.16, -0.18, 0.28, -0.3, 0.2, -0.24];
+  const routeNodes: { point: JourneyPoint; progress: number }[] = [];
+  let y = 120;
 
-  const distributeRuns = (stepCount: number) => {
-    if (stepCount <= 0) return [];
-    let runCount = Math.max(1, Math.round(stepCount / 5));
-    while (runCount > 1 && Math.ceil(stepCount / runCount) < 3) runCount -= 1;
-    while (Math.ceil(stepCount / runCount) > 6) runCount += 1;
-    const baseSize = Math.floor(stepCount / runCount);
-    const remainder = stepCount % runCount;
-    return Array.from({ length: runCount }, (_, index) => baseSize + (index < remainder ? 1 : 0));
+  const deterministicOffset = (stageIndex: number, itemIndex: number, size = 5) => ((((stageIndex + 3) * 17 + (itemIndex + 5) * 11) % 9) - 4) * (size / 4);
+  const pushMilestone = (index: number) => {
+    const point = { x: majorX(index), y };
+    milestonePoints[index] = point;
+    routeNodes.push({ point, progress: Math.max(0, Math.min(100, milestoneProgress[index] ?? 0)) });
+    y += Math.round(majorGapPattern[index % majorGapPattern.length] * mapScale);
   };
-
-  milestones.forEach((milestone, index) => {
-    const majorPoint = { x: Math.max(44, Math.min(mapWidth - 44, center + side * majorX[index % majorX.length])), y };
-    milestonePoints.push(majorPoint);
-    const points = [majorPoint];
-    const verticalStep = milestone.miniCheckpoints.length > 18 ? 56 : 66;
-    const runs = distributeRuns(milestone.miniCheckpoints.length);
-    let checkpointIndex = 0;
-    let runStartX = majorPoint.x;
-    runs.forEach((runSize, runIndex) => {
-      const direction = runIndex % 2 === 0 ? (runStartX <= center ? 1 : -1) : (runStartX <= center ? -1 : 1);
-      const targetX = center + direction * side * (0.72 + (((index + runIndex) % 3) - 1) * 0.08);
-      for (let localIndex = 0; localIndex < runSize; localIndex += 1) {
-        const progress = (localIndex + 1) / (runSize + 1);
-        const organicOffset = ((((checkpointIndex + 1) * 7) + (index * 5)) % 5 - 2) * 3;
-        const point = {
-          x: Math.max(24, Math.min(mapWidth - 24, runStartX + (targetX - runStartX) * progress + organicOffset)),
-          y: y + verticalStep * (checkpointIndex + 1),
-        };
-        const checkpoint = milestone.miniCheckpoints[checkpointIndex];
-        points.push(point);
-        miniSteps.push({ point, milestoneId: milestone.id, checkpoint, index: checkpointIndex });
-        checkpointIndex += 1;
-      }
-      runStartX = targetX;
+  const pushCheckpoint = (milestone: JourneyMilestone, stageIndex: number, checkpoint: JourneyMiniCheckpoint, index: number, point: JourneyPoint) => {
+    miniSteps.push({ point, milestoneId: milestone.id, checkpoint, index });
+    routeNodes.push({ point, progress: Math.max(0, Math.min(100, miniProgress[`${milestone.id}:${checkpoint.id}`] ?? (checkpoint.completed ? 100 : 0))) });
+  };
+  const addCheckpointGroup = (milestone: JourneyMilestone, stageIndex: number, nextMilestoneIndex: number) => {
+    const checkpoints = milestone.miniCheckpoints;
+    if (!checkpoints.length) return;
+    const destinationX = majorX(nextMilestoneIndex);
+    let checkpointY = y;
+    checkpoints.forEach((checkpoint, index) => {
+      const progress = (index + 1) / (checkpoints.length + 1);
+      const patternIndex = (index + stageIndex * 3) % miniPattern.length;
+      const patternedX = centerX + riverSway * miniPattern[patternIndex];
+      const destinationPull = progress * progress * 0.34;
+      const point = {
+        x: Math.max(minX, Math.min(maxX, patternedX * (1 - destinationPull) + destinationX * destinationPull + deterministicOffset(stageIndex, index, 2))),
+        y: checkpointY + deterministicOffset(stageIndex, index, 4),
+      };
+      pushCheckpoint(milestone, stageIndex, checkpoint, index, point);
+      checkpointY += Math.round(miniGapPattern[(index + stageIndex * 2) % miniGapPattern.length] * mapScale);
     });
-    const nextY = y + verticalStep * (milestone.miniCheckpoints.length + 1);
-    sectionPoints.push(points);
-    y = nextY;
-  });
-
-  const catmullRomPoint = (before: JourneyPoint, start: JourneyPoint, end: JourneyPoint, after: JourneyPoint, progress: number): JourneyPoint => {
-    const t2 = progress * progress;
-    const t3 = t2 * progress;
-    return {
-      x: 0.5 * ((2 * start.x) + (-before.x + end.x) * progress + (2 * before.x - 5 * start.x + 4 * end.x - after.x) * t2 + (-before.x + 3 * start.x - 3 * end.x + after.x) * t3),
-      y: 0.5 * ((2 * start.y) + (-before.y + end.y) * progress + (2 * before.y - 5 * start.y + 4 * end.y - after.y) * t2 + (-before.y + 3 * start.y - 3 * end.y + after.y) * t3),
-    };
+    y = (miniSteps[miniSteps.length - 1]?.point.y ?? y) + Math.round(176 * mapScale);
   };
+
+  if (milestones.length) pushMilestone(0);
+  for (let index = 0; index < milestones.length - 1; index += 1) {
+    addCheckpointGroup(milestones[index], index, index + 1);
+    if (index === milestones.length - 2) addCheckpointGroup(milestones[index + 1], index + 1, index + 1);
+    pushMilestone(index + 1);
+  }
 
   const segments: JourneyLayout['segments'] = [];
-  sectionPoints.forEach((points, sectionIndex) => {
-    const end = sectionIndex < milestonePoints.length - 1 ? milestonePoints[sectionIndex + 1] : { x: center, y: points[points.length - 1].y + 88 };
-    const routePoints = [...points, end];
-    const sectionProgress = Math.max(0, Math.min(100, milestoneProgress[sectionIndex] ?? 0));
-    const spanCount = Math.max(1, routePoints.length - 1);
-    const samplesPerSpan = 5;
-    for (let spanIndex = 0; spanIndex < spanCount; spanIndex += 1) {
-      for (let sampleIndex = 0; sampleIndex < samplesPerSpan; sampleIndex += 1) {
-        const startProgress = sampleIndex / samplesPerSpan;
-        const endProgress = (sampleIndex + 1) / samplesPerSpan;
-        const pointAt = (progress: number) => catmullRomPoint(routePoints[Math.max(0, spanIndex - 1)], routePoints[spanIndex], routePoints[spanIndex + 1], routePoints[Math.min(routePoints.length - 1, spanIndex + 2)], progress);
-        const start = pointAt(startProgress);
-        const endPoint = pointAt(endProgress);
-        const edgeStart = ((spanIndex + startProgress) / spanCount) * 100;
-        const edgeEnd = ((spanIndex + endProgress) / spanCount) * 100;
-        const edgeProgress = edgeEnd <= sectionProgress ? 100 : edgeStart >= sectionProgress ? 0 : ((sectionProgress - edgeStart) / (edgeEnd - edgeStart)) * 100;
-        segments.push({ start, end: endPoint, progress: edgeProgress });
-      }
-    }
-  });
+  for (let spanIndex = 0; spanIndex < routeNodes.length - 1; spanIndex += 1) {
+    const startNode = routeNodes[spanIndex];
+    const endNode = routeNodes[spanIndex + 1];
+    const spanProgress = startNode.progress >= 100 ? endNode.progress : 0;
+    segments.push({ start: startNode.point, end: endNode.point, progress: spanProgress });
+  }
 
-  return { height: Math.max(420, (segments[segments.length - 1]?.end.y ?? y) + 90), milestonePoints, segments, miniSteps };
+  const finalY = milestonePoints[milestonePoints.length - 1]?.y ?? y;
+  return { height: Math.max(680, finalY + 178), milestonePoints, segments, miniSteps };
+}
+
+function JourneyLockIcon({ light = false }: { light?: boolean }) {
+  return <View style={journeyEnhancementS.lockIcon}>
+    <View style={[journeyEnhancementS.lockShackle, light && journeyEnhancementS.lockShackleLight]} />
+    <View style={[journeyEnhancementS.lockBody, light && journeyEnhancementS.lockBodyLight]}><View style={[journeyEnhancementS.lockKeyhole, light && journeyEnhancementS.lockKeyholeLight]} /></View>
+  </View>;
+}
+
+function JourneyManuscriptGlyph({ locked, complete }: { locked: boolean; complete: boolean }) {
+  return <View style={journeyEnhancementS.manuscriptGlyph}>
+    <View style={[journeyEnhancementS.manuscriptPage, journeyEnhancementS.manuscriptPageLeft, complete && journeyEnhancementS.manuscriptPageComplete]} />
+    <View style={[journeyEnhancementS.manuscriptPage, journeyEnhancementS.manuscriptPageRight, complete && journeyEnhancementS.manuscriptPageComplete]} />
+    <View style={[journeyEnhancementS.manuscriptSpine, complete && journeyEnhancementS.manuscriptSpineComplete]} />
+    {locked && <View style={journeyEnhancementS.manuscriptLockBadge}><JourneyLockIcon light /></View>}
+  </View>;
 }
 
 type JourneyTodayPlan = {
@@ -3269,7 +3285,7 @@ function ImageCitationGenerator({ project, onUpdateProject }: { project: Project
     const config = getImageSystemConfig(project.type);
     const timestamp = Date.now();
     const imageCitation: ImageCitation = { style, title: draft.title, creator: draft.creator, caption: draft.caption, publisher: draft.publisher, publicationDate: draft.publicationDate, originalImageUrl: draft.originalImageUrl, sourcePageUrl: draft.sourcePageUrl, creditLine: draft.creditLine, copyrightHolder: draft.copyrightHolder, license: draft.license, licenseUrl: draft.licenseUrl, dateAccessed: draft.dateAccessed, citation: generated };
-    const importedImage: BookezImage = { id: `image-${timestamp}-${Math.random().toString(36).slice(2, 7)}`, uri: previewUri, fileName: draft.fileName, mimeType: draft.mimeType, width: draft.width, height: draft.height, fileSize: draft.fileSize, title: draft.title, caption: draft.caption, captionRequested: Boolean(draft.caption), altText: draft.caption, credit: draft.creditLine || draft.creator, source: draft.sourcePageUrl || draft.originalImageUrl, date: draft.publicationDate, location: '', people: draft.creator, permissionStatus: 'unknown', archiveName: '', sourceCitation: generated, imageCitation, notes: '', placement: config.placements[0] ?? 'inline', textPlacement: 'bottom', fullBleed: false, includeInExport: false, referenceOnly: true, status: 'final', role: config.roles[0], order: (project.images ?? []).length, createdAt: timestamp, updatedAt: timestamp };
+    const importedImage: BookezImage = { id: `image-${timestamp}-${Math.random().toString(36).slice(2, 7)}`, uri: previewUri, fileName: draft.fileName, mimeType: draft.mimeType, width: draft.width, height: draft.height, fileSize: draft.fileSize, title: draft.title, caption: draft.caption, captionRequested: Boolean(draft.caption), altText: draft.caption, credit: draft.creditLine || draft.creator, source: draft.sourcePageUrl || draft.originalImageUrl, date: draft.publicationDate, location: '', people: draft.creator, permissionStatus: 'unknown', archiveName: '', sourceCitation: generated, imageCitation, notes: '', placement: 'inline', textPlacement: 'bottom', fullBleed: false, includeInExport: false, referenceOnly: true, status: 'final', role: config.roles[0], order: (project.images ?? []).length, createdAt: timestamp, updatedAt: timestamp };
     onUpdateProject(project.title, { imageEnabled: true, images: [...(project.images ?? []), importedImage] });
     setSaved(true);
   };
@@ -3537,6 +3553,8 @@ const getWritingStrategy = (frequency: WritingFrequency, pace: PaceFlexibility, 
 
 function Write({ projects, activeProject, onSelectProject, onUpdateProject, onPage }: { projects: Project[]; activeProject: string; onSelectProject: (title: string) => void; onUpdateProject: (title: string, changes: Partial<Project>) => void; onPage: (page: Page) => void }) {
   const currentProject = projects.find((project) => project.title === activeProject) ?? projects[0];
+  const { width: viewportWidth } = useWindowDimensions();
+  const compactHero = viewportWidth < 560;
   const blueprint = planBlueprints[currentProject.type] ?? planBlueprints['Custom Project'];
   const plan = currentProject.plan ?? defaultPlanFor(currentProject.type);
   const parts = getWriteParts(currentProject, blueprint);
@@ -3547,7 +3565,6 @@ function Write({ projects, activeProject, onSelectProject, onUpdateProject, onPa
   const [sessionDetailsOpen, setSessionDetailsOpen] = useState(false);
   const [compassOpen, setCompassOpen] = useState(false);
   const [rhythmOpen, setRhythmOpen] = useState(false);
-  const [imageTipVisible, setImageTipVisible] = useState(false);
   const [selectedHelpPrompt, setSelectedHelpPrompt] = useState('');
   const [sessionNow, setSessionNow] = useState(Date.now());
   const [focusTimerSeconds, setFocusTimerSeconds] = useState(0);
@@ -3560,6 +3577,11 @@ function Write({ projects, activeProject, onSelectProject, onUpdateProject, onPa
   const [sessionNext, setSessionNext] = useState('');
   const [customWritingMinutes, setCustomWritingMinutes] = useState(plan.customWritingMinutes ?? '20');
   const [customBreakMinutes, setCustomBreakMinutes] = useState(plan.customBreakMinutes ?? '5');
+  const [editorSelection, setEditorSelection] = useState({ start: -1, end: -1 });
+  const [lastAIEdit, setLastAIEdit] = useState<{ before: string; after: string } | null>(null);
+  const [aiToolRequest, setAIToolRequest] = useState<{ operation: AIWritingOperation; token: number }>();
+  const [toolBeltConfig, setToolBeltConfig] = useState<WriteToolBeltConfig>(WRITE_TOOL_DEFAULTS);
+  const [toolBeltStorageReady, setToolBeltStorageReady] = useState(false);
   const activeIndex = parts.length ? Math.min(plan.writeIndex, parts.length - 1) : 0;
   const activePart = parts[activeIndex];
   const activeArea = activePart?.kind === 'unit' ? { label: blueprint.unitLabel.toUpperCase(), color: C.coral } : activePart?.category === 'front' ? { label: 'FRONT MATTER', color: '#4B7B9D' } : activePart?.category === 'back' ? { label: 'BACK MATTER', color: C.sage } : { label: 'BODY AREA', color: C.periwinkle };
@@ -3588,6 +3610,14 @@ function Write({ projects, activeProject, onSelectProject, onUpdateProject, onPa
   const recentSessionDurations = sessionHistory.filter((session) => session.writingMinutes > 0).slice(-5).map((session) => session.writingMinutes);
   const sessionRecommendation = recentSessionDurations.length >= 3 ? { minimum: Math.min(...recentSessionDurations), maximum: Math.max(...recentSessionDurations), suggested: Math.max(10, Math.round((recentSessionDurations.reduce((total, minutes) => total + minutes, 0) / recentSessionDurations.length) / 5) * 5) } : null;
   const draftText = activePart ? plan.drafts[activePart.key] || '' : '';
+  const continueWriting = () => {
+    if (!activePart) return;
+    onPage('Write');
+    setEditorSelection({ start: draftText.length, end: draftText.length });
+  };
+  const editorCursor = editorSelection.end < 0 ? draftText.length : Math.min(editorSelection.end, draftText.length);
+  const editorAnchor = editorSelection.start < 0 ? editorCursor : Math.min(editorSelection.start, draftText.length);
+  const editorHasSelection = editorSelection.start >= 0 && editorAnchor !== editorCursor;
   const pageStats = { words: countWords(draftText), letters: countLetters(draftText), sentences: countSentences(draftText), paragraphs: countParagraphs(draftText) };
   const helpPrompts = activePart ? getWritingHelpPrompts(activePart, blueprint) : [];
   const contextItems = activePart ? [
@@ -3599,11 +3629,28 @@ function Write({ projects, activeProject, onSelectProject, onUpdateProject, onPa
   ] : [];
   const projectImages = currentProject.images ?? [];
   const addImage = () => { if (!activePart) return; requestImage(currentProject, (asset) => { const image = makeBookezImage(currentProject, asset, activePart.key); onUpdateProject(activeProject, { imageEnabled: true, images: [...projectImages, image] }); }); };
+  const replaceImage = (image: BookezImage) => requestImage(currentProject, (asset) => onUpdateProject(activeProject, { images: projectImages.map((item) => item.id === image.id ? { ...item, ...makeBookezImage(currentProject, asset, item.connectedPartKey), id: item.id, title: item.title, caption: item.caption, captionRequested: item.captionRequested, altText: item.altText, credit: item.credit, placement: item.placement ?? 'inline', includeInExport: item.includeInExport, referenceOnly: item.referenceOnly, connectedPartKey: item.connectedPartKey, order: item.order, updatedAt: Date.now() } : item) }));
+  const updateImage = (id: string, changes: Partial<BookezImage>) => onUpdateProject(activeProject, { images: projectImages.map((image) => image.id === id ? { ...image, ...changes, updatedAt: Date.now() } : image) });
+  const removeImage = (id: string) => onUpdateProject(activeProject, { images: projectImages.filter((image) => image.id !== id) });
   const lastActivityAt = useRef(Date.now());
   const pendingWritingUses = useRef(0);
   const latestPlans = useRef<Record<string, ProjectPlan>>({});
   projects.forEach((project) => { latestPlans.current[project.title] = project.plan ?? defaultPlanFor(project.type); });
 
+  useEffect(() => {
+    let live = true;
+    void bookezSecureStorage.getItem(WRITE_TOOL_BELT_STORAGE_KEY).then((stored) => {
+      if (!live) return;
+      if (stored) {
+        try { setToolBeltConfig(sanitizeWriteToolBeltConfig(JSON.parse(stored))); } catch { setToolBeltConfig(WRITE_TOOL_DEFAULTS); }
+      }
+      setToolBeltStorageReady(true);
+    }).catch(() => { if (live) setToolBeltStorageReady(true); });
+    return () => { live = false; };
+  }, []);
+  useEffect(() => {
+    if (toolBeltStorageReady) void bookezSecureStorage.setItem(WRITE_TOOL_BELT_STORAGE_KEY, JSON.stringify(toolBeltConfig));
+  }, [toolBeltConfig, toolBeltStorageReady]);
   useEffect(() => {
     const timer = setInterval(() => setSessionNow(Date.now()), 30_000);
     return () => clearInterval(timer);
@@ -3636,6 +3683,8 @@ function Write({ projects, activeProject, onSelectProject, onUpdateProject, onPa
     setSessionFeeling('');
     setSessionCompleted('');
     setSessionNext('');
+    setLastAIEdit(null);
+    setEditorSelection({ start: -1, end: -1 });
     setCustomWritingMinutes(plan.customWritingMinutes ?? '20');
     setCustomBreakMinutes(plan.customBreakMinutes ?? '5');
   }, [activeProject, activePart?.key]);
@@ -3715,6 +3764,58 @@ function Write({ projects, activeProject, onSelectProject, onUpdateProject, onPa
     if (!activePart) return;
     updateDraft(transform(plan.drafts[activePart.key] || ''));
   };
+  const getEditorTarget = () => {
+    const value = plan.drafts[activePart?.key ?? ''] || '';
+    const start = Math.max(0, Math.min(editorAnchor, value.length));
+    const end = Math.max(start, Math.min(editorCursor, value.length));
+    if (start !== end) return { text: value.slice(start, end), start, end };
+    const before = value.lastIndexOf('\n\n', Math.max(0, start - 1));
+    const after = value.indexOf('\n\n', start);
+    const paragraphStart = before < 0 ? 0 : before + 2;
+    const paragraphEnd = after < 0 ? value.length : after;
+    const paragraph = value.slice(paragraphStart, paragraphEnd);
+    const trimmedParagraph = paragraph.trim();
+    const leadingWhitespace = paragraph.length - paragraph.trimStart().length;
+    return trimmedParagraph
+      ? { text: trimmedParagraph, start: paragraphStart + leadingWhitespace, end: paragraphStart + leadingWhitespace + trimmedParagraph.length }
+      : { text: value, start: 0, end: value.length };
+  };
+  const replaceEditorTarget = (original: string, replacement: string) => {
+    if (!activePart) return;
+    const value = plan.drafts[activePart.key] || '';
+    const target = getEditorTarget();
+    const start = value.slice(target.start, target.end) === original ? target.start : value.indexOf(original);
+    if (start < 0) return;
+    const nextValue = `${value.slice(0, start)}${replacement}${value.slice(start + original.length)}`;
+    setLastAIEdit({ before: value, after: nextValue });
+    updateDraft(nextValue);
+    setEditorSelection({ start, end: start + replacement.length });
+  };
+  const insertAIWriting = (valueToInsert: string) => {
+    if (!activePart) return;
+    const value = plan.drafts[activePart.key] || '';
+    const point = Math.max(0, Math.min(editorCursor, value.length));
+    const prefix = value.slice(0, point);
+    const separator = prefix.trim() && !/\s$/.test(prefix) ? '\n\n' : '';
+    const next = `${prefix}${separator}${valueToInsert}${value.slice(point)}`;
+    setLastAIEdit({ before: value, after: next });
+    updateDraft(next);
+    setEditorSelection({ start: point + separator.length, end: point + separator.length + valueToInsert.length });
+  };
+  const useAIWritingNote = (value: string) => {
+    if (!activePart) return;
+    const previous = plan.partNotes[activePart.key]?.trim();
+    onUpdateProject(activeProject, { plan: { ...plan, partNotes: { ...plan.partNotes, [activePart.key]: previous ? `${previous}\n\n${value}` : value } } });
+  };
+  const undoLastAIEdit = () => {
+    if (!lastAIEdit || !activePart) return;
+    if ((plan.drafts[activePart.key] || '') !== lastAIEdit.after) {
+      Alert.alert('Keep your recent writing', 'Undo is available immediately after an AI edit, before you make other changes.');
+      return;
+    }
+    updateDraft(lastAIEdit.before);
+    setLastAIEdit(null);
+  };
   const updatePartNote = (value: string) => {
     if (!activePart) return;
     onUpdateProject(activeProject, { plan: { ...plan, partNotes: { ...plan.partNotes, [activePart.key]: value } } });
@@ -3778,10 +3879,40 @@ function Write({ projects, activeProject, onSelectProject, onUpdateProject, onPa
     if (isDoubleTap || rhythmOpen) setRhythmOpen(false);
     else setRhythmOpen(true);
   };
+  const requestAIWritingTool = (operation: AIWritingOperation) => setAIToolRequest({ operation, token: Date.now() });
+  const openSessionTool = (mode?: WritingSessionMode) => {
+    if (mode) selectWritingSessionMode(mode);
+    setRhythmOpen(true);
+  };
+  const handleWriteToolPress = (tool: WriteToolDefinition) => {
+    if (!activePart) return;
+    if (tool.id === 'help-me-write') { setHelpOpen((open) => !open); return; }
+    if (tool.id === 'private-notes' || tool.id === 'session-notes' || tool.id === 'resume-point') { setNotesOpen((open) => !open); return; }
+    if (tool.id === 'writing-compass') { setCompassOpen((open) => !open); return; }
+    if (tool.id === 'context' || tool.id === 'outline-peek' || tool.id === 'research' || tool.id === 'sources') { setContextOpen(true); return; }
+    if (tool.id === 'polish') { if (draftText.trim()) updateDraftWithTool(polishWriting); else Alert.alert('Polish', 'Draft a little first, then Polish can smooth the section without changing your meaning.'); return; }
+    if (tool.id === 'grammar') { if (draftText.trim()) updateDraftWithTool(grammarWriting); else Alert.alert('Grammar', 'Draft a little first, then Grammar can check the section for sentence issues.'); return; }
+    if (tool.id === 'dictation') { Alert.alert('Dictation', 'Tap the microphone in the manuscript field, speak naturally, then edit the text when you are ready.'); return; }
+    const aiOperations: Partial<Record<string, AIWritingOperation>> = {
+      'ai-writing': 'continue', brainstorm: 'brainstorm', rewrite: 'rewrite', expand: 'expand', continue: 'continue', simplify: 'shorten', 'make-clearer': 'improve', 'dialogue-help': 'ask', 'description-help': 'ask', 'continuity-check': 'ask',
+    };
+    if (aiOperations[tool.id]) { requestAIWritingTool(aiOperations[tool.id]!); return; }
+    if (['writing-stats', 'word-count', 'letter-count', 'sentence-count', 'paragraph-count', 'writing-time', 'goal-meter', 'session-pace', 'reading-time', 'streak', 'progress', 'daily-target'].includes(tool.id)) { setSessionDetailsOpen((open) => !open); return; }
+    if (tool.id === 'add-visual') { addImage(); return; }
+    if (tool.id === 'writing-rhythm') { handleRhythmSectionPress(); return; }
+    if (tool.id === 'sprint-timer') { openSessionTool('quick'); return; }
+    if (tool.id === 'focus-session') { openSessionTool(); return; }
+    if (tool.id === 'pomodoro') { openSessionTool('pomodoro'); return; }
+    if (tool.id === 'custom-timer') { openSessionTool('custom'); return; }
+    Alert.alert(tool.name, `${tool.description}\n\nHow to use: ${tool.howToUse}${tool.example ? `\n\nExample: ${tool.example}` : ''}`);
+  };
+  const activeWriteToolIds = [
+    helpOpen ? 'help-me-write' : '', notesOpen ? 'private-notes' : '', compassOpen ? 'writing-compass' : '',
+    sessionDetailsOpen ? 'writing-stats' : '', rhythmOpen ? 'writing-rhythm' : '',
+  ].filter(Boolean);
 
   return <>
     <View style={[s.writeProjectBar, s.writeProjectBarRight]}>
-      <Pressable onPress={() => onPage('Journey')} style={s.writeJourneyLink}><Text style={s.writeJourneyLinkText}>Journey</Text><Text style={s.writeJourneyLinkArrow}>↗</Text></Pressable>
       <Pressable onPress={() => setProjectMenuOpen(true)} style={s.writeProjectSwitcher} accessibilityLabel="Switch writing project">
         <View style={[s.writeProjectIcon, { backgroundColor: currentProject.color }]}><Text style={s.writeProjectIconText}>{currentProject.mark}</Text></View>
         <View style={s.writeProjectCopy}><Text style={s.writeProjectOverline}>WRITING</Text><Text numberOfLines={1} style={s.writeProjectTitle}>{currentProject.title}</Text></View>
@@ -3789,7 +3920,10 @@ function Write({ projects, activeProject, onSelectProject, onUpdateProject, onPa
       </Pressable>
     </View>
 
-    <View style={s.writeTop}><View style={s.writeTopCopy}><Text style={s.overline}>{currentProject.title.toUpperCase()}</Text><Text style={s.writeTitle}>{completed ? 'The manuscript is complete.' : 'Keep the draft moving.'}</Text>{!completed && <Text style={s.writeTitleHint}>Carry the idea forward, one part at a time.</Text>}</View>{parts.length > 0 && <View style={[s.writeProgress, s.writeTopProgress]}><View style={s.writeProgressTop}><Text style={s.writeProgressValue}>{completionPercent}%</Text><Text style={s.writeProgressLabel}>COMPLETE</Text></View><View style={s.writeProgressTrack}><View style={[s.writeProgressFill, { width: `${completionPercent}%`, backgroundColor: activeArea.color }]} /></View><Text style={s.writeProgressText}>{completed ? 'MANUSCRIPT READY' : activeProgressLabel}</Text></View>}</View>
+    <View style={[s.writeHero, compactHero && s.writeHeroCompact]}>
+      <View style={[s.writeTop, compactHero && s.writeTopCompact]}><View style={s.writeTopCopy}><Text style={s.overline}>{currentProject.title.toUpperCase()}</Text><Text style={s.writeTitle}>{completed ? 'The manuscript is complete.' : 'Keep the draft moving.'}</Text>{!completed && <Text style={s.writeTitleHint}>Carry the idea forward, one part at a time.</Text>}</View>{parts.length > 0 && <View style={[s.writeProgress, s.writeTopProgress, compactHero && s.writeTopProgressCompact]}><View style={s.writeProgressTop}><Text style={s.writeProgressValue}>{completionPercent}%</Text><Text style={s.writeProgressLabel}>COMPLETE</Text></View><View style={s.writeProgressTrack}><View style={[s.writeProgressFill, { width: `${completionPercent}%`, backgroundColor: activeArea.color }]} /></View><Text style={s.writeProgressText}>{completed ? 'MANUSCRIPT READY' : activeProgressLabel}</Text></View>}</View>
+      {activePart && !completed && <Pressable onPress={continueWriting} style={s.writeContinueButton} accessibilityRole="button" accessibilityLabel="Continue writing"><View style={s.writeContinueCopy}><Text style={s.writeContinueLabel}>CONTINUE WRITING</Text><Text style={s.writeContinueHint}>{activeProgressLabel}</Text></View><Text style={s.writeContinueArrow}>→</Text></Pressable>}
+    </View>
 
     {!parts.length && <View style={s.writeEmpty}><Text style={s.writeEmptyIcon}>✦</Text><Text style={s.writeEmptyTitle}>Your writing path is waiting.</Text><Text style={s.writeEmptyCopy}>Go to Plan → Structure and check the parts you want to write. Then they will appear here in order.</Text></View>}
 
@@ -3798,33 +3932,21 @@ function Write({ projects, activeProject, onSelectProject, onUpdateProject, onPa
     {activePart && !completed && <>
       <View style={s.writePartHeader}><View style={[s.writePartNumber, { backgroundColor: activeArea.color }]}><Text style={s.writePartNumberText}>{String(activeIndex + 1).padStart(2, '0')}</Text></View><View style={s.writePartCopy}><Text style={[s.writePartKicker, { color: activeArea.color }]}>{activePart.title === 'Free writing' ? 'OPEN DRAFT' : activeArea.label}</Text><Text style={s.writePartTitle}>{activePart.title}</Text><Text style={s.writePartHelper}>{activePart.helper}</Text></View></View>
       <View style={s.writeAssistArea}>
-        <View style={s.writeAssistTiles}>
-          <Pressable onPress={() => setHelpOpen(!helpOpen)} style={[s.writeAssistTile, helpOpen && s.writeAssistTileHelpActive]} accessibilityLabel={helpOpen ? 'Close help me write' : 'Open help me write'} accessibilityRole="button"><View style={[s.writeAssistIcon, s.writeAssistIconHelp]}><Text style={s.writeAssistIconText}>✦</Text></View></Pressable>
-          <Pressable onPress={() => setNotesOpen(!notesOpen)} style={[s.writeAssistTile, notesOpen && s.writeAssistTileNotesActive]} accessibilityLabel={notesOpen ? 'Close plan notes' : 'Open plan notes'} accessibilityRole="button"><View style={[s.writeAssistIcon, s.writeAssistIconNotes]}><Text style={s.writeAssistIconText}>✎</Text></View></Pressable>
-          <Pressable onPress={() => setCompassOpen(!compassOpen)} style={[s.writeAssistTile, compassOpen && s.writeAssistTileCompassActive]} accessibilityLabel={compassOpen ? 'Close writing compass' : 'Open writing compass'} accessibilityRole="button"><View style={[s.writeAssistIcon, s.writeAssistIconCompass]}><Text style={s.writeAssistIconText}>⌁</Text></View></Pressable>
-        </View>
+        <WriteToolBelt belt="top" config={toolBeltConfig} onConfigChange={setToolBeltConfig} activeToolIds={activeWriteToolIds} onToolPress={handleWriteToolPress} />
         {helpOpen && <View style={[s.writeAssistPanel, s.writeAssistPanelHelp]}><Text style={s.writeAssistPanelTitle}>HELP ME WRITE</Text><Text style={s.writeHelpIntro}>Choose a question to keep beside you. Bookez won’t write the part for you.</Text>{helpPrompts.map((prompt) => <Pressable key={prompt} onPress={() => setSelectedHelpPrompt(prompt)} style={[s.writeHelpPrompt, selectedHelpPrompt === prompt && s.writeHelpPromptSelected]}><Text style={[s.writeHelpPromptText, selectedHelpPrompt === prompt && s.writeHelpPromptTextSelected]}>{prompt}</Text><Text style={s.writeHelpPromptArrow}>→</Text></Pressable>)}{selectedHelpPrompt && <Text style={s.writeHelpSelected}>Keep asking: “{selectedHelpPrompt}”</Text>}</View>}
         {notesOpen && <View style={[s.writeAssistPanel, s.writeAssistPanelNotes]}><View style={s.writeAssistPanelHeader}><Text style={s.writeAssistPanelTitle}>YOUR PRIVATE NOTES</Text><Text style={s.writeAssistPanelHint}>{contextNotes.length ? `${contextNotes.length} pieces of context available · Compass may use these as guidance` : 'Editable thoughts for you; Compass can use them as context'}</Text></View>{contextNotes.length ? contextNotes.map((note) => <View key={note.label} style={s.writeNoteRow}><Text style={s.writeNoteLabel}>{note.label}</Text><Text style={s.writeNoteText}>{note.value}</Text></View>) : <Text style={s.writeNotesEmpty}>No notes yet. Add a thought to keep beside this part.</Text>}{plan.partNotes[activePart.key]?.trim() && <View style={[s.writeSavedNote, s.writeAssistNoteInset]}><Text style={s.writeSavedNoteLabel}>YOUR NOTE</Text><Text style={s.writeSavedNoteText}>{compactNote(plan.partNotes[activePart.key])}</Text></View>}<View style={[s.writeQuickNote, s.writeAssistNoteInset]}><Text style={s.writeQuickNoteLabel}>PRIVATE NOTE FOR THIS PART</Text><DictationInput value={plan.partNotes[activePart.key] || ''} onChangeText={updatePartNote} placeholder="Capture an idea for yourself…" placeholderTextColor="#A0A3BB" multiline style={s.writeQuickNoteInput} accessibilityLabel="Private note for this part" /></View></View>}
         {compassOpen && <View style={[s.writeAssistPanel, s.writeAssistPanelCompass]}><View style={s.writeCompassHeader}><View style={s.writeCompassTitleRow}><View style={[s.writeCompassIcon, s.writeAssistIconCompass]}><Text style={s.writeCompassIconText}>⌁</Text></View><View><Text style={s.writeCompassKicker}>WRITING COMPASS</Text><Text style={s.writeCompassSub}>Generated guidance from your plan, notes, and draft</Text></View></View><Pressable onPress={refreshCompass} style={s.writeCompassRefresh} accessibilityLabel="Refresh writing compass"><Text style={s.writeCompassRefreshText}>Refresh</Text></Pressable></View><View style={s.writeCompassRow}><Text style={s.writeCompassLabel}>WHAT BELONGS HERE</Text><Text style={s.writeCompassText}>{compass.belongs}</Text></View><View style={s.writeCompassRow}><Text style={s.writeCompassLabel}>YOUR NEXT STEP</Text><Text style={s.writeCompassText}>{compass.next}</Text></View><View style={s.writeCompassRow}><Text style={s.writeCompassLabel}>KEEP IN MIND</Text><Text style={s.writeCompassText}>{compass.keep}</Text></View></View>}
       </View>
-      <View style={s.writeEditorCard}><View style={s.writeEditorTop}><View style={s.writeEditorLabelGroup}><Text style={s.writeEditorLabel}>YOUR MANUSCRIPT</Text><Pressable onPress={() => setContextOpen(true)} style={s.writeContextButton} accessibilityLabel="Open writing context"><Text style={s.writeContextIcon}>◈</Text><Text style={s.writeContextText}>Context</Text></Pressable></View><Text style={s.writeEditorHint}>🎙 Tap the keyboard mic to dictate</Text></View><DictationInput value={plan.drafts[activePart.key] || ''} onChangeText={updateDraft} onInputMode={recordInputMode} placeholder={`Begin your ${activePart.title.toLowerCase()}…`} placeholderTextColor="#9A9DB7" multiline autoCorrect spellCheck style={s.writeEditorInput} accessibilityLabel={`${activePart.title} manuscript`} /><View style={s.writeTools}><Pressable onPress={() => updateDraftWithTool(polishWriting)} disabled={!plan.drafts[activePart.key]?.trim()} style={[s.writeToolButton, !plan.drafts[activePart.key]?.trim() && s.writeToolDisabled]} accessibilityLabel="Polish writing"><Text style={s.writeToolIcon}>✦</Text><Text style={s.writeToolText}>Polish</Text></Pressable><Pressable onPress={() => updateDraftWithTool(grammarWriting)} disabled={!plan.drafts[activePart.key]?.trim()} style={[s.writeToolButton, !plan.drafts[activePart.key]?.trim() && s.writeToolDisabled]} accessibilityLabel="Fix grammar"><Text style={s.writeToolIcon}>Aa</Text><Text style={s.writeToolText}>Grammar</Text></Pressable><Text style={s.writeToolHint}>Quick local cleanup</Text></View></View>
+      <View style={s.writeEditorCard}><View style={s.writeEditorTop}><View style={s.writeEditorLabelGroup}><Text style={s.writeEditorLabel}>YOUR MANUSCRIPT</Text><Pressable onPress={() => setContextOpen(true)} style={s.writeContextButton} accessibilityLabel="Open writing context"><Text style={s.writeContextIcon}>◈</Text><Text style={s.writeContextText}>Context</Text></Pressable></View><Text style={s.writeEditorHint}>🎙 Tap to dictate</Text></View><DictationInput value={plan.drafts[activePart.key] || ''} onChangeText={updateDraft} onSelectionChange={(event) => setEditorSelection(event.nativeEvent.selection)} onInputMode={recordInputMode} placeholder={`Begin your ${activePart.title.toLowerCase()}…`} placeholderTextColor="#9A9DB7" multiline autoCorrect spellCheck style={s.writeEditorInput} accessibilityLabel={`${activePart.title} manuscript`} /><View style={s.writeTools}><Pressable onPress={() => updateDraftWithTool(polishWriting)} disabled={!plan.drafts[activePart.key]?.trim()} style={[s.writeToolButton, !plan.drafts[activePart.key]?.trim() && s.writeToolDisabled]} accessibilityLabel="Polish writing"><Text style={s.writeToolIcon}>✦</Text><Text style={s.writeToolText}>Polish</Text></Pressable><Pressable onPress={() => updateDraftWithTool(grammarWriting)} disabled={!plan.drafts[activePart.key]?.trim()} style={[s.writeToolButton, !plan.drafts[activePart.key]?.trim() && s.writeToolDisabled]} accessibilityLabel="Fix grammar"><Text style={s.writeToolIcon}>Aa</Text><Text style={s.writeToolText}>Grammar</Text></Pressable><Text style={s.writeToolHint}>Quick local cleanup</Text></View></View>
+      <AIWritingTools text={draftText} selectedText={getEditorTarget().text} hasSelection={editorHasSelection} cursorPosition={editorCursor} requestedTool={aiToolRequest} context={{ chapterTitle: activePart.title, chapterPlan: activePart.helper, nearbyText: draftText.slice(Math.max(0, editorAnchor - 900), Math.min(draftText.length, editorCursor + 900)), notes: contextNotes.map((note) => `${note.label}: ${note.value}`).join('\n'), compass: `${compass.belongs} ${compass.next} ${compass.keep}` }} onReplace={replaceEditorTarget} onInsert={insertAIWriting} onUseAsNote={useAIWritingNote} />
+      {lastAIEdit && <View style={s.writeAIUndo}><Text style={s.writeAIUndoText}>AI edit applied</Text><Pressable onPress={undoLastAIEdit} accessibilityRole="button" accessibilityLabel="Undo AI edit"><Text style={s.writeAIUndoAction}>Undo</Text></Pressable></View>}
       {activePart.kind === 'unit' && <View style={s.chapterEndCompactRow}><Pressable onPress={toggleChapterEnd} style={[s.chapterEndIconButton, chapterEndMarked && s.chapterEndIconButtonMarked]} accessibilityRole="button" accessibilityLabel={chapterEndMarked ? 'Unmark chapter end' : 'Mark chapter end'}><Text style={[s.chapterEndIconText, chapterEndMarked && s.chapterEndIconTextMarked]}>{chapterEndMarked ? '✓' : '·'}</Text></Pressable><Text style={s.chapterEndCompactLabel}>CHAPTER END</Text></View>}
       <View style={s.writeNavigation}><Pressable onPress={goBack} disabled={activeIndex === 0} style={[s.writeSecondaryButton, activeIndex === 0 && s.writeButtonDisabled]}><Text style={s.writeSecondaryButtonText}>← Previous</Text></Pressable><Pressable onPress={goNext} style={s.writeNextButton}><Text style={s.writeNextButtonText}>{activeIndex === parts.length - 1 ? 'Finish manuscript' : 'Next part →'}</Text></Pressable></View>
-      <View style={s.writeUtilityDock}>
-        <Pressable onPress={() => setSessionDetailsOpen(!sessionDetailsOpen)} style={[s.writeUtilityTile, sessionDetailsOpen && s.writeUtilityTileStatsActive]} accessibilityLabel={sessionDetailsOpen ? 'Close page statistics' : 'Open page statistics'} accessibilityRole="button">
-          <View style={[s.writeUtilityIcon, s.writeUtilityIconStats]}><Text style={s.writeUtilityIconText}>◷</Text></View>
-        </Pressable>
-        <Pressable onPress={addImage} onHoverIn={() => setImageTipVisible(true)} onHoverOut={() => setImageTipVisible(false)} onFocus={() => setImageTipVisible(true)} onBlur={() => setImageTipVisible(false)} style={s.writeUtilityTile} accessibilityLabel="Add image" accessibilityHint="Choose a photo or visual from your device" accessibilityRole="button">
-          <View style={[s.writeUtilityIcon, s.writeUtilityIconImage]}><Text style={[s.writeUtilityIconText, s.writeUtilityIconImageText]}>＋</Text></View>
-        </Pressable>
-        <Pressable onPress={handleRhythmSectionPress} style={[s.writeUtilityTile, rhythmOpen && s.writeUtilityTileRhythmActive]} accessibilityLabel={rhythmOpen ? 'Close writing rhythm' : 'Open writing rhythm'} accessibilityHint="Open the writing session timer" accessibilityRole="button">
-          <View style={[s.writeUtilityIcon, s.writeUtilityIconRhythm]}><Text style={s.writeUtilityIconText}>{focusTimerRunning ? '◷' : '⌛'}</Text></View>
-        </Pressable>
-      </View>
-      {imageTipVisible && <View style={s.writeUtilityTip}><Text style={s.writeUtilityTipText}>Add a photo or visual to this part.</Text></View>}
+      <WriteToolBelt belt="bottom" config={toolBeltConfig} onConfigChange={setToolBeltConfig} activeToolIds={activeWriteToolIds} onToolPress={handleWriteToolPress} />
       {sessionDetailsOpen && <View style={[s.writeSessionDetailsUtility, s.writeSessionStatsUtility]}><View style={s.writeSessionDetailBlockUtility}><Text style={s.writeSessionDetailValue}>{formatCount(pageStats.words)}</Text><Text style={s.writeSessionDetailLabel}>WORDS</Text></View><View style={s.writeSessionDetailBlockUtility}><Text style={s.writeSessionDetailValue}>{formatCount(pageStats.letters)}</Text><Text style={s.writeSessionDetailLabel}>LETTERS</Text></View><View style={s.writeSessionDetailBlockUtility}><Text style={s.writeSessionDetailValue}>{formatCount(pageStats.sentences)}</Text><Text style={s.writeSessionDetailLabel}>SENTENCES</Text></View><View style={s.writeSessionDetailBlockUtility}><Text style={s.writeSessionDetailValue}>{formatCount(pageStats.paragraphs)}</Text><Text style={s.writeSessionDetailLabel}>PARAGRAPHS</Text></View><View style={s.writeSessionDetailBlockUtility}><Text style={s.writeSessionDetailValue}>{sessionMinutes}m</Text><Text style={s.writeSessionDetailLabel}>TIME WRITING</Text></View></View>}
       {rhythmOpen && <View style={rhythmS.writeRhythmCardOrganized}><View style={rhythmS.writeRhythmHeader}><View style={rhythmS.writeRhythmCopy}><Text style={rhythmS.writeRhythmKicker}>WRITING SESSION</Text><Text style={rhythmS.writeRhythmTitle}>{writingSessionOptions.find((option) => option.mode === writingSessionMode)?.label ?? 'Gentle Focus'}</Text></View><Text style={rhythmS.writeRhythmTarget}>{sessionConfig.countsUp ? 'COUNT UP' : 'TRY ' + focusTargetMinutes + ' MIN'}</Text></View><Text style={rhythmS.writeRhythmHint}>{sessionConfig.helper}</Text><Text style={rhythmS.modeLabel}>CHOOSE A MODE</Text><View style={rhythmS.modeGrid}>{writingSessionOptions.map((option) => <Pressable key={option.mode} onPress={() => selectWritingSessionMode(option.mode)} style={[rhythmS.modeChoice, writingSessionMode === option.mode && rhythmS.modeChoiceSelected]}><Text style={[rhythmS.modeChoiceText, writingSessionMode === option.mode && rhythmS.modeChoiceTextSelected]}>{option.label}</Text>{option.recommended && <Text style={rhythmS.modeRecommended}>RECOMMENDED</Text>}</Pressable>)}</View>{writingSessionMode === 'custom' && <View style={rhythmS.customSessionRow}><View style={rhythmS.customSessionField}><Text style={rhythmS.customSessionLabel}>WRITING</Text><TextInput value={customWritingMinutes} onChangeText={(value) => { setCustomWritingMinutes(value); updateSessionPlan({ customWritingMinutes: value }); }} keyboardType="number-pad" style={rhythmS.customSessionInput} accessibilityLabel="Custom writing minutes" /><Text style={rhythmS.customSessionUnit}>MIN</Text></View><View style={rhythmS.customSessionField}><Text style={rhythmS.customSessionLabel}>BREAK</Text><TextInput value={customBreakMinutes} onChangeText={(value) => { setCustomBreakMinutes(value); updateSessionPlan({ customBreakMinutes: value }); }} keyboardType="number-pad" style={rhythmS.customSessionInput} accessibilityLabel="Custom break minutes" /><Text style={rhythmS.customSessionUnit}>MIN</Text></View></View>}{sessionRecommendation && <View style={rhythmS.recommendationCard}><Text style={rhythmS.recommendationKicker}>BOOKEZ NOTICED</Text><Text style={rhythmS.recommendationText}>Your recent sessions cluster around {sessionRecommendation.minimum}–{sessionRecommendation.maximum} minutes. Would you like to make {sessionRecommendation.suggested}-minute sessions your default?</Text><Pressable onPress={applySessionRecommendation} style={rhythmS.recommendationButton}><Text style={rhythmS.recommendationButtonText}>Use {sessionRecommendation.suggested} minutes</Text></Pressable></View>}{sessionPromptOpen && <View style={rhythmS.sessionPrompt}><Text style={rhythmS.sessionPromptKicker}>{focusTimerPhase === 'rest' ? 'BREAK COMPLETE' : 'SESSION COMPLETE'}</Text><Text style={rhythmS.sessionPromptTitle}>{focusTimerPhase === 'rest' ? 'Ready for another writing block?' : 'How did this session feel?'}</Text><TextInput value={sessionFeeling} onChangeText={setSessionFeeling} placeholder="A word or two is enough…" placeholderTextColor="#A0A3BB" style={rhythmS.sessionPromptInput} accessibilityLabel="How the writing session felt" /><TextInput value={sessionCompleted} onChangeText={setSessionCompleted} placeholder="What did you complete?" placeholderTextColor="#A0A3BB" style={rhythmS.sessionPromptInput} accessibilityLabel="What you completed" /><TextInput value={sessionNext} onChangeText={setSessionNext} placeholder="What should happen next?" placeholderTextColor="#A0A3BB" style={rhythmS.sessionPromptInput} accessibilityLabel="What should happen next" /><View style={rhythmS.sessionPromptActions}><Pressable onPress={() => handleSessionChoice('continue')} style={rhythmS.sessionPromptPrimary}><Text style={rhythmS.sessionPromptPrimaryText}>Continue</Text></Pressable><Pressable onPress={() => handleSessionChoice('rest')} style={rhythmS.sessionPromptSecondary}><Text style={rhythmS.sessionPromptSecondaryText}>{focusTimerPhase === 'rest' ? 'Rest again' : 'Rest'}</Text></Pressable><Pressable onPress={() => handleSessionChoice('finish')} style={rhythmS.sessionPromptSecondary}><Text style={rhythmS.sessionPromptSecondaryText}>Finish</Text></Pressable></View></View>}<View style={rhythmS.focusTimerRow}><View><Text style={rhythmS.focusTimerValue}>{formatFocusTimer(focusTimerSeconds)}</Text><Text style={rhythmS.focusTimerLabel}>{sessionConfig.countsUp ? 'FLOW SESSION' : focusTimerPhase === 'rest' ? 'REST' : focusTimerSeconds >= focusTargetMinutes * 60 ? 'SESSION COMPLETE' : 'FOCUS TIMER'}</Text></View><View style={rhythmS.focusTimerActions}><Pressable onPress={toggleFocusTimer} style={rhythmS.focusTimerPrimary}><Text style={rhythmS.focusTimerPrimaryText}>{focusTimerRunning ? sessionConfig.countsUp ? 'Finish' : 'Pause' : focusTimerSeconds ? 'Resume' : 'Start'}</Text></Pressable>{focusTimerSeconds > 0 && <Pressable onPress={resetFocusTimer} style={rhythmS.focusTimerReset}><Text style={rhythmS.focusTimerResetText}>Reset</Text></Pressable>}</View></View>{!sessionConfig.countsUp && <View style={rhythmS.focusTimerTrack}><View style={[rhythmS.focusTimerFill, { width: `${focusTimerProgress * 100}%` }]} /></View>}<View style={rhythmS.strategyPanel}><Text style={rhythmS.strategyKicker}>TODAY’S METHOD</Text><Text style={rhythmS.strategyTitle}>{writingStrategy.title}</Text><Text style={rhythmS.strategyBody}>{writingStrategy.body}</Text><Text style={rhythmS.strategySteps}>{writingStrategy.steps}</Text></View><Text style={rhythmS.writeRhythmResearch}>Research-informed: scheduled, repeatable sessions tend to support more sustainable progress than rare binge sessions. This is a suggestion, not a rule.</Text></View>}
     </>}
+    {activePart && !completed && <ImageSystemCard project={currentProject} images={projectImages} connectedPartKey={activePart.key} onAddImage={addImage} onReplaceImage={replaceImage} onUpdateImage={updateImage} onRemoveImage={removeImage} onEnableImages={() => onUpdateProject(activeProject, { imageEnabled: true })} emptyLabel="Add a photo or visual to this part" />}
 
     <Modal animationType="slide" transparent visible={contextOpen} onRequestClose={() => setContextOpen(false)}><View style={s.writeContextShade}><Pressable style={s.writeContextDismiss} onPress={() => setContextOpen(false)} /><View style={s.writeContextSheet}><View style={s.sheetHandle} /><View style={s.writeContextHeader}><View><Text style={s.writeContextKicker}>BOOK CONTEXT</Text><Text style={s.writeContextTitle}>{activePart?.title ?? 'This part'}</Text></View><Pressable onPress={() => setContextOpen(false)} style={s.closeButton}><Text style={s.closeButtonText}>×</Text></Pressable></View>{contextItems.map((item) => <View key={item.label} style={s.writeContextRow}><View style={s.writeContextRowIcon}><Text style={s.writeContextRowIconText}>{item.label === 'Chapter plan' ? '⌁' : item.label === 'Earlier notes' ? '✦' : item.label === 'Preceding section' ? '‹' : '◌'}</Text></View><View style={s.writeContextRowCopy}><Text style={s.writeContextRowLabel}>{item.label}</Text><Text style={s.writeContextRowValue}>{item.value}</Text></View></View>)}</View></View></Modal>
     <Modal animationType="fade" transparent visible={projectMenuOpen} onRequestClose={() => setProjectMenuOpen(false)}>
@@ -3835,20 +3957,36 @@ function Write({ projects, activeProject, onSelectProject, onUpdateProject, onPa
   </>;
 }
 
+function JourneyEmptyState({ onBack, onPage }: { onBack: () => void; onPage: (page: Page) => void }) {
+  return <>
+    <View style={s.journeyHeader}>
+      <Pressable onPress={onBack} style={s.journeyBackButton} accessibilityLabel="Back to book library"><Text style={s.journeyBackIcon}>‹</Text></Pressable>
+      <View style={s.journeyHeaderCopy}><Text style={s.journeyOverline}>BOOKEZ / PROGRESS</Text><Text style={s.journeyHeaderTitle}>Your Book Journey</Text></View>
+    </View>
+    <View style={s.journeySummaryCard}>
+      <Text style={s.journeySummaryEyebrow}>YOUR NEXT BEGINNING</Text>
+      <Text style={s.journeySummaryStage}>Start a book to see your journey.</Text>
+      <Text style={s.journeyTodayDetail}>Create a project first, and Bookez will map your writing path here as you plan and draft.</Text>
+      <Pressable onPress={() => onPage('Library')} style={s.journeyContinueButton} accessibilityRole="button"><Text style={s.journeyContinueText}>Go to Library</Text><Text style={s.journeyContinueAction}>Create or choose a book</Text><Text style={s.journeyContinueArrow}>→</Text></Pressable>
+    </View>
+  </>;
+}
+
 function Journey({ projects, activeProject, onSelectProject, onUpdateProject, onPage, onBack, onOpenBookStudio, scrollY }: { projects: Project[]; activeProject: string; onSelectProject: (title: string) => void; onUpdateProject: (title: string, changes: Partial<Project>) => void; onPage: (page: Page) => void; onBack: () => void; onOpenBookStudio: (title: string, section: StudioSection) => void; scrollY?: SharedValue<number> }) {
   const currentProject = projects.find((project) => project.title === activeProject) ?? projects[0];
   const snapshot = getJourneySnapshot(currentProject);
   const currentPlan = currentProject.plan ?? defaultPlanFor(currentProject.type);
   const todayPlan = getJourneyTodayPlan(currentProject, snapshot);
   const latestMilestone = hasWritingPlan(currentProject, currentPlan) ? getLatestCompletedMilestone(currentProject) : undefined;
-  const milestones = getJourneyMilestones(snapshot);
-  const landscapeStage = useJourneyLandscapeStage(snapshot);
+  const milestoneDataSignature = [snapshot.ideaReady, snapshot.foundationReady, snapshot.outlineReady, snapshot.firstDraftStarted, snapshot.halfwayReady, snapshot.draftComplete, snapshot.manuscriptComplete, snapshot.targetWords, snapshot.unitCount, snapshot.selectedStructureCount, snapshot.writeIndex, snapshot.requiredDraftedPartKeys.join(','), snapshot.parts.filter((part) => part.required).map((part) => `${part.key}:${part.title}`).join('|')].join('::');
+  const milestones = useMemo(() => getJourneyMilestones(snapshot), [milestoneDataSignature]);
   const [selectorOpen, setSelectorOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [selectedMilestoneId, setSelectedMilestoneId] = useState<string | null>(null);
   const [selectedCheckpointId, setSelectedCheckpointId] = useState<string | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
   const [reduceMotion, setReduceMotion] = useState(false);
+  const [journeyMapOffsetY, setJourneyMapOffsetY] = useState(0);
   const [celebration, setCelebration] = useState<JourneyCelebration | null>(null);
   const previousJourneySnapshot = useRef<JourneySnapshot | null>(null);
   const celebrationWrites = useRef(new Set<string>());
@@ -3862,21 +4000,26 @@ function Journey({ projects, activeProject, onSelectProject, onUpdateProject, on
   const selectedCheckpoint = selectedMilestone && selectedCheckpointId ? selectedMilestone.miniCheckpoints.find((checkpoint) => checkpoint.id === selectedCheckpointId) : undefined;
   const selectedCheckpointProgress = selectedMilestone ? selectedCheckpoint ? getJourneyMiniCheckpointProgress(snapshot, selectedMilestone, selectedCheckpoint, currentPlan) : getJourneyCheckpointProgress(snapshot, selectedMilestone, currentPlan) : undefined;
   const milestoneProgress = milestones.map((milestone) => getJourneyCheckpointProgress(snapshot, milestone, currentPlan).progress);
-  const journeyLayout = useMemo(() => buildJourneyLayout(milestones, journeyMapWidth, milestoneProgress), [milestones, journeyMapWidth, milestoneProgress]);
+  const miniProgressById = Object.fromEntries(milestones.flatMap((milestone) => milestone.miniCheckpoints.map((checkpoint) => [`${milestone.id}:${checkpoint.id}`, getJourneyMiniCheckpointProgress(snapshot, milestone, checkpoint, currentPlan).progress])));
+  const journeyLayoutSignature = `${milestones.map((milestone) => `${milestone.id}[${milestone.miniCheckpoints.map((checkpoint) => `${checkpoint.id}:${miniProgressById[`${milestone.id}:${checkpoint.id}`]}`).join(',')}]`).join('|')}::${milestoneProgress.join(',')}`;
+  const journeyLayout = useMemo(() => buildJourneyLayout(milestones, journeyMapWidth, milestoneProgress, miniProgressById), [journeyLayoutSignature, journeyMapWidth]);
   const journeySignature = `${snapshot.progressPercent}:${snapshot.draftedParts}:${snapshot.writeIndex}:${snapshot.manuscriptComplete}`;
   const selectedJourneyIndex = selectedMilestone ? milestones.findIndex((milestone) => milestone.id === selectedMilestone.id) : -1;
   const selectedJourneyPoint = selectedCheckpoint ? journeyLayout.miniSteps.find((step) => step.milestoneId === selectedMilestone?.id && step.checkpoint.id === selectedCheckpoint.id)?.point : selectedJourneyIndex >= 0 ? journeyLayout.milestonePoints[selectedJourneyIndex] : undefined;
-  const popupWidth = Math.min(178, journeyMapWidth - 24);
-  const popupOnRight = Boolean(selectedJourneyPoint && selectedJourneyPoint.x < journeyMapWidth / 2);
-  const popupLeft = selectedJourneyPoint ? popupOnRight ? Math.min(journeyMapWidth - popupWidth - 8, selectedJourneyPoint.x + 48) : Math.max(8, selectedJourneyPoint.x - popupWidth - 48) : 8;
-  const popupTop = selectedJourneyPoint ? selectedJourneyPoint.y < 178 ? selectedJourneyPoint.y + 28 : Math.max(10, Math.min(journeyLayout.height - 190, selectedJourneyPoint.y - 164)) : 10;
+  const popupWidth = Math.min(190, journeyMapWidth - 24);
+  const popupFreeRight = selectedJourneyPoint ? journeyMapWidth - selectedJourneyPoint.x - 38 : 0;
+  const popupFreeLeft = selectedJourneyPoint ? selectedJourneyPoint.x - 38 : 0;
+  const popupOnRight = popupFreeRight >= popupWidth || popupFreeRight >= popupFreeLeft;
+  const popupLeft = selectedJourneyPoint ? popupOnRight ? Math.min(journeyMapWidth - popupWidth - 8, selectedJourneyPoint.x + 38) : Math.max(8, selectedJourneyPoint.x - popupWidth - 38) : 8;
+  const popupEstimatedHeight = 236;
+  const popupTop = selectedJourneyPoint ? selectedJourneyPoint.y < popupEstimatedHeight * 0.72 ? selectedJourneyPoint.y + 34 : Math.max(10, Math.min(journeyLayout.height - popupEstimatedHeight - 10, selectedJourneyPoint.y - popupEstimatedHeight * 0.68)) : 10;
   const nextStep = getJourneyNextStep(snapshot, currentMilestone);
   const nextPage: Page = 'Write';
   const nextAction = snapshot.manuscriptComplete ? 'Review the manuscript' : !snapshot.firstDraftStarted ? 'Start writing whenever you’re ready' : snapshot.nextPart ? `Write ${snapshot.nextPart.title}` : 'Continue manuscript';
 
   const openMilestoneDetail = (milestoneId: string) => { if (detailOpen && selectedMilestoneId === milestoneId && !selectedCheckpointId) { closeDetail(); return; } setSelectedMilestoneId(milestoneId); setSelectedCheckpointId(null); setDetailOpen(true); };
   const openCheckpointDetail = (milestoneId: string, checkpointId: string) => { if (detailOpen && selectedMilestoneId === milestoneId && selectedCheckpointId === checkpointId) { closeDetail(); return; } setSelectedMilestoneId(milestoneId); setSelectedCheckpointId(checkpointId); setDetailOpen(true); };
-  const closeDetail = () => { setDetailOpen(false); setSelectedCheckpointId(null); };
+  const closeDetail = () => { setDetailOpen(false); setSelectedCheckpointId(null); setSelectedMilestoneId(null); };
   const journeyLineStyle = (start: JourneyPoint, end: JourneyPoint) => {
     const dx = end.x - start.x;
     const dy = end.y - start.y;
@@ -3885,7 +4028,7 @@ function Journey({ projects, activeProject, onSelectProject, onUpdateProject, on
     return { left: (start.x + end.x - length) / 2, top: (start.y + end.y) / 2 - 1.5, width: length, transform: [{ rotate: `${angle}deg` }] };
   };
   const journeyProgressPoint = (start: JourneyPoint, end: JourneyPoint, progress: number): JourneyPoint => ({ x: start.x + (end.x - start.x) * progress, y: start.y + (end.y - start.y) * progress });
-  const popupTailTop = selectedJourneyPoint ? Math.max(12, Math.min(150, selectedJourneyPoint.y - popupTop - 7)) : 24;
+  const popupTailTop = selectedJourneyPoint ? Math.max(14, Math.min(popupEstimatedHeight - 26, selectedJourneyPoint.y - popupTop - 7)) : 24;
   const detailPart = selectedCheckpoint?.partKey ? snapshot.parts.find((part) => part.key === selectedCheckpoint.partKey) : undefined;
   const detailPartWords = detailPart ? countWords(currentPlan.drafts[detailPart.key] ?? '') : 0;
   const detailStatus = selectedCheckpointProgress?.progress === 100 ? 'Completed' : selectedMilestone?.status === 'locked' ? 'Locked' : selectedMilestone?.status === 'current' ? (selectedCheckpointProgress?.progress ?? 0) > 0 ? 'In progress' : 'Ready' : 'Ready';
@@ -4039,14 +4182,14 @@ function Journey({ projects, activeProject, onSelectProject, onUpdateProject, on
     {celebration && <JourneyCelebration celebration={celebration} reduceMotion={reduceMotion} onDismiss={() => setCelebration(null)} onPrimary={celebration.kind === 'final' ? () => { setCelebration(null); onOpenBookStudio(currentProject.title, 'read'); } : undefined} />}
 
     <View style={s.journeyMapHeading}><View><Text style={s.journeyMapEyebrow}>YOUR PATH</Text><Text style={s.journeyMapTitle}>Small steps lead to big moments.</Text></View><Text style={s.journeyMapHint}>Tap any dot</Text></View>
-    <View style={[s.journeyMap, { height: journeyLayout.height, width: journeyMapWidth }]}>
-      <JourneyLandscapeBackground width={journeyMapWidth} height={journeyLayout.height} stage={landscapeStage} progress={snapshot.progressPercent} reduceMotion={reduceMotion} scrollY={scrollY} celebrating={Boolean(celebration)} />
+    <View onLayout={(event) => setJourneyMapOffsetY(event.nativeEvent.layout.y)} style={[s.journeyMap, { height: journeyLayout.height, width: journeyMapWidth }]}>
+      <JourneyEnvironment width={journeyMapWidth} height={journeyLayout.height} progress={snapshot.progressPercent} reduceMotion={reduceMotion} scrollY={scrollY} mapOffsetY={journeyMapOffsetY} celebrating={Boolean(celebration)} />
       {detailOpen && <Pressable onPress={closeDetail} style={journeyEnhancementS.mapDismiss} accessibilityLabel="Dismiss checkpoint details" />}
       {journeyLayout.segments.map((segment, index) => {
         const progressPoint = journeyProgressPoint(segment.start, segment.end, segment.progress / 100);
         return <Fragment key={'route-' + index}>
-          <View style={[s.journeyRoute, journeyLineStyle(segment.start, segment.end)]} />
-          {segment.progress > 0 && <View style={[s.journeyRouteCompleteDynamic, journeyLineStyle(segment.start, progressPoint)]} />}
+          <View style={[s.journeyRoute, journeyEnhancementS.routeBase, journeyLineStyle(segment.start, segment.end)]} />
+          {segment.progress > 0 && <View style={[s.journeyRouteCompleteDynamic, journeyEnhancementS.routeComplete, journeyLineStyle(segment.start, progressPoint)]} />}
         </Fragment>;
       })}
       {journeyLayout.miniSteps.map(({ point, milestoneId, checkpoint, index }) => {
@@ -4054,31 +4197,37 @@ function Journey({ projects, activeProject, onSelectProject, onUpdateProject, on
         const checkpointProgress = getJourneyMiniCheckpointProgress(snapshot, milestone, checkpoint, currentPlan);
         const firstIncomplete = milestone.miniCheckpoints.findIndex((item) => !item.completed);
         const isCurrent = milestone.status === 'current' && firstIncomplete === index;
-        const accessibilityStatus = checkpointProgress.progress === 100 ? 'complete' : isCurrent ? 'current' : 'upcoming';
-        const labelOnRight = (index + milestones.findIndex((item) => item.id === milestoneId)) % 2 === 0;
-        const labelWidth = Math.min(126, Math.max(94, journeyMapWidth * 0.34));
-        const labelLeft = labelOnRight ? Math.min(journeyMapWidth - labelWidth - 6, point.x + 24) : Math.max(6, point.x - labelWidth - 24);
-        return <Fragment key={checkpoint.id}>
-          <Pressable onPress={() => openCheckpointDetail(milestoneId, checkpoint.id)} style={[s.journeyMiniHit, journeyEnhancementS.miniHit, { left: point.x - 22, top: point.y - 22 }]} accessibilityRole="button" accessibilityLabel={checkpoint.title + ', ' + checkpointProgress.progress + ' percent complete, ' + accessibilityStatus + ', double tap for details'}>
-            <Animated.View style={[s.journeyMiniDotPath, checkpointProgress.progress === 100 && s.journeyMiniDotPathComplete, isCurrent && s.journeyMiniDotPathCurrent, milestone.status === 'locked' && s.journeyMiniDotPathLocked, isCurrent && journeyEnhancementS.miniDotRecommended, selectedCheckpointId === checkpoint.id && journeyEnhancementS.miniDotSelected, isCurrent && !reduceMotion && { transform: [{ scale: pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.13] }) }] }, milestone.id === 'manuscript-complete' && checkpointProgress.progress === 100 && !reduceMotion && { transform: [{ scale: pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.16] }) }] }]}><Text style={[s.journeyMiniDotPathText, checkpointProgress.progress === 100 && s.journeyMiniDotPathTextComplete]}>{checkpointProgress.progress === 100 ? '✓' : milestone.status === 'locked' ? '🔒' : String(index + 1)}</Text></Animated.View>
+        const accessibilityStatus = checkpointProgress.progress === 100 ? 'complete' : milestone.status === 'locked' ? 'locked' : isCurrent ? 'current' : 'available';
+        const labelOnRight = point.x <= journeyMapWidth / 2;
+        const labelWidth = Math.min(126, Math.max(84, journeyMapWidth * 0.31));
+        const labelLeft = labelOnRight ? Math.min(journeyMapWidth - labelWidth - 7, point.x + 23) : Math.max(7, point.x - labelWidth - 23);
+        const showLabel = milestone.miniCheckpoints.length <= 6 || isCurrent || selectedCheckpointId === checkpoint.id || index === 0 || index === milestone.miniCheckpoints.length - 1;
+        return <Fragment key={`${milestoneId}:${checkpoint.id}`}>
+          <Pressable onPress={() => openCheckpointDetail(milestoneId, checkpoint.id)} style={[s.journeyMiniHit, journeyEnhancementS.miniHit, { left: point.x - 24, top: point.y - 24 }]} accessibilityRole="button" accessibilityLabel={checkpoint.title + ', ' + checkpointProgress.progress + ' percent complete, ' + accessibilityStatus + ', double tap for details'}>
+            <Animated.View style={[s.journeyMiniDotPath, checkpointProgress.progress === 100 && s.journeyMiniDotPathComplete, isCurrent && s.journeyMiniDotPathCurrent, milestone.status === 'locked' && s.journeyMiniDotPathLocked, isCurrent && journeyEnhancementS.miniDotRecommended, selectedCheckpointId === checkpoint.id && journeyEnhancementS.miniDotSelected, isCurrent && !reduceMotion && { transform: [{ scale: pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.1] }) }] }]}>{milestone.status === 'locked' ? <JourneyLockIcon /> : <Text style={[s.journeyMiniDotPathText, checkpointProgress.progress === 100 && s.journeyMiniDotPathTextComplete]}>{checkpointProgress.progress === 100 ? '✓' : String(index + 1)}</Text>}</Animated.View>
           </Pressable>
-          <Pressable onPress={() => openCheckpointDetail(milestoneId, checkpoint.id)} style={[journeyEnhancementS.miniLabel, { top: point.y - 15, width: labelWidth, left: labelLeft }]} accessibilityRole="button" accessibilityLabel={`Open ${checkpoint.title} details`}>
-            <Text numberOfLines={2} style={journeyEnhancementS.miniLabelText}>{checkpoint.title}</Text>
-          </Pressable>
+          {showLabel && <Pressable onPress={() => openCheckpointDetail(milestoneId, checkpoint.id)} style={[journeyEnhancementS.miniLabel, { top: point.y - 12, width: labelWidth, left: labelLeft }]} accessibilityRole="button" accessibilityLabel={`Open ${checkpoint.title} details`}>
+            <Text numberOfLines={1} style={journeyEnhancementS.miniLabelText}>{checkpoint.title}</Text>
+          </Pressable>}
         </Fragment>;
       })}
       {milestones.map((milestone, index) => {
         const point = journeyLayout.milestonePoints[index];
-        const selected = selectedMilestoneId === milestone.id && !selectedCheckpointId;
+        const selected = detailOpen && selectedMilestoneId === milestone.id && !selectedCheckpointId;
         const progress = milestoneProgress[index];
         const completedChildren = milestone.miniCheckpoints.filter((checkpoint) => getJourneyMiniCheckpointProgress(snapshot, milestone, checkpoint, currentPlan).progress === 100).length;
         const stateLabel = milestone.status === 'complete' ? 'COMPLETE' : milestone.status === 'current' ? 'CURRENT' : milestone.status === 'locked' ? 'LOCKED' : 'UP NEXT';
+        const labelWidth = Math.min(156, Math.max(112, journeyMapWidth * 0.39));
+        const freeRight = journeyMapWidth - point.x - 40;
+        const freeLeft = point.x - 40;
+        const labelOnRight = freeRight >= labelWidth || freeRight >= freeLeft;
+        const labelLeft = labelOnRight ? Math.min(journeyMapWidth - labelWidth - 8, point.x + 40) : Math.max(8, point.x - labelWidth - 40);
         return <Fragment key={milestone.id}>
-          <Pressable onPress={() => openMilestoneDetail(milestone.id)} style={[s.journeyMilestoneHit, { left: point.x - 46, top: point.y - 46 }]} accessibilityRole="button" accessibilityLabel={milestone.title + ', ' + progress + ' percent complete, ' + stateLabel.toLowerCase() + ', double tap for details'}>
+          <Pressable onPress={() => openMilestoneDetail(milestone.id)} style={[s.journeyMilestoneHit, journeyEnhancementS.majorHit, { left: point.x - 48, top: point.y - 48 }]} accessibilityRole="button" accessibilityLabel={milestone.title + ', ' + progress + ' percent complete, ' + stateLabel.toLowerCase() + ', double tap for details'}>
             <Animated.View style={[journeyEnhancementS.nodeOrbit, milestone.status === 'complete' && journeyEnhancementS.nodeOrbitComplete, milestone.status === 'current' && journeyEnhancementS.nodeOrbitCurrent, selected && journeyEnhancementS.nodeOrbitSelected, !reduceMotion && milestone.status === 'current' && { transform: [{ scale: pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.08] }) }] }]} />
-            <Animated.View style={[s.journeyNodeLarge, milestone.status === 'complete' ? s.journeyNodeLargeComplete : milestone.status === 'current' ? s.journeyNodeLargeCurrent : milestone.status === 'locked' ? s.journeyNodeLargeLocked : s.journeyNodeLargeFuture, selected && s.journeyNodeSelected, milestone.id === 'manuscript-complete' && milestone.status === 'complete' && journeyPopupS.journeyNodeLargeCelebration, !reduceMotion && milestone.status === 'current' && { transform: [{ scale: pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.06] }) }] }]}><Text style={s.journeyNodeIcon}>{milestone.status === 'complete' ? '✓' : milestone.status === 'locked' ? '🔒' : milestone.icon}</Text>{milestone.id === 'manuscript-complete' && milestone.status === 'complete' && <Text style={journeyPopupS.journeyNodeSparkle}>✦</Text>}</Animated.View>
+            <Animated.View style={[s.journeyNodeLarge, journeyEnhancementS.majorMedallion, milestone.status === 'complete' ? s.journeyNodeLargeComplete : milestone.status === 'current' ? s.journeyNodeLargeCurrent : milestone.status === 'locked' ? s.journeyNodeLargeLocked : s.journeyNodeLargeFuture, selected && s.journeyNodeSelected, milestone.id === 'manuscript-complete' && journeyEnhancementS.finalMedallion, milestone.id === 'manuscript-complete' && milestone.status === 'complete' && journeyPopupS.journeyNodeLargeCelebration, !reduceMotion && milestone.status === 'current' && { transform: [{ scale: pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.05] }) }] }]}>{milestone.id === 'manuscript-complete' ? <JourneyManuscriptGlyph locked={milestone.status === 'locked'} complete={milestone.status === 'complete'} /> : milestone.status === 'locked' ? <JourneyLockIcon light /> : <Text style={[s.journeyNodeIcon, journeyEnhancementS.majorIcon]}>{milestone.status === 'complete' ? '✓' : milestone.icon}</Text>}{milestone.id === 'manuscript-complete' && milestone.status === 'complete' && <Text style={journeyPopupS.journeyNodeSparkle}>✦</Text>}</Animated.View>
           </Pressable>
-          <Pressable onPress={() => openMilestoneDetail(milestone.id)} style={[s.journeyMilestoneLabel, { top: point.y - 31 }, { left: point.x < journeyMapWidth / 2 ? Math.min(journeyMapWidth - 162 - 8, point.x + 48) : Math.max(8, point.x - 48 - 162), width: Math.min(162, journeyMapWidth - 16) }, selected && s.journeyMilestoneLabelSelected, milestone.id === 'manuscript-complete' && milestone.status === 'complete' && journeyPopupS.journeyMilestoneLabelCelebration]} accessibilityRole="button">
+          <Pressable onPress={() => openMilestoneDetail(milestone.id)} style={[s.journeyMilestoneLabel, journeyEnhancementS.milestoneFlag, { top: point.y - 27, left: labelLeft, width: labelWidth }, selected && s.journeyMilestoneLabelSelected, milestone.id === 'manuscript-complete' && milestone.status === 'complete' && journeyPopupS.journeyMilestoneLabelCelebration]} accessibilityRole="button">
             <Text numberOfLines={2} style={s.journeyMilestoneLabelTitle}>{milestone.title}</Text>
             <Text style={[s.journeyMilestoneLabelState, milestone.status === 'complete' ? s.journeyStateComplete : milestone.status === 'current' ? s.journeyStateCurrent : milestone.status === 'locked' ? s.journeyStateLocked : s.journeyStateFuture]}>{stateLabel}</Text>
             <Text style={s.journeyMilestoneLabelMeta}>{milestone.miniCheckpoints.length ? completedChildren + ' of ' + milestone.miniCheckpoints.length + ' steps' : progress + '% complete'}</Text>
@@ -4086,7 +4235,7 @@ function Journey({ projects, activeProject, onSelectProject, onUpdateProject, on
         </Fragment>;
       })}
 
-    {detailOpen && selectedMilestone && selectedCheckpointProgress && <Animated.View style={[journeyPopupS.journeyInlinePopup, { width: popupWidth, left: popupLeft, top: popupTop, opacity: detailAnimation, transform: [{ scale: detailAnimation.interpolate({ inputRange: [0, 1], outputRange: [0.96, 1] }) }] }, selectedMilestone.id === 'manuscript-complete' && selectedMilestone.status === 'complete' && journeyPopupS.journeyInlinePopupCelebration]}><Pressable onPress={closeDetail} style={journeyPopupS.journeyInlinePopupClose} accessibilityLabel="Close checkpoint details"><Text style={journeyPopupS.journeyInlinePopupCloseText}>×</Text></Pressable>{selectedMilestone.id === 'manuscript-complete' && selectedMilestone.status === 'complete' && <Text style={journeyPopupS.journeyInlinePopupCelebrationLabel}>✦  BOOK COMPLETE  ✦</Text>}<Text style={journeyPopupS.journeyInlinePopupEyebrow}>{selectedCheckpoint ? 'MINI CHECKPOINT' : 'MAIN CHECKPOINT'} · {detailStatus.toUpperCase()}</Text><Text numberOfLines={3} style={journeyPopupS.journeyInlinePopupTitle}>{selectedCheckpoint?.title ?? selectedMilestone.title}</Text>{selectedCheckpoint && <Text style={journeyPopupS.journeyInlinePopupParent}>Part of {selectedMilestone.title}</Text>}<Text numberOfLines={4} style={journeyPopupS.journeyInlinePopupDescription}>{selectedCheckpoint?.description ?? selectedMilestone.detail}</Text>{detailCompletedAt && <Text style={journeyPopupS.journeyInlinePopupCompletedAt}>Completed {new Date(detailCompletedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</Text>}<View style={journeyPopupS.journeyInlinePopupProgressRow}><Text style={journeyPopupS.journeyInlinePopupProgress}>{selectedCheckpointProgress.progress}%</Text><View style={journeyPopupS.journeyInlinePopupTime}><Text style={journeyPopupS.journeyInlinePopupTimeLabel}>ESTIMATED TIME</Text><Text style={journeyPopupS.journeyInlinePopupTimeValue}>{selectedCheckpoint?.estimatedTime ?? selectedCheckpointProgress.estimateLabel}</Text></View></View><View style={s.journeyCheckpointTrack}><View style={[s.journeyCheckpointFill, { width: String(selectedCheckpointProgress.progress) + '%' }]} /></View>{selectedCheckpointProgress.progress === 100 && <Pressable onPress={replaySelectedCelebration} style={journeyPopupS.journeyInlinePopupReplay}><Text style={journeyPopupS.journeyInlinePopupReplayText}>Replay celebration</Text></Pressable>}<Pressable onPress={openDetailAction} style={journeyPopupS.journeyInlinePopupAction}><Text style={journeyPopupS.journeyInlinePopupActionText}>{detailActionLabel}</Text><Text style={journeyPopupS.journeyInlinePopupActionArrow}>→</Text></Pressable></Animated.View>}
+    {detailOpen && selectedMilestone && selectedCheckpointProgress && <Animated.View style={[journeyPopupS.journeyInlinePopup, { width: popupWidth, left: popupLeft, top: popupTop, opacity: detailAnimation, transform: [{ scale: detailAnimation.interpolate({ inputRange: [0, 1], outputRange: [0.96, 1] }) }] }, selectedMilestone.id === 'manuscript-complete' && selectedMilestone.status === 'complete' && journeyPopupS.journeyInlinePopupCelebration]}><View style={[popupOnRight ? journeyEnhancementS.popupTailLeft : journeyEnhancementS.popupTailRight, { top: popupTailTop }]} /><Pressable onPress={closeDetail} style={journeyPopupS.journeyInlinePopupClose} accessibilityLabel="Close checkpoint details"><Text style={journeyPopupS.journeyInlinePopupCloseText}>×</Text></Pressable>{selectedMilestone.id === 'manuscript-complete' && selectedMilestone.status === 'complete' && <Text style={journeyPopupS.journeyInlinePopupCelebrationLabel}>✦  BOOK COMPLETE  ✦</Text>}<Text style={journeyPopupS.journeyInlinePopupEyebrow}>{selectedCheckpoint ? 'MINI CHECKPOINT' : 'MAIN CHECKPOINT'} · {detailStatus.toUpperCase()}</Text><Text numberOfLines={3} style={journeyPopupS.journeyInlinePopupTitle}>{selectedCheckpoint?.title ?? selectedMilestone.title}</Text>{selectedCheckpoint && <Text style={journeyPopupS.journeyInlinePopupParent}>Part of {selectedMilestone.title}</Text>}<Text numberOfLines={4} style={journeyPopupS.journeyInlinePopupDescription}>{selectedCheckpoint?.description ?? selectedMilestone.detail}</Text>{detailCompletedAt && <Text style={journeyPopupS.journeyInlinePopupCompletedAt}>Completed {new Date(detailCompletedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</Text>}<View style={journeyPopupS.journeyInlinePopupProgressRow}><Text style={journeyPopupS.journeyInlinePopupProgress}>{selectedCheckpointProgress.progress}%</Text><View style={journeyPopupS.journeyInlinePopupTime}><Text style={journeyPopupS.journeyInlinePopupTimeLabel}>ESTIMATED TIME</Text><Text style={journeyPopupS.journeyInlinePopupTimeValue}>{selectedCheckpoint?.estimatedTime ?? selectedCheckpointProgress.estimateLabel}</Text></View></View><View style={s.journeyCheckpointTrack}><View style={[s.journeyCheckpointFill, { width: String(selectedCheckpointProgress.progress) + '%' }]} /></View>{selectedCheckpointProgress.progress === 100 && <Pressable onPress={replaySelectedCelebration} style={journeyPopupS.journeyInlinePopupReplay}><Text style={journeyPopupS.journeyInlinePopupReplayText}>Replay celebration</Text></Pressable>}<Pressable onPress={openDetailAction} style={journeyPopupS.journeyInlinePopupAction}><Text style={journeyPopupS.journeyInlinePopupActionText}>{detailActionLabel}</Text><Text style={journeyPopupS.journeyInlinePopupActionArrow}>→</Text></Pressable></Animated.View>}
 
     </View>
 
@@ -4110,6 +4259,10 @@ function BookStudio({ projects, project, userId, initialSection, onBack, onPage,
   const [previewImageId, setPreviewImageId] = useState<string | null>(null);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [speakingLabel, setSpeakingLabel] = useState('');
+  const [selectedExportFormat, setSelectedExportFormat] = useState<BookExportFormat>('pdf');
+  const [includeUnfinished, setIncludeUnfinished] = useState(true);
+  const [exportBusy, setExportBusy] = useState(false);
+  const [lastExportUri, setLastExportUri] = useState<string | null>(null);
   const speechRun = useRef(0);
 
   useEffect(() => {
@@ -4147,19 +4300,96 @@ function BookStudio({ projects, project, userId, initialSection, onBack, onPage,
   const replaceStudioImage = (image: BookezImage) => requestImage(project, (asset) => onUpdateProject(project.title, { images: projectImages.map((item) => item.id === image.id ? { ...item, ...makeBookezImage(project, asset, item.connectedPartKey), id: item.id, title: item.title, caption: item.caption, altText: item.altText, credit: item.credit, placement: item.placement, includeInExport: item.includeInExport, referenceOnly: item.referenceOnly, connectedPartKey: item.connectedPartKey, updatedAt: Date.now() } : item) }));
   const updateStudioImage = (id: string, changes: Partial<BookezImage>) => onUpdateProject(project.title, { images: projectImages.map((image) => image.id === id ? { ...image, ...changes, updatedAt: Date.now() } : image) });
   const removeStudioImage = (id: string) => { onUpdateProject(project.title, { images: projectImages.filter((image) => image.id !== id) }); setPreviewImageId(null); };
-  const renderChapterVisuals = (chapter: AssembledChapter) => {
-    const visuals = chapter.images.length ? chapter.images : imageConfig.mode === 'IMAGE_LED' && imageConfig.placeholders ? [undefined] : [];
+  const renderChapterVisuals = (chapter: AssembledChapter, group: 'all' | 'top' | 'inline' | 'bottom' | 'fullPage' = 'all') => {
+    const visuals = chapter.images.filter((image) => {
+      if (group === 'all') return true;
+      const placement = image.placement ?? 'inline';
+      if (group === 'top') return placement === 'sectionTop' || placement === 'chapterOpener';
+      if (group === 'bottom') return placement === 'sectionBottom';
+      if (group === 'fullPage') return placement === 'fullPage';
+      return placement === 'inline' || placement === 'fullWidth' || placement === 'facingPage' || placement === 'spread' || placement === 'background' || placement === 'divider';
+    });
+    const placeholders = group === 'top' && imageConfig.mode === 'IMAGE_LED' && imageConfig.placeholders && !chapter.images.length;
+    const displayVisuals = visuals.length ? visuals : placeholders ? [undefined] : [];
     const hasBackCover = chapter.key === book.chapters[book.chapters.length - 1]?.key && book.images.some((image) => image.placement === 'backCover');
-    if (!visuals.length && !hasBackCover) return null;
-    return <View style={imagePreviewS.chapterVisuals}>{visuals.map((image, index) => <ImagePreview key={image?.id ?? `placeholder-${chapter.key}-${index}`} image={image} config={imageConfig} placeholderLabel={image ? undefined : 'Illustration needed'} onPress={() => image ? (setPreviewImageId(image.id), setSection('assemble')) : addStudioImage()} />)}{chapter.key === book.chapters[book.chapters.length - 1]?.key && renderBackCoverVisual()}</View>;
+    if (!displayVisuals.length && !hasBackCover) return null;
+    return <View style={imagePreviewS.chapterVisuals}>{displayVisuals.map((image, index) => <ImagePreview key={image?.id ?? `placeholder-${chapter.key}-${index}`} image={image} config={imageConfig} placeholderLabel={image ? undefined : 'Illustration needed'} onPress={() => image ? (setPreviewImageId(image.id), setSection('assemble')) : addStudioImage()} />)}{group === 'bottom' && chapter.key === book.chapters[book.chapters.length - 1]?.key && renderBackCoverVisual()}</View>;
   };
   const renderBackCoverVisual = () => {
     const image = book.images.find((item) => item.placement === 'backCover');
     return image ? <View style={imagePreviewS.backCover}><Text style={imagePreviewS.backCoverLabel}>BACK COVER</Text><ImagePreview image={image} config={imageConfig} onPress={() => { setPreviewImageId(image.id); setSection('assemble'); }} /></View> : null;
   };
   const moveChapter = (index: number, direction: -1 | 1) => { const keys = book.chapters.map((chapter) => chapter.key); const nextIndex = index + direction; if (nextIndex < 0 || nextIndex >= keys.length) return; [keys[index], keys[nextIndex]] = [keys[nextIndex], keys[index]]; updateStudio({ chapterOrder: keys }); };
-  const shareBook = async () => { const text = buildBookText(book); if (!text) { Alert.alert('Nothing to export yet', 'Write at least one part before sharing this book.'); return; } try { await Share.share({ title: project.title, message: text }); updateStudio({ exportedAt: Date.now() }); } catch { Alert.alert('Export unavailable', 'Your device could not open the share sheet.'); } };
-  const speechSegments = book.chapters.filter((chapter) => chapter.content).map((chapter) => ({ label: chapter.title, text: chapter.content }));
+  const exportDescriptor = BOOK_EXPORT_FORMATS.find((item) => item.format === selectedExportFormat) ?? BOOK_EXPORT_FORMATS[0];
+  const exportFileName = `${project.title.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase() || 'bookez-book'}-${Date.now()}.${exportDescriptor.extension}`;
+  const writeExportFile = async (format: BookExportFormat): Promise<string> => {
+    const descriptor = BOOK_EXPORT_FORMATS.find((item) => item.format === format) ?? BOOK_EXPORT_FORMATS[0];
+    const documentDirectory = FileSystem.documentDirectory;
+    if (!documentDirectory) throw new Error('Bookez could not access the device document directory.');
+    const exportDirectory = `${documentDirectory}bookez-exports/`;
+    await FileSystem.makeDirectoryAsync(exportDirectory, { intermediates: true }).catch(() => undefined);
+    const uri = `${exportDirectory}${project.title.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase() || 'bookez-book'}-${Date.now()}.${descriptor.extension}`;
+    if (format === 'pdf') {
+      const pdf = await Print.printToFileAsync({ html: buildBookHtml(book, includeUnfinished), margins: { top: 36, right: 42, bottom: 36, left: 42 } });
+      await FileSystem.copyAsync({ from: pdf.uri, to: uri });
+    } else if (format === 'docx') {
+      await FileSystem.writeAsStringAsync(uri, bytesToBase64(buildDocx(book, includeUnfinished)), { encoding: FileSystem.EncodingType.Base64 });
+    } else if (format === 'epub') {
+      await FileSystem.writeAsStringAsync(uri, bytesToBase64(buildEpub(book, includeUnfinished)), { encoding: FileSystem.EncodingType.Base64 });
+    } else {
+      const content = format === 'txt' ? buildBookText(book, includeUnfinished) : format === 'md' ? buildBookMarkdown(book, includeUnfinished) : buildBookHtml(book, includeUnfinished);
+      await FileSystem.writeAsStringAsync(uri, content, { encoding: FileSystem.EncodingType.UTF8 });
+    }
+    const info = await FileSystem.getInfoAsync(uri);
+    if (!info.exists) throw new Error(`Bookez could not create the ${descriptor.label} file.`);
+    setLastExportUri(uri);
+    updateStudio({ exportedAt: Date.now() });
+    return uri;
+  };
+  const shareExport = async () => {
+    setExportBusy(true);
+    try {
+      const uri = await writeExportFile(selectedExportFormat);
+      if (!(await Sharing.isAvailableAsync())) throw new Error('Sharing is not available on this device.');
+      await Sharing.shareAsync(uri, { mimeType: exportDescriptor.mimeType, dialogTitle: `Share ${project.title}` });
+    } catch (error) {
+      Alert.alert('Export unavailable', error instanceof Error ? error.message : 'Your device could not open the file share sheet.');
+    } finally { setExportBusy(false); }
+  };
+  const emailExport = async () => {
+    setExportBusy(true);
+    try {
+      const uri = await writeExportFile(selectedExportFormat);
+      if (!(await MailComposer.isAvailableAsync())) throw new Error('No email account is configured on this device.');
+      await MailComposer.composeAsync({ subject: `${project.title} · Bookez export`, body: `Attached is the ${exportDescriptor.label} export of “${project.title}”.`, attachments: [uri] });
+    } catch (error) {
+      Alert.alert('Email export unavailable', error instanceof Error ? error.message : 'Your device could not open an email composer.');
+    } finally { setExportBusy(false); }
+  };
+  const saveExportToPhone = async () => {
+    setExportBusy(true);
+    try {
+      const uri = await writeExportFile(selectedExportFormat);
+      if (Platform.OS === 'android') {
+        const permissions = await FileSystem.StorageAccessFramework.requestDirectoryPermissionsAsync();
+        if (!permissions.granted) return;
+        const targetUri = await FileSystem.StorageAccessFramework.createFileAsync(permissions.directoryUri, exportFileName.replace(/\.[^.]+$/, ''), exportDescriptor.mimeType);
+        const base64 = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
+        await FileSystem.writeAsStringAsync(targetUri, base64, { encoding: FileSystem.EncodingType.Base64 });
+        Alert.alert('File saved', `${exportFileName} was saved to the folder you selected.`);
+      } else {
+        if (!(await Sharing.isAvailableAsync())) throw new Error('The Files share sheet is not available on this device.');
+        await Sharing.shareAsync(uri, { mimeType: exportDescriptor.mimeType, dialogTitle: 'Save this Bookez export' });
+      }
+    } catch (error) {
+      Alert.alert('Could not save file', error instanceof Error ? error.message : 'Bookez could not save this export to your phone.');
+    } finally { setExportBusy(false); }
+  };
+  const speechSegments = [
+    ...book.frontMatter.filter((section) => section.included && section.content.trim()).map((section) => ({ label: section.label, text: section.content.trim() })),
+    ...book.chapters.filter((chapter) => chapter.content.trim()).map((chapter) => ({ label: chapter.title, text: chapter.content.trim() })),
+    ...book.backMatter.filter((section) => section.included && section.content.trim()).map((section) => ({ label: section.label, text: section.content.trim() })),
+  ];
   const speakSegments = (segments: { label: string; text: string }[], startIndex = 0) => {
     const run = speechRun.current + 1; speechRun.current = run; Speech.stop();
     const speakAt = (segmentIndex: number, chunkIndex = 0) => {
@@ -4182,7 +4412,7 @@ function BookStudio({ projects, project, userId, initialSection, onBack, onPage,
     <Pressable onPress={refreshPreview} style={s.studioPrimaryButton}><Text style={s.studioPrimaryButtonText}>Refresh book preview</Text><Text style={s.studioPrimaryButtonArrow}>↗</Text></Pressable></>;
   const renderRead = () => <><View style={s.readerToolbar}><View><Text style={s.studioKicker}>READ PREVIEW</Text><Text style={s.readerToolbarTitle}>{book.totalWords ? `${formatCount(book.totalWords)} words` : 'No drafted content yet'}</Text></View><Pressable onPress={() => changeSection('listen')} style={s.readerListenButton}><Text style={s.readerListenText}>◷ Listen</Text></Pressable></View><View style={s.readerToc}><Text style={s.readerTocTitle}>In this book</Text>{book.chapters.map((chapter, index) => <Pressable key={chapter.key} onPress={() => setReaderIndex(index)} style={[s.readerTocRow, readerIndex === index && s.readerTocRowSelected]}><Text style={s.readerTocNumber}>{String(index + 1).padStart(2, '0')}</Text><Text numberOfLines={1} style={s.readerTocLabel}>{chapter.title}</Text><Text style={s.readerTocState}>{chapter.complete ? '✓' : '—'}</Text></Pressable>)}</View><View style={s.readerBook}><View style={s.readerTitlePage}><Text style={s.readerTitleKicker}>BOOKEZ STUDIO</Text>{book.images.find((image) => image.placement === 'cover') && <ImagePreview image={book.images.find((image) => image.placement === 'cover')} config={imageConfig} onPress={() => { setPreviewImageId(book.images.find((image) => image.placement === 'cover')?.id ?? null); setSection('assemble'); }} />}<Text style={[s.readerBookTitle, studio.appearance.headingStyle === 'modern' && s.readerBookTitleModern]}>{book.title}</Text><Text style={s.readerBookStatus}>{book.status === 'finished' ? 'Finished manuscript' : 'Work in progress'}</Text></View>{book.frontMatter.filter((item) => item.included && item.id !== 'titlePage' && item.id !== 'tableOfContents').map((item) => <View key={item.id} style={s.readerMatter}><Text style={s.readerMatterTitle}>{item.label}</Text><Text style={[s.readerBody, { textAlign: studio.appearance.alignment }]}>{item.content}</Text></View>)}{book.chapters.map((chapter, index) => <View key={chapter.key} style={s.readerChapter}><Text style={[s.readerChapterTitle, studio.appearance.headingStyle === 'modern' && s.readerChapterTitleModern]}>{chapter.title}</Text>{renderChapterVisuals(chapter)}{chapter.content ? chapter.content.split(/\n\s*\n/).map((paragraph, paragraphIndex) => <Text key={`${chapter.key}-${paragraphIndex}`} style={[s.readerBody, { fontSize: studio.appearance.fontSize, lineHeight: studio.appearance.fontSize * studio.appearance.lineSpacing, marginBottom: studio.appearance.paragraphSpacing, textAlign: studio.appearance.alignment }]}>{paragraph}</Text>) : <View style={s.readerMissing}><Text style={s.readerMissingIcon}>⌁</Text><Text style={s.readerMissingTitle}>This part is not drafted yet.</Text><Text style={s.readerMissingCopy}>It is intentionally left out of the reading flow until you write it.</Text><Pressable onPress={() => openWritingPart(chapter.key)} style={s.readerWriteButton}><Text style={s.readerWriteButtonText}>Open in Write</Text></Pressable></View>}</View>)}{book.backMatter.filter((item) => item.included).map((item) => <View key={item.id} style={s.readerMatter}><Text style={s.readerMatterTitle}>{item.label}</Text><Text style={[s.readerBody, { textAlign: studio.appearance.alignment }]}>{item.content}</Text></View>)}</View></>;
   const renderListen = () => <><View style={s.listenHero}><View style={s.listenOrb}><Text style={s.listenOrbText}>{isSpeaking ? '◷' : '♫'}</Text></View><View style={s.listenHeroCopy}><Text style={s.studioKicker}>READ ALOUD</Text><Text style={s.listenTitle}>{isSpeaking ? `Listening to ${speakingLabel}` : 'Hear the book take shape.'}</Text><Text style={s.listenCopy}>Uses your device’s built-in voice and the same drafted manuscript shown in Read.</Text></View></View><View style={s.listenControls}><Pressable onPress={isSpeaking ? stopSpeaking : () => speakSegments(speechSegments)} style={[s.studioPrimaryButton, isSpeaking && s.studioStopButton]}><Text style={s.studioPrimaryButtonText}>{isSpeaking ? 'Stop listening' : 'Listen to book'}</Text><Text style={s.studioPrimaryButtonArrow}>{isSpeaking ? '×' : '▶'}</Text></Pressable><Text style={s.listenNote}>On iPhone, turn off silent mode to hear speech.</Text></View><Text style={s.studioSectionTitle}>Drafted parts</Text>{book.chapters.map((chapter) => <View key={chapter.key} style={s.listenRow}><View style={s.listenRowIcon}><Text style={s.listenRowIconText}>{chapter.complete ? '♫' : '—'}</Text></View><View style={s.studioOrderCopy}><Text style={s.studioOrderTitle}>{chapter.title}</Text><Text style={s.studioOrderMeta}>{chapter.complete ? `${formatCount(chapter.words)} words` : 'Not available until drafted'}</Text></View>{chapter.complete && <Pressable onPress={() => speakSegments([{ label: chapter.title, text: chapter.content }])} style={s.listenRowButton}><Text style={s.listenRowButtonText}>Listen</Text></Pressable>}</View>)}</>;
-  const renderExport = () => <><View style={s.exportHero}><Text style={s.studioKicker}>EXPORT</Text><Text style={s.exportTitle}>Take the book with you.</Text><Text style={s.exportCopy}>Bookez can share the assembled manuscript as plain text using your device’s share sheet. PDF, EPUB, and DOCX are not available in this build.</Text></View><View style={s.exportStats}><View><Text style={s.exportStatValue}>{formatCount(book.totalWords)}</Text><Text style={s.exportStatLabel}>WORDS</Text></View><View style={s.exportStatDivider} /><View><Text style={s.exportStatValue}>{book.chapters.filter((chapter) => chapter.complete).length}/{book.chapters.length}</Text><Text style={s.exportStatLabel}>PARTS DRAFTED</Text></View></View><Pressable onPress={shareBook} style={s.studioPrimaryButton}><Text style={s.studioPrimaryButtonText}>Share plain-text book</Text><Text style={s.studioPrimaryButtonArrow}>↗</Text></Pressable><Text style={s.exportFootnote}>The share sheet lets you send the current assembled text to another app or save it where your device supports it.</Text></>;
+  const renderExport = () => <><View style={s.exportHero}><Text style={s.studioKicker}>EXPORT</Text><Text style={s.exportTitle}>Take the book with you.</Text><Text style={s.exportCopy}>Create a real file in the format your readers, editors, or publishing tools need. Every export includes the current saved draft and can include planned parts that are not finished yet.</Text></View><View style={s.exportStats}><View><Text style={s.exportStatValue}>{formatCount(book.totalWords)}</Text><Text style={s.exportStatLabel}>WORDS</Text></View><View style={s.exportStatDivider} /><View><Text style={s.exportStatValue}>{book.chapters.filter((chapter) => chapter.complete).length}/{book.chapters.length}</Text><Text style={s.exportStatLabel}>PARTS DRAFTED</Text></View></View><View style={exportS.panel}><Text style={exportS.panelLabel}>FILE FORMAT</Text><View style={exportS.formatGrid}>{BOOK_EXPORT_FORMATS.map((item) => <Pressable key={item.format} onPress={() => setSelectedExportFormat(item.format)} style={[exportS.formatCard, selectedExportFormat === item.format && exportS.formatCardSelected]} accessibilityRole="button" accessibilityState={{ selected: selectedExportFormat === item.format }}><Text style={[exportS.formatLabel, selectedExportFormat === item.format && exportS.formatLabelSelected]}>{item.label}</Text><Text style={exportS.formatDescription}>{item.description}</Text></Pressable>)}</View><View style={exportS.includeRow}><View style={exportS.includeCopy}><Text style={exportS.includeTitle}>Include unfinished parts</Text><Text style={exportS.includeHint}>Keeps every planned section in the export with a clear “not drafted yet” marker.</Text></View><Switch value={includeUnfinished} onValueChange={setIncludeUnfinished} accessibilityLabel="Include unfinished parts" trackColor={{ false: '#D7D9E6', true: '#BAB6F1' }} thumbColor={includeUnfinished ? C.periwinkle : '#FFF'} /></View><Text style={exportS.selectedSummary}>{exportDescriptor.label} · {exportDescriptor.description}</Text></View><View style={exportS.actionGrid}><Pressable onPress={shareExport} disabled={exportBusy} style={[exportS.actionButton, exportBusy && exportS.actionDisabled]}><Text style={exportS.actionIcon}>↗</Text><Text style={exportS.actionTitle}>{exportBusy ? 'Preparing…' : 'Share file'}</Text><Text style={exportS.actionHint}>Open the device share sheet</Text></Pressable><Pressable onPress={saveExportToPhone} disabled={exportBusy} style={[exportS.actionButton, exportBusy && exportS.actionDisabled]}><Text style={exportS.actionIcon}>⇩</Text><Text style={exportS.actionTitle}>Save to phone</Text><Text style={exportS.actionHint}>{Platform.OS === 'android' ? 'Choose a device folder' : 'Save through Files'}</Text></Pressable><Pressable onPress={emailExport} disabled={exportBusy} style={[exportS.actionButton, exportBusy && exportS.actionDisabled]}><Text style={exportS.actionIcon}>✉</Text><Text style={exportS.actionTitle}>Email export</Text><Text style={exportS.actionHint}>Attach the file to a new email</Text></Pressable></View>{lastExportUri && <Text style={exportS.savedNotice}>Saved in Bookez Documents. You can export again at any time as your draft changes.</Text>}<Text style={s.exportFootnote}>PDF, DOCX, EPUB, plain text, Markdown, and HTML are generated locally on your device. Nothing is uploaded to create an export.</Text></>;
 
   return <View style={s.studioPage}><View style={s.studioHeader}><Pressable onPress={onBack} style={s.studioBackButton} accessibilityLabel="Back to Library"><Text style={s.studioBackIcon}>‹</Text></Pressable><Pressable onPress={() => setPickerOpen(true)} style={s.studioHeaderCopy}><Text style={s.studioOverline}>BOOKEZ / BOOK STUDIO</Text><Text numberOfLines={1} style={s.studioHeaderTitle}>{project.title}</Text><Text style={s.studioHeaderMeta}>{snapshot.stage} · {snapshot.progressPercent}% · {project.updatedAt ? `Saved ${formatLastEdited(project.updatedAt)}` : 'Local draft'}</Text></Pressable><Pressable onPress={() => setMenuOpen(true)} style={s.studioOverflowButton} accessibilityLabel="Open Book Studio menu"><Text style={s.studioOverflowText}>•••</Text></Pressable></View><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.studioTabs}>{(['assemble', 'read', 'listen', 'export'] as StudioSection[]).map((item) => <Pressable key={item} onPress={() => changeSection(item)} style={[s.studioTab, section === item && s.studioTabSelected]}><Text style={[s.studioTabText, section === item && s.studioTabTextSelected]}>{item[0].toUpperCase() + item.slice(1)}</Text></Pressable>)}</ScrollView>{section === 'assemble' ? renderAssemble() : section === 'read' ? renderRead() : section === 'listen' ? renderListen() : renderExport()}
     <Modal animationType="fade" visible={menuOpen} transparent onRequestClose={() => setMenuOpen(false)}><Pressable style={s.studioMenuShade} onPress={() => setMenuOpen(false)}><View style={s.studioMenu}><Text style={s.libraryMenuOverline}>THIS BOOK</Text><Text numberOfLines={1} style={s.libraryMenuTitle}>{project.title}</Text><Pressable onPress={() => { setMenuOpen(false); openWritingPart(book.chapters[readerIndex]?.key ?? book.chapters[0]?.key ?? ''); }} style={s.libraryMenuRow}><Text style={s.libraryMenuIcon}>✎</Text><Text style={s.libraryMenuLabel}>Continue writing</Text><Text style={s.libraryMenuArrow}>›</Text></Pressable><Pressable onPress={() => { setMenuOpen(false); onPage('Journey'); }} style={s.libraryMenuRow}><Text style={s.libraryMenuIcon}>✦</Text><Text style={s.libraryMenuLabel}>View journey</Text><Text style={s.libraryMenuArrow}>›</Text></Pressable><Pressable onPress={() => { setMenuOpen(false); changeSection('read'); }} style={s.libraryMenuRow}><Text style={s.libraryMenuIcon}>◌</Text><Text style={s.libraryMenuLabel}>Review book</Text><Text style={s.libraryMenuArrow}>›</Text></Pressable><Pressable onPress={() => { setMenuOpen(false); changeSection('export'); }} style={s.libraryMenuRow}><Text style={s.libraryMenuIcon}>↗</Text><Text style={s.libraryMenuLabel}>Export</Text><Text style={s.libraryMenuArrow}>›</Text></Pressable><Pressable onPress={() => { setMenuOpen(false); refreshPreview(); }} style={s.libraryMenuRow}><Text style={s.libraryMenuIcon}>⟳</Text><Text style={s.libraryMenuLabel}>Refresh preview</Text><Text style={s.libraryMenuArrow}>›</Text></Pressable></View></Pressable></Modal>
@@ -4193,6 +4423,8 @@ function BookStudio({ projects, project, userId, initialSection, onBack, onPage,
 type LegalDocument = 'privacy' | 'terms';
 type AccountAction = 'logout' | 'delete';
 type ProfileReminder = { id: string; label: string; time: string; days: number[]; enabled: boolean };
+const profileReminderStorageKey = (ownerId: string) => `bookez.notification-preferences.${ownerId}`;
+const defaultProfileReminders: ProfileReminder[] = [{ id: 'weekday-writing', label: 'Writing session', time: '7:00 PM', days: [1, 2, 3, 4, 5], enabled: true }];
 type ProfileFeedbackType = 'recommendation' | 'suggestion';
 type ProfileSupportType = 'help' | 'feedback' | 'problem';
 
@@ -4202,6 +4434,89 @@ const supportHelpTopics = [
   { id: 'journey', icon: '✦', title: 'Read your progress', copy: 'Use Journey to notice momentum, not judge yourself.', body: 'Journey gathers your completed parts, writing rhythm, and next gentle step so you can see the shape of the work.' },
   { id: 'cloud', icon: '☁', title: 'Keep a private cloud copy', copy: 'Sign in and turn on Cloud backup from your Profile.', body: 'Bookez saves locally first. With backup on, your writing is copied to your private Bookez cloud space and can sync across devices.' },
 ];
+
+type OnboardingSlide = {
+  eyebrow: string;
+  title: string;
+  body: string;
+  icon: string;
+  accent: string;
+  iconBackground: string;
+  steps: string[];
+  kind?: 'ai';
+};
+
+const onboardingSlides: OnboardingSlide[] = [
+  { eyebrow: '01 / START HERE', title: 'Make room for the book.', body: 'Bookez keeps the whole process in one calm place, from the first idea to the finished manuscript.', icon: '✦', accent: '#F2EEFF', iconBackground: '#DDD6FF', steps: ['Library is your home base.', 'Create a project or pick up where you left off.', 'Use the selected book card to move through the app.'] },
+  { eyebrow: '02 / PLAN', title: 'Give the idea a shape.', body: 'Use Plan to find the thread, choose a structure, and turn a big project into smaller writing parts.', icon: '⌁', accent: '#EEF6FF', iconBackground: '#D8EBFF', steps: ['Capture the big idea and central thread.', 'Choose the parts your book needs.', 'Adjust goals and structure whenever the work changes.'] },
+  { eyebrow: '03 / WRITE WITH YOUR VOICE', title: 'Say it. Bookez will catch it.', body: 'You can write with the keyboard or tap a microphone to dictate directly into any writing field.', icon: '🎙', accent: '#F0EDFF', iconBackground: '#DCD7FF', steps: ['Tap the 🎙 button beside a writing field.', 'Bookez starts listening directly—no keyboard needed.', 'Tap the button again when you are done, then edit the words like any other draft.'] },
+  { eyebrow: '04 / WRITE', title: 'Make words at your pace.', body: 'Write one part at a time with keyboard or dictation, then let Bookez keep the progress visible.', icon: '✎', accent: '#FFF5E9', iconBackground: '#FFE2BC', steps: ['Open Write to draft the next part.', 'Use the focus tools when a gentle session helps.', 'Your words and writing rhythm are saved on this device.'] },
+  { eyebrow: '05 / WRITE WITH A LITTLE HELP', title: 'Your voice stays yours.', body: 'AI tools offer possibilities beside your draft. You stay in control: choose what to preview, then decide what belongs in your manuscript.', icon: '✦', accent: '#F1EEFF', iconBackground: '#DCD4FF', kind: 'ai', steps: ['Select a passage, then choose Improve, Continue, Rewrite, or Brainstorm.', 'Read the preview before anything changes.', 'Insert, replace, use an idea as a note, or close it—nothing is automatic.'] },
+  { eyebrow: '06 / NOTICE PROGRESS', title: 'Follow the path, not the pressure.', body: 'Journey turns progress into small checkpoints, while Stats helps you notice your rhythm over time.', icon: '◌', accent: '#EFF9F1', iconBackground: '#D7F0DC', steps: ['Tap Journey dots to see what each step means.', 'Use Stats for words, time, pages, and milestones.', 'Small completed steps add up to a finished manuscript.'] },
+  { eyebrow: '07 / SHARE & RETURN', title: 'Invite readers in thoughtfully.', body: 'Community is for sharing selected writing and asking focused questions. Profile keeps your settings, sync, help, and this tour close by.', icon: '♡', accent: '#FFF0F0', iconBackground: '#FFD9DC', steps: ['Ask for feedback on a specific part and question.', 'Read reactions and Reader responses from the community.', 'Open Profile anytime to review this tour or manage your account.'] },
+];
+
+function AIOnboardingDemo() {
+  const [selectedTool, setSelectedTool] = useState<'Continue' | 'Improve' | 'Brainstorm'>('Improve');
+  const pulse = useRef(new Animated.Value(0)).current;
+  const scan = useRef(new Animated.Value(0)).current;
+  const previewFor: Record<typeof selectedTool, { input: string; output: string }> = {
+    Continue: { input: 'The porch light flickered once.', output: 'Then a second shadow crossed the curtains.' },
+    Improve: { input: 'She was very tired and walked slowly.', output: 'Exhausted, she moved at a crawl.' },
+    Brainstorm: { input: 'A character finds a locked suitcase.', output: 'What if it belongs to someone who has been following them?' },
+  };
+  const example = previewFor[selectedTool];
+
+  useEffect(() => {
+    const pulseLoop = Animated.loop(Animated.sequence([
+      Animated.timing(pulse, { toValue: 1, duration: 1200, useNativeDriver: true }),
+      Animated.timing(pulse, { toValue: 0, duration: 1200, useNativeDriver: true }),
+    ]));
+    const scanLoop = Animated.loop(Animated.timing(scan, { toValue: 1, duration: 2400, useNativeDriver: true }));
+    pulseLoop.start();
+    scanLoop.start();
+    return () => { pulseLoop.stop(); scanLoop.stop(); };
+  }, [pulse, scan]);
+
+  return <Animated.View style={onboardingS.aiHero} accessibilityLabel="Animated example of Bookez AI writing tools">
+    <Animated.View style={[onboardingS.aiOrb, { opacity: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.26, 0.6] }), transform: [{ scale: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.82, 1.08] }) }] }]} />
+    <Animated.View style={[onboardingS.aiScan, { transform: [{ translateX: scan.interpolate({ inputRange: [0, 1], outputRange: [-160, 235] }) }] }]} />
+    <View style={onboardingS.aiHeader}><View><Text style={onboardingS.aiKicker}>A QUIET AI PARTNER</Text><Text style={onboardingS.aiHeaderTitle}>Try a possibility</Text></View><View style={onboardingS.aiSpark}><Text style={onboardingS.aiSparkText}>✦</Text></View></View>
+    <View style={onboardingS.aiDraftCard}><View style={onboardingS.aiDraftLabelRow}><Text style={onboardingS.aiDraftLabel}>YOUR DRAFT</Text><Text style={onboardingS.aiSelectHint}>selected passage</Text></View><Text style={onboardingS.aiDraftText}>{example.input}</Text><View style={onboardingS.aiSelectionLine} /></View>
+    <View style={onboardingS.aiToolRow}>{(['Continue', 'Improve', 'Brainstorm'] as const).map((tool) => <Pressable key={tool} onPress={() => setSelectedTool(tool)} style={[onboardingS.aiTool, selectedTool === tool && onboardingS.aiToolSelected]} accessibilityRole="button" accessibilityState={{ selected: selectedTool === tool }} accessibilityLabel={`Preview ${tool} with AI`}><Text style={[onboardingS.aiToolText, selectedTool === tool && onboardingS.aiToolTextSelected]}>{tool}</Text></Pressable>)}<View style={onboardingS.aiMore}><Text style={onboardingS.aiMoreText}>More</Text></View></View>
+    <View style={onboardingS.aiPreviewCard}><View style={onboardingS.aiPreviewTop}><Text style={onboardingS.aiPreviewLabel}>PREVIEW · {selectedTool.toUpperCase()}</Text><Text style={onboardingS.aiPreviewCheck}>◇</Text></View><Text style={onboardingS.aiPreviewText}>{example.output}</Text><Text style={onboardingS.aiPreviewHint}>{selectedTool === 'Brainstorm' ? 'Use as a note or explore the idea.' : 'Choose what belongs in your manuscript.'}</Text></View>
+  </Animated.View>;
+}
+
+function BookezOnboarding({ visible, onFinish }: { visible: boolean; onFinish: () => void }) {
+  const [slideIndex, setSlideIndex] = useState(0);
+  const slide = onboardingSlides[slideIndex];
+  const isLast = slideIndex === onboardingSlides.length - 1;
+
+  useEffect(() => {
+    if (visible) setSlideIndex(0);
+  }, [visible]);
+
+  const next = () => {
+    if (isLast) onFinish();
+    else setSlideIndex((current) => current + 1);
+  };
+
+  return <Modal animationType="fade" visible={visible} transparent onRequestClose={onFinish}>
+    <View style={onboardingS.backdrop}>
+      <View style={onboardingS.sheet}>
+        <View style={onboardingS.header}><View><Text style={onboardingS.overline}>BOOKEZ / QUICK TOUR</Text><Text style={onboardingS.headerHint}>A few gentle pointers to get started.</Text></View><Pressable onPress={onFinish} style={onboardingS.closeButton} accessibilityLabel="Close Bookez tour"><Text style={onboardingS.closeButtonText}>×</Text></Pressable></View>
+        {slide.kind === 'ai' ? <AIOnboardingDemo /> : <View style={[onboardingS.hero, { backgroundColor: slide.accent }]}><View style={[onboardingS.heroIcon, { backgroundColor: slide.iconBackground }]}><Text style={onboardingS.heroIconText}>{slide.icon}</Text></View><View style={onboardingS.heroGlow} /></View>}
+        <Text style={onboardingS.eyebrow}>{slide.eyebrow}</Text>
+        <Text style={onboardingS.title}>{slide.title}</Text>
+        <Text style={onboardingS.body}>{slide.body}</Text>
+        <View style={onboardingS.steps}>{slide.steps.map((step) => <View key={step} style={onboardingS.step}><View style={[onboardingS.stepDot, { backgroundColor: slide.iconBackground }]} /><Text style={onboardingS.stepText}>{step}</Text></View>)}</View>
+        <View style={onboardingS.progress}>{onboardingSlides.map((item, index) => <View key={item.eyebrow} style={[onboardingS.progressDot, index === slideIndex && { width: 22, backgroundColor: C.periwinkle }]} />)}</View>
+        <View style={onboardingS.footer}><Pressable onPress={slideIndex > 0 ? () => setSlideIndex((current) => current - 1) : onFinish} style={onboardingS.secondaryButton}><Text style={onboardingS.secondaryButtonText}>{slideIndex > 0 ? 'Back' : 'Skip tour'}</Text></Pressable><Pressable onPress={next} style={onboardingS.primaryButton}><Text style={onboardingS.primaryButtonText}>{isLast ? 'Start exploring' : 'Next'}</Text><Text style={onboardingS.primaryButtonArrow}>→</Text></Pressable></View>
+      </View>
+    </View>
+  </Modal>;
+}
 
 function ProfileSupportSheet({ visible, type, onClose, onSwitchToFeedback }: { visible: boolean; type: ProfileSupportType; onClose: () => void; onSwitchToFeedback: () => void }) {
   const [feedbackKind, setFeedbackKind] = useState<ProfileFeedbackType>('suggestion');
@@ -4242,16 +4557,16 @@ function ProfileSupportSheet({ visible, type, onClose, onSwitchToFeedback }: { v
   </Modal>;
 }
 
-function Profile({ projects, onLogout, onDeleteAccount, cloudSyncState, cloudConflictCount, cloudBackupEnabled, onCloudBackupChange, onSyncNow, onReviewConflicts, onPage, onOpenBookStudio }: { projects: Project[]; onLogout: () => void; onDeleteAccount: () => void; cloudSyncState: 'saved' | 'saving' | 'offline' | 'paused' | 'error' | 'conflict'; cloudConflictCount: number; cloudBackupEnabled: boolean; onCloudBackupChange: (enabled: boolean) => void; onSyncNow: () => void; onReviewConflicts: () => void; onPage: (page: Page) => void; onOpenBookStudio: (title: string, section: StudioSection) => void }) {
-  const [reminders, setReminders] = useState(true);
+function Profile({ projects, reminders, onRemindersChange, profileReminders, onProfileRemindersChange, onLogout, onDeleteAccount, cloudSyncState, cloudConflictCount, cloudBackupEnabled, onCloudBackupChange, onSyncNow, onReviewConflicts, onPage, onOpenBookStudio, onOpenOnboarding }: { projects: Project[]; reminders: boolean; onRemindersChange: (enabled: boolean) => void; profileReminders: ProfileReminder[]; onProfileRemindersChange: Dispatch<SetStateAction<ProfileReminder[]>>; onLogout: () => void; onDeleteAccount: () => void; cloudSyncState: 'saved' | 'saving' | 'offline' | 'paused' | 'error' | 'conflict'; cloudConflictCount: number; cloudBackupEnabled: boolean; onCloudBackupChange: (enabled: boolean) => void; onSyncNow: () => void; onReviewConflicts: () => void; onPage: (page: Page) => void; onOpenBookStudio: (title: string, section: StudioSection) => void; onOpenOnboarding: () => void }) {
   const [notificationPanelOpen, setNotificationPanelOpen] = useState(false);
   const [expandedReminderId, setExpandedReminderId] = useState('weekday-writing');
-  const [profileReminders, setProfileReminders] = useState<ProfileReminder[]>([{ id: 'weekday-writing', label: 'Writing session', time: '7:00 PM', days: [1, 2, 3, 4, 5], enabled: true }]);
   const [legalDocument, setLegalDocument] = useState<LegalDocument | null>(null);
   const [accountAction, setAccountAction] = useState<AccountAction | null>(null);
   const [authOpen, setAuthOpen] = useState(false);
   const [cloudEmail, setCloudEmail] = useState<string | null>(null);
   const [cloudProfile, setCloudProfile] = useState<{ id: string; displayName: string; createdAt: string | null } | null>(null);
+  const [profileAvatarUri, setProfileAvatarUri] = useState<string | null>(null);
+  const [profileAvatarBusy, setProfileAvatarBusy] = useState(false);
   const [profileEditOpen, setProfileEditOpen] = useState(false);
   const [profileNameDraft, setProfileNameDraft] = useState('');
   const [profileSaveBusy, setProfileSaveBusy] = useState(false);
@@ -4288,6 +4603,25 @@ function Profile({ projects, onLogout, onDeleteAccount, cloudSyncState, cloudCon
     return () => subscription.unsubscribe();
   }, []);
 
+  useEffect(() => {
+    const userId = cloudProfile?.id;
+    if (!userId) { setProfileAvatarUri(null); return; }
+    let active = true;
+    void (async () => {
+      try {
+        const { data } = await supabase.from('community_profiles').select('avatar_path').eq('user_id', userId).maybeSingle();
+        const avatarPath = data?.avatar_path ?? null;
+        if (!active) return;
+        if (!avatarPath) { setProfileAvatarUri(null); return; }
+        const { data: signed } = await supabase.storage.from('bookez-files').createSignedUrl(avatarPath, 60 * 60);
+        if (active) setProfileAvatarUri(signed?.signedUrl ?? null);
+      } catch {
+        if (active) setProfileAvatarUri(null);
+      }
+    })();
+    return () => { active = false; };
+  }, [cloudProfile?.id]);
+
   const openProfileEditor = () => {
     if (!cloudProfile) { setAuthOpen(true); return; }
     setProfileNameDraft(cloudProfile.displayName);
@@ -4312,8 +4646,29 @@ function Profile({ projects, onLogout, onDeleteAccount, cloudSyncState, cloudCon
     }
   };
 
-  const updateProfileReminder = (id: string, changes: Partial<ProfileReminder>) => setProfileReminders((current) => current.map((reminder) => reminder.id === id ? { ...reminder, ...changes } : reminder));
-  const toggleProfileReminderDay = (id: string, day: number) => setProfileReminders((current) => current.map((reminder) => {
+  const chooseProfileAvatar = async () => {
+    if (!cloudProfile) { setAuthOpen(true); return; }
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) { Alert.alert('Photo access needed', 'Allow Bookez to access your photos so you can choose a profile picture.'); return; }
+    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], allowsEditing: true, aspect: [1, 1], quality: 0.8 });
+    if (result.canceled || !result.assets[0]) return;
+    setProfileAvatarBusy(true);
+    try {
+      const asset = result.assets[0];
+      const { path } = await uploadBookezProfileAvatar(cloudProfile.id, asset.uri, asset.mimeType ?? 'image/jpeg');
+      const { error } = await supabase.from('community_profiles').upsert({ user_id: cloudProfile.id, avatar_path: path }, { onConflict: 'user_id' });
+      if (error) throw error;
+      const { data: signed } = await supabase.storage.from('bookez-files').createSignedUrl(path, 60 * 60);
+      setProfileAvatarUri(signed?.signedUrl ?? asset.uri);
+    } catch (caught) {
+      Alert.alert('Could not save your profile picture', caught instanceof Error ? caught.message : 'Please try again.');
+    } finally {
+      setProfileAvatarBusy(false);
+    }
+  };
+
+  const updateProfileReminder = (id: string, changes: Partial<ProfileReminder>) => onProfileRemindersChange((current) => current.map((reminder) => reminder.id === id ? { ...reminder, ...changes } : reminder));
+  const toggleProfileReminderDay = (id: string, day: number) => onProfileRemindersChange((current) => current.map((reminder) => {
     if (reminder.id !== id) return reminder;
     if (reminder.days.includes(day) && reminder.days.length === 1) return reminder;
     const days = reminder.days.includes(day) ? reminder.days.filter((item) => item !== day) : [...reminder.days, day].sort((a, b) => a - b);
@@ -4321,13 +4676,13 @@ function Profile({ projects, onLogout, onDeleteAccount, cloudSyncState, cloudCon
   }));
   const addProfileReminder = () => {
     const id = `reminder-${Date.now()}`;
-    setProfileReminders((current) => [...current, { id, label: 'Writing session', time: '8:00 AM', days: [1, 2, 3, 4, 5], enabled: true }]);
+    onProfileRemindersChange((current) => [...current, { id, label: 'Writing session', time: '8:00 AM', days: [1, 2, 3, 4, 5], enabled: true }]);
     setExpandedReminderId(id);
-    setReminders(true);
+    onRemindersChange(true);
     setNotificationPanelOpen(true);
   };
   const removeProfileReminder = (id: string) => {
-    setProfileReminders((current) => current.filter((reminder) => reminder.id !== id));
+    onProfileRemindersChange((current) => current.filter((reminder) => reminder.id !== id));
     if (expandedReminderId === id) setExpandedReminderId('');
   };
 
@@ -4372,7 +4727,7 @@ function Profile({ projects, onLogout, onDeleteAccount, cloudSyncState, cloudCon
               ? 'Offline — saved on this device'
               : 'Synced securely';
 
-  return <><View style={s.profileHero}><View style={s.profileHeroIdentity}><View style={[s.profileAvatar, s.profileAvatarCompact]}><Text style={[s.profileAvatarText, s.profileAvatarTextCompact]}>{profileInitials}</Text><View style={[s.profileHalo, s.profileHaloCompact]} /></View><View style={s.profileHeroCopy}><Text style={s.profileOverline}>BOOKEZ WRITER</Text><Text numberOfLines={1} style={[s.profileName, s.profileNameInHero]}>{profileDisplayName}</Text><Text numberOfLines={2} style={s.profileEmail}>{cloudEmail ?? 'Sign in to sync your writing across devices'}</Text><Text style={s.profileMemberSince}>{memberSince}</Text></View></View><Pressable onPress={openProfileEditor} style={s.profileEditButton} accessibilityRole="button" accessibilityLabel={cloudProfile ? 'Edit profile' : 'Sign in to sync your writing'}><Text style={s.profileEditButtonText}>{cloudProfile ? 'Edit profile' : 'Sign in to sync'}</Text></Pressable></View>
+  return <><View style={s.profileHero}><View style={s.profileHeroIdentity}><Pressable onPress={() => void chooseProfileAvatar()} disabled={profileAvatarBusy} style={[s.profileAvatar, s.profileAvatarCompact]} accessibilityRole="button" accessibilityLabel={cloudProfile ? 'Choose profile picture' : 'Sign in to choose a profile picture'}>{profileAvatarUri ? <Image source={{ uri: profileAvatarUri }} style={s.profileAvatarImage} resizeMode="cover" /> : <Text style={[s.profileAvatarText, s.profileAvatarTextCompact]}>{profileInitials}</Text>}<View style={[s.profileHalo, s.profileHaloCompact]} />{cloudProfile ? <View style={s.profileAvatarEditBadge}><Text style={s.profileAvatarEditBadgeText}>{profileAvatarBusy ? '…' : '✎'}</Text></View> : null}</Pressable><View style={s.profileHeroCopy}><Text style={s.profileOverline}>BOOKEZ WRITER</Text><Text numberOfLines={1} style={[s.profileName, s.profileNameInHero]}>{profileDisplayName}</Text><Text numberOfLines={2} style={s.profileEmail}>{cloudEmail ?? 'Sign in to sync your writing across devices'}</Text><Text style={s.profileMemberSince}>{memberSince}</Text></View></View><Pressable onPress={openProfileEditor} style={s.profileEditButton} accessibilityRole="button" accessibilityLabel={cloudProfile ? 'Edit profile' : 'Sign in to sync your writing'}><Text style={s.profileEditButtonText}>{cloudProfile ? 'Edit profile' : 'Sign in to sync'}</Text></Pressable></View>
     <Text style={s.preferenceTitle}>Cloud Sync</Text>
     <View style={syncS.dropdown}>
       <Pressable onPress={() => setCloudSyncPanelOpen((current) => !current)} style={syncS.dropdownHeader} accessibilityRole="button" accessibilityState={{ expanded: cloudSyncPanelOpen }} accessibilityLabel={cloudSyncPanelOpen ? 'Collapse cloud sync controls' : 'Expand cloud sync controls'}>
@@ -4391,10 +4746,14 @@ function Profile({ projects, onLogout, onDeleteAccount, cloudSyncState, cloudCon
     <Modal animationType="slide" visible={storageDetailsOpen} transparent onRequestClose={() => setStorageDetailsOpen(false)}>
       <View style={syncS.modalShade}><Pressable style={syncS.modalDismiss} onPress={() => setStorageDetailsOpen(false)} /><View style={syncS.storageSheet}><View style={s.sheetHandle} /><View style={syncS.storageHeader}><View style={syncS.storageHeaderCopy}><Text style={syncS.cardKicker}>STORAGE OVERVIEW</Text><Text style={syncS.storageTitle}>Where your writing lives</Text></View><Pressable onPress={() => setStorageDetailsOpen(false)} style={syncS.storageClose} accessibilityLabel="Close storage overview"><Text style={syncS.storageCloseText}>×</Text></Pressable></View><Text style={syncS.storageDescription}>Your device is the first place Bookez saves. Cloud backup creates a private copy for this account so you can keep writing across devices.</Text><View style={syncS.comparisonRow}><View style={syncS.comparisonCard}><View style={syncS.comparisonIcon}><Text style={syncS.comparisonIconText}>⌂</Text></View><Text style={syncS.comparisonLabel}>THIS DEVICE</Text><Text style={syncS.comparisonValue}>{localStorageSummary.projects}</Text><Text style={syncS.comparisonMeta}>project{localStorageSummary.projects === 1 ? '' : 's'}</Text><Text style={syncS.comparisonDetail}>{localStorageSummary.chapters} drafted part{localStorageSummary.chapters === 1 ? '' : 's'} · {formatCount(localStorageSummary.words)} words</Text><Text style={syncS.comparisonStatus}>Always available offline</Text></View><View style={[syncS.comparisonCard, syncS.comparisonCardCloud]}><View style={[syncS.comparisonIcon, syncS.comparisonIconCloud]}><Text style={[syncS.comparisonIconText, syncS.comparisonIconTextCloud]}>☁</Text></View><Text style={syncS.comparisonLabel}>BOOKEZ CLOUD</Text>{storageDetailsBusy ? <Text style={syncS.loadingText}>Checking…</Text> : cloudStorageSummary ? <><Text style={syncS.comparisonValue}>{cloudStorageSummary.projects}</Text><Text style={syncS.comparisonMeta}>project{cloudStorageSummary.projects === 1 ? '' : 's'}</Text><Text style={syncS.comparisonDetail}>{cloudStorageSummary.chapters} drafted part{cloudStorageSummary.chapters === 1 ? '' : 's'} · {formatCount(cloudStorageSummary.words)} words</Text><Text style={syncS.comparisonStatus}>Private copy on your account</Text></> : <Text style={syncS.cloudEmptyText}>{cloudEmail ? 'Tap Refresh to check your cloud copy.' : 'Sign in to create a private cloud copy.'}</Text>}</View></View>{storageDetailsError ? <Text style={syncS.storageError}>{storageDetailsError}</Text> : null}<View style={syncS.storageNote}><Text style={syncS.storageNoteIcon}>i</Text><Text style={syncS.storageNoteText}>{cloudSyncState === 'saving' ? 'Sync is in progress. Keep this screen open if you want to watch it finish.' : cloudSyncState === 'offline' ? 'You’re offline. Local changes stay safe here and will sync when you’re connected.' : cloudSyncState === 'paused' ? 'Cloud backup is paused. Your local writing remains available on this device.' : 'Sync sends changes from this device to your private Bookez cloud copy.'}</Text></View><View style={syncS.storageActions}><Pressable onPress={openStorageDetails} disabled={storageDetailsBusy} style={syncS.refreshButton}><Text style={syncS.refreshButtonText}>{storageDetailsBusy ? 'Checking…' : 'Refresh cloud details'}</Text></Pressable><Pressable onPress={onSyncNow} disabled={!cloudEmail || !cloudBackupEnabled || cloudSyncState === 'saving'} style={[syncS.modalSyncButton, (!cloudEmail || !cloudBackupEnabled || cloudSyncState === 'saving') && syncS.nowButtonDisabled]}><Text style={syncS.modalSyncButtonText}>{cloudSyncState === 'saving' ? 'Syncing…' : 'Sync now'}</Text><Text style={syncS.modalSyncButtonArrow}>→</Text></Pressable></View><Pressable onPress={() => setStorageDetailsOpen(false)} style={syncS.doneButton}><Text style={syncS.doneButtonText}>Done</Text></Pressable></View></View>
     </Modal>
-    <Text style={s.preferenceTitle}>Notifications</Text>
-    <View style={s.notificationPanel}>
-      <Pressable onPress={() => setNotificationPanelOpen(!notificationPanelOpen)} style={s.notificationPanelHeader} accessibilityRole="button" accessibilityLabel={notificationPanelOpen ? 'Close notification controls' : 'Open notification controls'}><View style={s.notificationBell}><Text style={s.notificationBellText}>◷</Text></View><View style={s.notificationHeaderCopy}><Text style={s.notificationTitle}>Writing reminders</Text><Text style={s.notificationSub}>{profileReminders.length} reminder{profileReminders.length === 1 ? '' : 's'} · choose your days and times</Text></View><Switch value={reminders} onValueChange={(value) => { setReminders(value); if (value) setNotificationPanelOpen(true); }} trackColor={{ false: '#D7D9E6', true: '#BAB6F1' }} thumbColor={reminders ? C.periwinkle : '#FFF'} /></Pressable>
-      {notificationPanelOpen && <View style={s.notificationPanelBody}><Text style={s.notificationPanelHint}>Make the rhythm fit your week. Add as many reminders as you need.</Text>{reminders ? profileReminders.map((reminder) => { const expanded = expandedReminderId === reminder.id; return <View key={reminder.id} style={[s.notificationReminder, expanded && s.notificationReminderExpanded]}><Pressable onPress={() => setExpandedReminderId(expanded ? '' : reminder.id)} style={s.notificationReminderSummary} accessibilityRole="button" accessibilityLabel={`${reminder.label}, ${reminder.time}`}><View style={[s.notificationReminderIcon, reminder.enabled && s.notificationReminderIconActive]}><Text style={s.notificationReminderIconText}>◷</Text></View><View style={s.notificationReminderCopy}><Text numberOfLines={1} style={s.notificationReminderLabel}>{reminder.label || 'Untitled reminder'}</Text><Text style={s.notificationReminderMeta}>{reminder.time} · {reminder.days.length === 7 ? 'Every day' : reminder.days.map((day) => dayLabels[day]).join('')}</Text></View><Switch value={reminder.enabled} onValueChange={(value) => updateProfileReminder(reminder.id, { enabled: value })} trackColor={{ false: '#D7D9E6', true: '#BAB6F1' }} thumbColor={reminder.enabled ? C.periwinkle : '#FFF'} /><Text style={s.notificationReminderChevron}>{expanded ? '⌃' : '⌄'}</Text></Pressable>{expanded && <View style={s.notificationReminderEditor}><Text style={s.notificationFieldLabel}>REMINDER NAME</Text><TextInput value={reminder.label} onChangeText={(value) => updateProfileReminder(reminder.id, { label: value })} placeholder="Writing session" placeholderTextColor="#A0A3BB" style={s.notificationInput} accessibilityLabel="Reminder name" /><Text style={s.notificationFieldLabel}>TIME</Text><TextInput value={reminder.time} onChangeText={(value) => updateProfileReminder(reminder.id, { time: value })} placeholder="e.g. 7:00 PM" placeholderTextColor="#A0A3BB" style={s.notificationInput} accessibilityLabel="Reminder time" /><Text style={s.notificationFieldLabel}>DAYS OF THE WEEK</Text><View style={s.notificationDaysRow}>{dayLabels.map((label, day) => <Pressable key={`${reminder.id}-${day}`} onPress={() => toggleProfileReminderDay(reminder.id, day)} style={[s.notificationDay, reminder.days.includes(day) && s.notificationDayActive]} accessibilityLabel={`${reminder.days.includes(day) ? 'Remove' : 'Add'} ${dayNames[day]}`}><Text style={[s.notificationDayText, reminder.days.includes(day) && s.notificationDayTextActive]}>{label}</Text></Pressable>)}</View><View style={s.notificationReminderActions}><Text style={s.notificationReminderDaysHint}>{reminder.days.length ? reminder.days.length === 7 ? 'Every day' : `${reminder.days.length} days selected` : 'Choose at least one day'}</Text><Pressable onPress={() => removeProfileReminder(reminder.id)} style={s.notificationRemoveButton}><Text style={s.notificationRemoveText}>Remove</Text></Pressable></View></View>}</View>; }) : <Text style={s.notificationDisabledCopy}>Reminders are paused. Turn them on whenever you want a gentle nudge.</Text>}<Pressable onPress={addProfileReminder} style={s.notificationAddButton} accessibilityRole="button"><Text style={s.notificationAddIcon}>＋</Text><Text style={s.notificationAddText}>Add another reminder</Text></Pressable></View>}
+      <Text style={s.preferenceTitle}>Notifications</Text>
+      <View style={s.notificationPanel}>
+      <Pressable onPress={() => setNotificationPanelOpen(!notificationPanelOpen)} style={s.notificationPanelHeader} accessibilityRole="button" accessibilityLabel={notificationPanelOpen ? 'Close notification controls' : 'Open notification controls'}><View style={s.notificationBell}><Text style={s.notificationBellText}>◷</Text></View><View style={s.notificationHeaderCopy}><Text style={s.notificationTitle}>Writing reminders</Text><Text style={s.notificationSub}>{reminders ? `${profileReminders.length} reminder${profileReminders.length === 1 ? '' : 's'} · choose your days and times` : 'Turn them on for gentle, book-specific nudges'}</Text></View><Switch value={reminders} onValueChange={(value) => { onRemindersChange(value); if (value) setNotificationPanelOpen(true); }} trackColor={{ false: '#D7D9E6', true: '#BAB6F1' }} thumbColor={reminders ? C.periwinkle : '#FFF'} /></Pressable>
+      {notificationPanelOpen && <View style={s.notificationPanelBody}><Text style={s.notificationPanelHint}>Make the rhythm fit your week. Add as many reminders as you need. Times use your device’s local time.</Text>{reminders ? profileReminders.map((reminder) => { const expanded = expandedReminderId === reminder.id; return <View key={reminder.id} style={[s.notificationReminder, expanded && s.notificationReminderExpanded]}><Pressable onPress={() => setExpandedReminderId(expanded ? '' : reminder.id)} style={s.notificationReminderSummary} accessibilityRole="button" accessibilityLabel={`${reminder.label}, ${reminder.time}`}><View style={[s.notificationReminderIcon, reminder.enabled && s.notificationReminderIconActive]}><Text style={s.notificationReminderIconText}>◷</Text></View><View style={s.notificationReminderCopy}><Text numberOfLines={1} style={s.notificationReminderLabel}>{reminder.label || 'Untitled reminder'}</Text><Text style={s.notificationReminderMeta}>{reminder.time} · {reminder.days.length === 7 ? 'Every day' : reminder.days.map((day) => dayLabels[day]).join('')}</Text></View><Switch value={reminder.enabled} onValueChange={(value) => updateProfileReminder(reminder.id, { enabled: value })} trackColor={{ false: '#D7D9E6', true: '#BAB6F1' }} thumbColor={reminder.enabled ? C.periwinkle : '#FFF'} /><Text style={s.notificationReminderChevron}>{expanded ? '⌃' : '⌄'}</Text></Pressable>{expanded && <View style={s.notificationReminderEditor}><Text style={s.notificationFieldLabel}>REMINDER NAME</Text><TextInput value={reminder.label} onChangeText={(value) => updateProfileReminder(reminder.id, { label: value })} placeholder="Writing session" placeholderTextColor="#A0A3BB" style={s.notificationInput} accessibilityLabel="Reminder name" /><Text style={s.notificationFieldLabel}>TIME</Text><TextInput value={reminder.time} onChangeText={(value) => updateProfileReminder(reminder.id, { time: value })} onEndEditing={({ nativeEvent }) => { const normalized = normalizeReminderTime(nativeEvent.text); if (normalized) updateProfileReminder(reminder.id, { time: normalized }); else Alert.alert('Check the reminder time', 'Use a time such as 7:00 PM or 19:00.'); }} placeholder="e.g. 7:00 PM" placeholderTextColor="#A0A3BB" style={s.notificationInput} accessibilityLabel="Reminder time" /><Text style={s.notificationFieldLabel}>DAYS OF THE WEEK</Text><View style={s.notificationDaysRow}>{dayLabels.map((label, day) => <Pressable key={`${reminder.id}-${day}`} onPress={() => toggleProfileReminderDay(reminder.id, day)} style={[s.notificationDay, reminder.days.includes(day) && s.notificationDayActive]} accessibilityLabel={`${reminder.days.includes(day) ? 'Remove' : 'Add'} ${dayNames[day]}`}><Text style={[s.notificationDayText, reminder.days.includes(day) && s.notificationDayTextActive]}>{label}</Text></Pressable>)}</View><View style={s.notificationReminderActions}><Text style={s.notificationReminderDaysHint}>{reminder.days.length ? reminder.days.length === 7 ? 'Every day' : `${reminder.days.length} days selected` : 'Choose at least one day'}</Text><Pressable onPress={() => removeProfileReminder(reminder.id)} style={s.notificationRemoveButton}><Text style={s.notificationRemoveText}>Remove</Text></Pressable></View></View>}</View>; }) : <Text style={s.notificationDisabledCopy}>Reminders are paused. Turn them on whenever you want a gentle nudge.</Text>}<Pressable onPress={addProfileReminder} style={s.notificationAddButton} accessibilityRole="button"><Text style={s.notificationAddIcon}>＋</Text><Text style={s.notificationAddText}>Add another reminder</Text></Pressable></View>}
+    </View>
+    <Text style={s.preferenceTitle}>Getting started</Text>
+    <View style={s.settingsCard}>
+      <Pressable onPress={onOpenOnboarding} style={s.settingsRow} accessibilityRole="button" accessibilityLabel="Review the Bookez quick tour"><View style={s.settingsRowCopy}><View style={[s.settingsIcon, s.settingsIconBlue]}><Text style={s.settingsIconText}>✦</Text></View><View><Text style={s.settingsText}>Review the Bookez tour</Text><Text style={s.settingsSub}>See how Library, Plan, Write, Journey, Stats, and Community fit together</Text></View></View><Text style={s.chevron}>›</Text></Pressable>
     </View>
     <Text style={s.preferenceTitle}>Help & information</Text>
     <View style={s.settingsCard}>
@@ -4533,7 +4892,90 @@ function AuthSheet({ visible, onClose, signedInEmail, dismissible = true }: { vi
   const modeCopy = mode === 'forgot' ? 'Enter your email and we’ll send a secure link to reset your password.' : mode === 'signUp' ? 'Create a private space for your ideas, drafts, and finished work.' : 'Sign in to keep your writing moving across your devices.';
   const primaryLabel = mode === 'forgot' ? 'Send reset link' : mode === 'signUp' ? 'Create my account' : 'Sign in to Bookez';
 
-  return <Modal animationType="fade" visible={visible} transparent onRequestClose={dismissible ? onClose : undefined}><View style={authS.shade}>{dismissible && <Pressable style={authS.dismiss} onPress={onClose} />}<KeyboardAvoidingView style={authS.keyboard} behavior={Platform.OS === 'ios' ? 'padding' : undefined}><Animated.View style={[authS.sheet, { opacity: entrance, transform: [{ translateY: entrance.interpolate({ inputRange: [0, 1], outputRange: [34, 0] }) }] }]}><LinearGradient colors={['#F7F5FF', '#EEF6FF', '#FFF5EC']} style={StyleSheet.absoluteFill} /><Animated.View style={[authS.orbOne, { transform: [{ translateY: glow.interpolate({ inputRange: [0, 1], outputRange: [0, 16] }) }, { scale: glow.interpolate({ inputRange: [0, 1], outputRange: [1, 1.08] }) }] }]} /><Animated.View style={[authS.orbTwo, { transform: [{ translateY: glow.interpolate({ inputRange: [0, 1], outputRange: [14, 0] }) }] }]} /><ScrollView contentContainerStyle={authS.content} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}><View style={authS.topBar}><View style={authS.brand}><View style={authS.logoMark} accessibilityLabel="Bookez book icon"><View style={authS.bookPageLeft} /><View style={authS.bookPageRight} /><View style={authS.bookSpine} /></View><View><Text style={authS.brandName}>BOOKEZ</Text><Text style={authS.brandSub}>A quieter place to write</Text></View></View>{dismissible && <Pressable onPress={onClose} style={authS.closeButton} accessibilityLabel="Close sign in"><Text style={authS.closeText}>×</Text></Pressable>}</View>{signedInEmail ? <View style={authS.connectedState}><View style={authS.statusIcon}><Text style={authS.statusIconText}>✓</Text></View><Text style={authS.eyebrow}>BOOKEZ CLOUD</Text><Text style={authS.title}>Your writing is connected.</Text><Text style={authS.copy}>Signed in as {signedInEmail}. Your Bookez profile can sync safely without changing your CityPeak account.</Text>{error ? <Text style={authS.error}>{error}</Text> : null}<Pressable onPress={signOut} disabled={busy} style={[authS.primary, busy && authS.disabled]}>{busy && <ActivityIndicator size="small" color="#FFF" />}<Text style={authS.primaryText}>{busy ? 'Signing out…' : 'Sign out of Bookez'}</Text></Pressable><Pressable onPress={onClose} style={authS.secondary}><Text style={authS.secondaryText}>Done</Text></Pressable></View> : <><View style={authS.hero}><Text style={authS.eyebrow}>{mode === 'forgot' ? 'ACCOUNT RECOVERY' : mode === 'signUp' ? 'CREATE YOUR SPACE' : 'WELCOME BACK'}</Text><Text style={authS.title}>{modeTitle}</Text><Text style={authS.copy}>{modeCopy}</Text></View><View style={authS.modeRow}><Pressable onPress={() => { setMode('signIn'); setMessage(''); setError(''); }} style={[authS.modeOption, mode === 'signIn' && authS.modeOptionActive]}><Text style={[authS.modeText, mode === 'signIn' && authS.modeTextActive]}>Sign in</Text></Pressable><Pressable onPress={() => { setMode('signUp'); setMessage(''); setError(''); }} style={[authS.modeOption, mode === 'signUp' && authS.modeOptionActive]}><Text style={[authS.modeText, mode === 'signUp' && authS.modeTextActive]}>Create account</Text></Pressable></View>{mode === 'signUp' && <View><Text style={authS.fieldLabel}>YOUR NAME</Text><TextInput value={displayName} onChangeText={setDisplayName} placeholder="What should we call you?" placeholderTextColor="#A3A5BA" style={authS.input} autoCapitalize="words" accessibilityLabel="Your name" /></View>}<Text style={authS.fieldLabel}>EMAIL ADDRESS</Text><TextInput value={email} onChangeText={setEmail} autoCapitalize="none" keyboardType="email-address" textContentType="emailAddress" placeholder="you@example.com" placeholderTextColor="#A3A5BA" style={authS.input} accessibilityLabel="Email address" />{mode !== 'forgot' && <><Text style={authS.fieldLabel}>PASSWORD</Text><View style={authS.passwordWrap}><TextInput value={password} onChangeText={setPassword} secureTextEntry={!showPassword} textContentType={mode === 'signUp' ? 'newPassword' : 'password'} placeholder={mode === 'signUp' ? 'At least 6 characters' : 'Your password'} placeholderTextColor="#A3A5BA" style={authS.passwordInput} accessibilityLabel="Password" /><Pressable onPress={() => setShowPassword((current) => !current)} style={authS.passwordToggle} accessibilityLabel={showPassword ? 'Hide password' : 'Show password'}><Text style={authS.passwordToggleText}>{showPassword ? 'Hide' : 'Show'}</Text></Pressable></View></>}{message ? <View style={authS.messageBox}><Text style={authS.messageIcon}>✓</Text><Text style={authS.message}>{message}</Text></View> : null}{error ? <View style={authS.errorBox}><Text style={authS.errorIcon}>!</Text><Text style={authS.error}>{error}</Text></View> : null}{verificationPending && <Pressable onPress={resendConfirmation} disabled={busy || resendBusy} style={authS.textButton}><Text style={authS.textButtonText}>{resendBusy ? 'Sending verification email…' : 'Resend verification email'}</Text></Pressable>}<Pressable onPress={submit} disabled={busy} style={[authS.primary, busy && authS.disabled]}>{busy && <ActivityIndicator size="small" color="#FFF" />}<Text style={authS.primaryText}>{busy ? 'One moment…' : primaryLabel}</Text><Text style={authS.primaryArrow}>→</Text></Pressable>{mode === 'signIn' && <Pressable onPress={() => { setMode('forgot'); setMessage(''); setError(''); }} disabled={busy} style={authS.textButton}><Text style={authS.textButtonText}>Forgot your password?</Text></Pressable>}{mode === 'forgot' && <Pressable onPress={() => { setMode('signIn'); setMessage(''); setError(''); }} style={authS.textButton}><Text style={authS.textButtonText}>← Back to sign in</Text></Pressable>}{mode === 'signUp' && <Text style={authS.legal}>By creating an account, you agree to keep your Bookez space respectful and secure.</Text>}{mode !== 'forgot' && <Pressable onPress={() => { setMode(mode === 'signIn' ? 'signUp' : 'signIn'); setMessage(''); setError(''); }} style={authS.secondary}><Text style={authS.secondaryText}>{mode === 'signIn' ? 'New to Bookez? Create an account' : 'Already have an account? Sign in'}</Text></Pressable>}</>}</ScrollView></Animated.View></KeyboardAvoidingView></View></Modal>;
+  return <Modal animationType="fade" visible={visible} transparent onRequestClose={dismissible ? onClose : undefined}><View style={authS.shade}>{dismissible && <Pressable style={authS.dismiss} onPress={onClose} />}<KeyboardAvoidingView style={authS.keyboard} behavior={Platform.OS === 'ios' ? 'padding' : undefined}><Animated.View style={[authS.sheet, { opacity: entrance, transform: [{ translateY: entrance.interpolate({ inputRange: [0, 1], outputRange: [34, 0] }) }] }]}><LinearGradient colors={['#F7F5FF', '#EEF6FF', '#FFF5EC']} style={StyleSheet.absoluteFill} /><Animated.View style={[authS.orbOne, { transform: [{ translateY: glow.interpolate({ inputRange: [0, 1], outputRange: [0, 16] }) }, { scale: glow.interpolate({ inputRange: [0, 1], outputRange: [1, 1.08] }) }] }]} /><Animated.View style={[authS.orbTwo, { transform: [{ translateY: glow.interpolate({ inputRange: [0, 1], outputRange: [14, 0] }) }] }]} /><ScrollView contentContainerStyle={authS.content} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}><View style={authS.topBar}><View style={authS.brand}><View style={authS.logoMark} accessibilityLabel="Bookez book icon"><View style={authS.bookPageLeft} /><View style={authS.bookPageRight} /><View style={authS.bookSpine} /></View><View><Text style={authS.brandName}>BOOKEZ</Text><Text style={authS.brandSub}>A quieter place to write</Text></View></View>{dismissible && <Pressable onPress={onClose} style={authS.closeButton} accessibilityLabel="Close sign in"><Text style={authS.closeText}>×</Text></Pressable>}</View>{signedInEmail ? <View style={authS.connectedState}><View style={authS.statusIcon}><Text style={authS.statusIconText}>✓</Text></View><Text style={authS.eyebrow}>BOOKEZ CLOUD</Text><Text style={authS.title}>Your writing is connected.</Text><Text style={authS.copy}>Signed in as {signedInEmail}. Your Bookez profile can sync safely without changing your CityPeak account.</Text>{error ? <Text style={authS.error}>{error}</Text> : null}<Pressable onPress={signOut} disabled={busy} style={[authS.primary, busy && authS.disabled]}>{busy && <ActivityIndicator size="small" color="#FFF" />}<Text style={authS.primaryText}>{busy ? 'Signing out…' : 'Sign out of Bookez'}</Text></Pressable><Pressable onPress={onClose} style={authS.secondary}><Text style={authS.secondaryText}>Done</Text></Pressable></View> : <><View style={authS.hero}><Text style={authS.eyebrow}>{mode === 'forgot' ? 'ACCOUNT RECOVERY' : mode === 'signUp' ? 'CREATE YOUR SPACE' : 'WELCOME BACK'}</Text><Text style={authS.title}>{modeTitle}</Text><Text style={authS.copy}>{modeCopy}</Text></View><View style={authS.modeRow}><Pressable onPress={() => { setMode('signIn'); setMessage(''); setError(''); }} style={[authS.modeOption, mode === 'signIn' && authS.modeOptionActive]}><Text style={[authS.modeText, mode === 'signIn' && authS.modeTextActive]}>Sign in</Text></Pressable><Pressable onPress={() => { setMode('signUp'); setMessage(''); setError(''); }} style={[authS.modeOption, mode === 'signUp' && authS.modeOptionActive]}><Text style={[authS.modeText, mode === 'signUp' && authS.modeTextActive]}>Create account</Text></Pressable></View>{mode === 'signUp' && <View><Text style={authS.fieldLabel}>YOUR NAME</Text><TextInput value={displayName} onChangeText={setDisplayName} placeholder="What should we call you?" placeholderTextColor="#A3A5BA" style={authS.input} autoCapitalize="words" accessibilityLabel="Your name" /></View>}<Text style={authS.fieldLabel}>EMAIL ADDRESS</Text><TextInput value={email} onChangeText={setEmail} autoCapitalize="none" keyboardType="email-address" textContentType="emailAddress" placeholder="you@example.com" placeholderTextColor="#A3A5BA" style={authS.input} accessibilityLabel="Email address" />{mode !== 'forgot' && <><Text style={authS.fieldLabel}>PASSWORD</Text><View style={authS.passwordWrap}><TextInput value={password} onChangeText={setPassword} secureTextEntry={!showPassword} textContentType={mode === 'signUp' ? 'newPassword' : 'password'} placeholder={mode === 'signUp' ? 'At least 10 characters, upper/lowercase + number' : 'Your password'} placeholderTextColor="#A3A5BA" style={authS.passwordInput} accessibilityLabel="Password" /><Pressable onPress={() => setShowPassword((current) => !current)} style={authS.passwordToggle} accessibilityLabel={showPassword ? 'Hide password' : 'Show password'}><Text style={authS.passwordToggleText}>{showPassword ? 'Hide' : 'Show'}</Text></Pressable></View></>}{message ? <View style={authS.messageBox}><Text style={authS.messageIcon}>✓</Text><Text style={authS.message}>{message}</Text></View> : null}{error ? <View style={authS.errorBox}><Text style={authS.errorIcon}>!</Text><Text style={authS.error}>{error}</Text></View> : null}{verificationPending && <Pressable onPress={resendConfirmation} disabled={busy || resendBusy} style={authS.textButton}><Text style={authS.textButtonText}>{resendBusy ? 'Sending verification email…' : 'Resend verification email'}</Text></Pressable>}<Pressable onPress={submit} disabled={busy} style={[authS.primary, busy && authS.disabled]}>{busy && <ActivityIndicator size="small" color="#FFF" />}<Text style={authS.primaryText}>{busy ? 'One moment…' : primaryLabel}</Text><Text style={authS.primaryArrow}>→</Text></Pressable>{mode === 'signIn' && <Pressable onPress={() => { setMode('forgot'); setMessage(''); setError(''); }} disabled={busy} style={authS.textButton}><Text style={authS.textButtonText}>Forgot your password?</Text></Pressable>}{mode === 'forgot' && <Pressable onPress={() => { setMode('signIn'); setMessage(''); setError(''); }} style={authS.textButton}><Text style={authS.textButtonText}>← Back to sign in</Text></Pressable>}{mode === 'signUp' && <Text style={authS.legal}>By creating an account, you agree to keep your Bookez space respectful and secure.</Text>}{mode !== 'forgot' && <Pressable onPress={() => { setMode(mode === 'signIn' ? 'signUp' : 'signIn'); setMessage(''); setError(''); }} style={authS.secondary}><Text style={authS.secondaryText}>{mode === 'signIn' ? 'New to Bookez? Create an account' : 'Already have an account? Sign in'}</Text></Pressable>}</>}</ScrollView></Animated.View></KeyboardAvoidingView></View></Modal>;
+}
+
+function PasswordUpdateScreen({ visible, onComplete }: { visible: boolean; onComplete: () => void }) {
+  const [password, setPassword] = useState('');
+  const [confirmation, setConfirmation] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmation, setShowConfirmation] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [updated, setUpdated] = useState(false);
+
+  useEffect(() => {
+    if (!visible) return;
+    setPassword('');
+    setConfirmation('');
+    setShowPassword(false);
+    setShowConfirmation(false);
+    setBusy(false);
+    setError('');
+    setUpdated(false);
+  }, [visible]);
+
+  const requirements = [
+    { label: '10 characters', met: password.length >= 10 },
+    { label: 'An uppercase letter', met: /[A-Z]/.test(password) },
+    { label: 'A lowercase letter', met: /[a-z]/.test(password) },
+    { label: 'A number', met: /\d/.test(password) },
+  ];
+  const matches = confirmation.length > 0 && password === confirmation;
+
+  const submit = async () => {
+    setError('');
+    if (!isBookezPasswordValid(password)) {
+      setError('Choose a password that meets all four requirements.');
+      return;
+    }
+    if (!matches) {
+      setError('The passwords do not match yet.');
+      return;
+    }
+    setBusy(true);
+    try {
+      await updateBookezPassword(password);
+      Keyboard.dismiss();
+      setUpdated(true);
+    } catch (caught) {
+      const caughtMessage = caught instanceof Error ? caught.message : '';
+      setError(caughtMessage.toLowerCase().includes('session') ? 'This reset link is no longer active. Request a new link and try again.' : caughtMessage || 'We could not update your password. Request a new reset link and try again.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return <Modal animationType="fade" visible={visible} transparent onRequestClose={() => undefined}>
+    <View style={passwordResetS.modal}>
+      <LinearGradient colors={['#F7F5FF', '#EEF6FF', '#FFF5EC']} style={StyleSheet.absoluteFill} />
+      <View style={passwordResetS.orbOne} />
+      <View style={passwordResetS.orbTwo} />
+      <KeyboardAvoidingView style={passwordResetS.keyboard} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <ScrollView contentContainerStyle={passwordResetS.content} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+          <View style={passwordResetS.brandRow}><View style={passwordResetS.brandMark}><Text style={passwordResetS.brandMarkText}>✦</Text></View><View><Text style={passwordResetS.brandName}>BOOKEZ</Text><Text style={passwordResetS.brandSub}>A quieter place to write</Text></View></View>
+          {updated ? <View style={passwordResetS.successState}>
+            <View style={passwordResetS.successIcon}><Text style={passwordResetS.successIconText}>✓</Text></View>
+            <Text style={passwordResetS.eyebrow}>ALL SET</Text>
+            <Text style={passwordResetS.title}>Your password is updated.</Text>
+            <Text style={passwordResetS.copy}>Your account is secure again. You can return to your writing and keep your work moving.</Text>
+            <Pressable onPress={onComplete} style={passwordResetS.primary}><Text style={passwordResetS.primaryText}>Continue to Bookez</Text><Text style={passwordResetS.primaryArrow}>→</Text></Pressable>
+          </View> : <>
+            <View style={passwordResetS.hero}><Text style={passwordResetS.eyebrow}>ACCOUNT RECOVERY</Text><Text style={passwordResetS.title}>Choose a new password.</Text><Text style={passwordResetS.copy}>You’re almost back in. Set a password you’ll remember, and your private writing space will be ready for you.</Text></View>
+            <Text style={passwordResetS.fieldLabel}>NEW PASSWORD</Text>
+            <View style={passwordResetS.passwordWrap}><TextInput value={password} onChangeText={(value) => { setPassword(value); setError(''); }} secureTextEntry={!showPassword} textContentType="newPassword" autoCapitalize="none" placeholder="Create a strong password" placeholderTextColor="#A3A5BA" style={passwordResetS.passwordInput} accessibilityLabel="New password" /><Pressable onPress={() => setShowPassword((current) => !current)} style={passwordResetS.passwordToggle} accessibilityLabel={showPassword ? 'Hide new password' : 'Show new password'}><Text style={passwordResetS.passwordToggleText}>{showPassword ? 'Hide' : 'Show'}</Text></Pressable></View>
+            <View style={passwordResetS.requirements}>{requirements.map((requirement) => <View key={requirement.label} style={passwordResetS.requirementRow}><View style={[passwordResetS.requirementMark, requirement.met && passwordResetS.requirementMarkMet]}><Text style={[passwordResetS.requirementMarkText, requirement.met && passwordResetS.requirementMarkTextMet]}>{requirement.met ? '✓' : '·'}</Text></View><Text style={[passwordResetS.requirementText, requirement.met && passwordResetS.requirementTextMet]}>{requirement.label}</Text></View>)}</View>
+            <Text style={passwordResetS.fieldLabel}>CONFIRM NEW PASSWORD</Text>
+            <View style={passwordResetS.passwordWrap}><TextInput value={confirmation} onChangeText={(value) => { setConfirmation(value); setError(''); }} secureTextEntry={!showConfirmation} textContentType="newPassword" autoCapitalize="none" placeholder="Type it one more time" placeholderTextColor="#A3A5BA" style={passwordResetS.passwordInput} accessibilityLabel="Confirm new password" /><Pressable onPress={() => setShowConfirmation((current) => !current)} style={passwordResetS.passwordToggle} accessibilityLabel={showConfirmation ? 'Hide password confirmation' : 'Show password confirmation'}><Text style={passwordResetS.passwordToggleText}>{showConfirmation ? 'Hide' : 'Show'}</Text></Pressable></View>
+            {confirmation.length > 0 && <Text style={[passwordResetS.matchHint, matches && passwordResetS.matchHintMet]}>{matches ? 'Passwords match.' : 'Passwords need to match.'}</Text>}
+            {error ? <View style={passwordResetS.errorBox}><Text style={passwordResetS.errorIcon}>!</Text><Text style={passwordResetS.error}>{error}</Text></View> : null}
+            <Pressable onPress={submit} disabled={busy} style={[passwordResetS.primary, busy && passwordResetS.disabled]}><ActivityIndicator animating={busy} size="small" color="#FFF" /><Text style={passwordResetS.primaryText}>{busy ? 'Updating password…' : 'Update password'}</Text>{!busy && <Text style={passwordResetS.primaryArrow}>→</Text>}</Pressable>
+            <Text style={passwordResetS.footnote}>This reset link is for your Bookez account only. Your writing stays private.</Text>
+          </>}
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </View>
+  </Modal>;
 }
 
 function AccountExit({ deleted, onReturn }: { deleted: boolean; onReturn: () => void }) {
@@ -4619,8 +5061,11 @@ function Navigation({ page, onPage, projects, activeProject }: { page: Page; onP
   const previousCreationIndex = useRef<number | null>(creationIndex);
   const [traveling, setTraveling] = useState(false);
   const [reduceMotion, setReduceMotion] = useState(false);
-  const navInnerWidth = Math.max(0, width - 26 - 8 - 7);
-  const creationGroupWidth = navInnerWidth / 2;
+  const navInnerWidth = Math.max(0, width - 26 - 8 - 9);
+  // Keep every destination the same width. The creation path has three tabs
+  // and the supporting area has four, so splitting the bar 50/50 made the
+  // Community label wrap on narrower phones.
+  const creationGroupWidth = navInnerWidth * 3 / 7;
   const nodeCenters = [creationGroupWidth / 6, creationGroupWidth / 2, creationGroupWidth * 5 / 6];
 
   useEffect(() => {
@@ -4647,7 +5092,7 @@ function Navigation({ page, onPage, projects, activeProject }: { page: Page; onP
     const reached = creation && (index <= projectProgressIndex || index <= reachableCreationIndex);
     return <View key={item} style={s.navTabWrapper}><Pressable onPress={() => onPage(item)} style={s.navItem} accessibilityRole="button" accessibilityState={{ selected: active }}>
       <View style={[s.navNode, active && s.navNodeActive, reached && !active && s.navNodeReached, !active && !reached && s.navNodeFuture]}><Text style={[s.navIcon, active && s.navIconActive]}>{pageMeta[item].icon}</Text></View>
-      <Text style={[s.navLabel, active && s.navLabelActive]}>{pageMeta[item].short}</Text>
+      <Text numberOfLines={1} ellipsizeMode="tail" style={[s.navLabel, active && s.navLabelActive]}>{pageMeta[item].short}</Text>
     </Pressable></View>;
   };
 
@@ -4656,10 +5101,14 @@ function Navigation({ page, onPage, projects, activeProject }: { page: Page; onP
 
 export default Sentry.wrap(function App() {
   const [page, setPage] = useState<Page>('Library');
+  const appScrollRef = useRef<any>(null);
   const journeyScrollY = useSharedValue(0);
   const journeyScrollHandler = useAnimatedScrollHandler({ onScroll: (event) => { journeyScrollY.value = event.contentOffset.y; } });
   const [accountState, setAccountState] = useState<'active' | 'signedOut' | 'deleted'>('active');
   const [authReady, setAuthReady] = useState(false);
+  const [passwordResetVisible, setPasswordResetVisible] = useState(false);
+  const [onboardingVisible, setOnboardingVisible] = useState(false);
+  const [onboardingOwnerChecked, setOnboardingOwnerChecked] = useState<string | null>(null);
   const [studioRoute, setStudioRoute] = useState<{ title: string; section: StudioSection }>({ title: 'The Midnight Atlas', section: 'assemble' });
   const [projects, setProjects] = useState<Project[]>([
     { title: 'The Midnight Atlas', color: C.periwinkle, mark: '✦', type: 'Fiction Book', pageGoal: '240', unitGoal: '24', cloudId: stableUuidFrom('starter-midnight-atlas'), plan: { ...defaultPlanFor('Fiction Book'), chapterRevisions: {} } },
@@ -4668,13 +5117,19 @@ export default Sentry.wrap(function App() {
   ]);
   const [storageReady, setStorageReady] = useState(false);
   const [activeProject, setActiveProject] = useState('The Midnight Atlas');
+  const [reminders, setReminders] = useState(false);
+  const [profileReminders, setProfileReminders] = useState<ProfileReminder[]>(defaultProfileReminders);
+  const [reminderPreferencesReady, setReminderPreferencesReady] = useState(false);
+  const [notificationSyncVersion, setNotificationSyncVersion] = useState(0);
   const [cloudUserId, setCloudUserId] = useState<string | null>(null);
   const [cloudSyncState, setCloudSyncState] = useState<'saved' | 'saving' | 'offline' | 'paused' | 'error' | 'conflict'>('offline');
   const [cloudBackupEnabled, setCloudBackupEnabled] = useState(true);
   const [cloudConflictCount, setCloudConflictCount] = useState(0);
   const [storageOwnerId, setStorageOwnerId] = useState('local');
   const [cloudMigrationReady, setCloudMigrationReady] = useState(false);
+  const onboardingOwner = accountState === 'active' ? cloudUserId ?? 'local' : null;
   useEffect(() => { if (page === 'Journey') journeyScrollY.value = 0; }, [journeyScrollY, page]);
+  useEffect(() => { appScrollRef.current?.scrollTo({ y: 0, animated: false }); }, [page]);
   const migrationPrompted = useRef<string | null>(null);
   const queuedFingerprints = useRef<Record<string, string>>({});
   const applyFlushResult = (result: Awaited<ReturnType<typeof flushBookezQueue>>) => {
@@ -4735,18 +5190,53 @@ export default Sentry.wrap(function App() {
     Sentry.setTag('screen', page);
   }, [page]);
   useEffect(() => {
+    if (Platform.OS === 'web') return;
+    const openNotificationDestination = (response: Notifications.NotificationResponse | null) => {
+      const data = response?.notification.request.content.data;
+      if (data?.destination !== 'write') return;
+      const projectTitle = typeof data.projectTitle === 'string' ? data.projectTitle : null;
+      const partKey = typeof data.partKey === 'string' ? data.partKey : null;
+      if (projectTitle) {
+        setActiveProject(projectTitle);
+        if (partKey) {
+          setProjects((current) => current.map((project) => {
+            if (project.title !== projectTitle) return project;
+            const partIndex = getWriteParts(project, planBlueprints[project.type] ?? planBlueprints['Custom Project']).findIndex((part) => part.key === partKey);
+            return partIndex >= 0 ? { ...project, plan: { ...project.plan, writeIndex: partIndex } } : project;
+          }));
+        }
+      }
+      setPage('Write');
+    };
+    openNotificationDestination(Notifications.getLastNotificationResponse());
+    const subscription = Notifications.addNotificationResponseReceivedListener(openNotificationDestination);
+    return () => subscription.remove();
+  }, []);
+  useEffect(() => {
     let mounted = true;
     const restoreBookezSession = async () => {
-      const initialUrl = await Linking.getInitialURL();
-      if (initialUrl) await handleBookezAuthUrl(initialUrl);
+      let authCallback: Awaited<ReturnType<typeof handleBookezAuthUrl>>;
+      try {
+        const initialUrl = await Linking.getInitialURL();
+        if (initialUrl) authCallback = await handleBookezAuthUrl(initialUrl);
+      } catch (caught) {
+        if (mounted) Alert.alert('Reset link unavailable', caught instanceof Error ? caught.message : 'This password reset link may have expired. Request a new one and try again.');
+      }
       const { data: { session } } = await supabase.auth.getSession();
+      if (mounted && authCallback?.type === 'recovery') setPasswordResetVisible(true);
       if (mounted && session?.user) { setCloudUserId(session.user.id); setAccountState('active'); await ensureBookezProfile(session.user.id, session.user.user_metadata?.display_name); }
       if (mounted && !session?.user) { setCloudUserId(null); setCloudMigrationReady(true); setAccountState('signedOut'); }
       if (mounted) setAuthReady(true);
     };
-    void restoreBookezSession();
-    const urlSubscription = Linking.addEventListener('url', ({ url }) => { void handleBookezAuthUrl(url); });
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const urlSubscription = Linking.addEventListener('url', ({ url }) => {
+      void handleBookezAuthUrl(url).then((result) => {
+        if (result?.type === 'recovery') setPasswordResetVisible(true);
+      }).catch((caught) => {
+        Alert.alert('Reset link unavailable', caught instanceof Error ? caught.message : 'This password reset link may have expired. Request a new one and try again.');
+      });
+    });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'PASSWORD_RECOVERY') setPasswordResetVisible(true);
       setCloudUserId(session?.user.id ?? null);
       if (session?.user) {
         setAccountState('active');
@@ -4757,21 +5247,118 @@ export default Sentry.wrap(function App() {
       }
       setAuthReady(true);
     });
+    void restoreBookezSession();
     return () => { mounted = false; urlSubscription.remove(); subscription.unsubscribe(); };
   }, []);
+  const reminderOwnerId = cloudUserId ?? 'local';
+  useEffect(() => {
+    if (!authReady || !storageReady) return;
+    let mounted = true;
+    setReminderPreferencesReady(false);
+    bookezSecureStorage.getItem(profileReminderStorageKey(reminderOwnerId)).then((saved) => {
+      if (!mounted) return;
+      if (saved) {
+        try {
+          const parsed = JSON.parse(saved) as { enabled?: unknown; reminders?: unknown };
+          if (typeof parsed.enabled === 'boolean') setReminders(parsed.enabled);
+          if (Array.isArray(parsed.reminders)) {
+            const validReminders = parsed.reminders.filter((item): item is ProfileReminder => {
+              if (!item || typeof item !== 'object') return false;
+              const candidate = item as Partial<ProfileReminder>;
+              return typeof candidate.id === 'string' && typeof candidate.label === 'string' && typeof candidate.time === 'string' && typeof candidate.enabled === 'boolean' && Array.isArray(candidate.days);
+            });
+            if (validReminders.length) setProfileReminders(validReminders);
+          }
+        } catch {
+          setReminders(false);
+          setProfileReminders(defaultProfileReminders);
+        }
+      } else {
+        setReminders(false);
+        setProfileReminders(defaultProfileReminders);
+      }
+      setReminderPreferencesReady(true);
+    }).catch(() => {
+      if (!mounted) return;
+      setReminders(false);
+      setProfileReminders(defaultProfileReminders);
+      setReminderPreferencesReady(true);
+    });
+    return () => { mounted = false; };
+  }, [authReady, reminderOwnerId, storageReady]);
+  useEffect(() => {
+    if (!reminderPreferencesReady) return;
+    const timer = setTimeout(() => {
+      void bookezSecureStorage.setItem(profileReminderStorageKey(reminderOwnerId), JSON.stringify({ enabled: reminders, reminders: profileReminders })).catch(() => undefined);
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [profileReminders, reminderOwnerId, reminderPreferencesReady, reminders]);
+  const onRemindersChange = async (enabled: boolean) => {
+    if (!enabled) {
+      setReminders(false);
+      return;
+    }
+    const granted = await requestBookezNotificationPermissions();
+    if (!granted) {
+      Alert.alert('Notifications are off', 'Bookez needs notification permission to remind you about your writing. You can enable it later in your device settings.');
+      return;
+    }
+    setReminders(true);
+  };
+  useEffect(() => {
+    if (!authReady || !storageReady || !reminderPreferencesReady) return;
+    const timer = setTimeout(() => {
+      const book = projects.find((project) => project.title === activeProject && !project.archived && !project.deletedAt) ?? projects.find((project) => !project.archived && !project.deletedAt);
+      if (!book || accountState !== 'active') {
+        void syncBookezWritingNotifications({ enabled: false, reminders: [], book: { title: 'Bookez', progressPercent: 0, wordCount: 0, manuscriptComplete: false } }).catch(() => undefined);
+        return;
+      }
+      const toNotificationBook = (project: Project) => {
+        const snapshot = getJourneySnapshot(project);
+        return { title: project.title, progressPercent: snapshot.progressPercent, wordCount: snapshot.wordCount, nextPartTitle: snapshot.nextPart?.title, nextPartKey: snapshot.nextPart?.key, manuscriptComplete: snapshot.manuscriptComplete };
+      };
+      const planReminders: BookezWritingReminder[] = projects.filter((project) => !project.archived && !project.deletedAt && project.plan.reminderEnabled).flatMap((project) => {
+        const frequency = project.plan.writingFrequency ?? 'everyday';
+        const days = frequency === 'weekdays' ? [1, 2, 3, 4, 5] : frequency === 'weekends' ? [0, 6] : frequency === 'custom' ? (project.plan.customWritingDays ?? []) : [0, 1, 2, 3, 4, 5, 6];
+        return getReminderTimes(project.plan).map((time, index) => ({ id: `plan:${project.cloudId ?? project.title}:${index}`, label: `${project.title} writing`, time, days, enabled: true, book: toNotificationBook(project) }));
+      });
+      const profileSchedules = reminders ? profileReminders : [];
+      void syncBookezWritingNotifications({
+        enabled: profileSchedules.length > 0 || planReminders.length > 0,
+        reminders: [...profileSchedules, ...planReminders],
+        book: toNotificationBook(book),
+      }).catch(() => undefined);
+    }, 750);
+    return () => clearTimeout(timer);
+  }, [accountState, activeProject, authReady, notificationSyncVersion, profileReminders, projects, reminderPreferencesReady, reminders, storageReady]);
+  useEffect(() => {
+    if (!authReady || !storageReady || !onboardingOwner) return;
+    let mounted = true;
+    setOnboardingOwnerChecked(null);
+    bookezSecureStorage.getItem(onboardingStorageKey(onboardingOwner)).then((seenVersion) => {
+      if (!mounted) return;
+      setOnboardingOwnerChecked(onboardingOwner);
+      setOnboardingVisible(seenVersion !== onboardingVersion);
+    }).catch(() => {
+      if (!mounted) return;
+      setOnboardingOwnerChecked(onboardingOwner);
+      setOnboardingVisible(true);
+    });
+    return () => { mounted = false; };
+  }, [authReady, onboardingOwner, storageReady]);
   useEffect(() => {
     if (storageReady && cloudUserId && cloudMigrationReady && cloudBackupEnabled) void runBookezSync();
   }, [cloudUserId, storageReady, cloudMigrationReady, cloudBackupEnabled]);
   useEffect(() => {
     let mounted = true;
-    AsyncStorage.getItem(projectStorageKey).then((saved) => {
+    bookezSecureStorage.getItem(projectStorageKey).then((saved) => {
       if (!mounted) return;
       if (saved) {
         try {
           const parsed = JSON.parse(saved) as { projects?: Project[]; activeProject?: string; ownerId?: string; cloudBackupEnabled?: boolean };
           if (parsed.ownerId) setStorageOwnerId(parsed.ownerId);
           if (typeof parsed.cloudBackupEnabled === 'boolean') setCloudBackupEnabled(parsed.cloudBackupEnabled);
-          if (Array.isArray(parsed.projects) && parsed.projects.length) setProjects(parsed.projects.map((project) => ({ ...project, cloudId: project.cloudId ?? createLocalUuid(), plan: { ...project.plan, chapterRevisions: project.plan.chapterRevisions ?? {} } })));
+          if (Array.isArray(parsed.projects) && parsed.projects.length) setProjects(parsed.projects.map((project) => ({ ...project, cloudId: project.cloudId ?? createLocalUuid(), images: project.images?.map(normalizeBookezImage), plan: { ...project.plan, chapterRevisions: project.plan.chapterRevisions ?? {} } })));
           if (parsed.activeProject) setActiveProject(parsed.activeProject);
         } catch {
           // Keep the in-memory starter projects when saved data is not readable.
@@ -4784,7 +5371,7 @@ export default Sentry.wrap(function App() {
   useEffect(() => {
     if (!storageReady) return;
     if (cloudUserId && !cloudMigrationReady) return;
-    const timer = setTimeout(() => { AsyncStorage.setItem(projectStorageKey, JSON.stringify({ projects, activeProject, ownerId: cloudUserId ?? storageOwnerId ?? 'local', cloudBackupEnabled })).catch(() => undefined); }, 250);
+    const timer = setTimeout(() => { bookezSecureStorage.setItem(projectStorageKey, JSON.stringify({ projects, activeProject, ownerId: cloudUserId ?? storageOwnerId ?? 'local', cloudBackupEnabled })).catch(() => undefined); }, 250);
     return () => clearTimeout(timer);
   }, [projects, activeProject, storageReady, cloudUserId, cloudMigrationReady, storageOwnerId, cloudBackupEnabled]);
   useEffect(() => {
@@ -4796,7 +5383,7 @@ export default Sentry.wrap(function App() {
     migrationPrompted.current = cloudUserId;
     setCloudMigrationReady(false);
     Alert.alert('Set up cloud sync', 'These projects are currently stored on this device. Choose whether to back them up to this signed-in account or keep them separate and start with the account’s cloud projects.', [
-      { text: 'Keep separate', style: 'cancel', onPress: () => { void AsyncStorage.setItem(localProjectBackupKey(storageOwnerId), JSON.stringify({ projects, activeProject })); setProjects([]); setActiveProject(''); setStorageOwnerId(cloudUserId); setCloudMigrationReady(true); } },
+      { text: 'Keep separate', style: 'cancel', onPress: () => { void bookezSecureStorage.setItem(localProjectBackupKey(storageOwnerId), JSON.stringify({ projects, activeProject })); setProjects([]); setActiveProject(''); setStorageOwnerId(cloudUserId); setCloudMigrationReady(true); } },
       { text: 'Back up these projects', onPress: () => { setStorageOwnerId(cloudUserId); setCloudMigrationReady(true); } },
     ]);
   }, [cloudUserId, storageReady, storageOwnerId, cloudBackupEnabled]);
@@ -4876,7 +5463,21 @@ export default Sentry.wrap(function App() {
     const timer = setInterval(() => { void publishPresence(); }, 5 * 60 * 1000);
     return () => { mounted = false; clearInterval(timer); void supabase.from('community_presence').update({ active_until: new Date().toISOString() }).eq('user_id', cloudUserId); };
   }, [activeProject, cloudUserId, page, projects]);
-  const updateProject = (title: string, changes: Partial<Project>) => setProjects((current) => current.map((project) => project.title === title ? { ...project, ...changes, updatedAt: Date.now() } : project));
+  const updateProject = (title: string, changes: Partial<Project>) => {
+    const currentProject = projects.find((project) => project.title === title);
+    const enablingProjectReminder = changes.plan?.reminderEnabled === true && currentProject?.plan.reminderEnabled !== true;
+    setProjects((current) => current.map((project) => project.title === title ? { ...project, ...changes, updatedAt: Date.now() } : project));
+    if (enablingProjectReminder) {
+      void requestBookezNotificationPermissions().then((granted) => {
+        if (!granted) Alert.alert('Notifications are off', 'Bookez needs notification permission to schedule this book’s writing reminder. You can enable it later in your device settings.');
+        setNotificationSyncVersion((version) => version + 1);
+      });
+    }
+  };
+  const completeOnboarding = () => {
+    setOnboardingVisible(false);
+    if (onboardingOwner) void bookezSecureStorage.setItem(onboardingStorageKey(onboardingOwner), onboardingVersion);
+  };
   const openBookStudio = (title: string, section: StudioSection) => { setActiveProject(title); setStudioRoute({ title, section }); setPage('BookStudio'); };
   const returnFromAccount = () => {
     if (accountState === 'deleted') {
@@ -4894,9 +5495,9 @@ export default Sentry.wrap(function App() {
         await signOutBookez();
       }
       await clearBookezLocalSyncData();
-      const localKeys = await AsyncStorage.getAllKeys();
-      const bookezDataKeys = localKeys.filter((key) => key === projectStorageKey || key.startsWith('bookez.projects.backup.'));
-      if (bookezDataKeys.length) await AsyncStorage.multiRemove(bookezDataKeys);
+      const localKeys = await bookezSecureStorage.getAllKeys();
+      const bookezDataKeys = localKeys.filter((key) => key === projectStorageKey || key.startsWith('bookez.projects.backup.') || key.startsWith('bookez.onboarding.'));
+      if (bookezDataKeys.length) await bookezSecureStorage.multiRemove(bookezDataKeys);
       setProjects([]);
       setCloudUserId(null);
       setCloudMigrationReady(true);
@@ -4909,15 +5510,18 @@ export default Sentry.wrap(function App() {
   };
   const renderPage = () => {
     if (page === 'Library') return <Library projects={projects} activeProject={activeProject} userId={cloudUserId} onPage={setPage} onSelectProject={setActiveProject} onProjectsChange={setProjects} onOpenBookStudio={openBookStudio} />;
-    if (page === 'Plan') return <Plan projects={projects} activeProject={activeProject} onSelectProject={setActiveProject} onUpdateProject={updateProject} onPage={setPage} />;
+    if (page === 'Plan') return <Plan projects={projects} activeProject={activeProject} userId={cloudUserId} onSelectProject={setActiveProject} onUpdateProject={updateProject} onPage={setPage} />;
     if (page === 'Write') return <Write projects={projects} activeProject={activeProject} onSelectProject={setActiveProject} onUpdateProject={updateProject} onPage={setPage} />;
-    if (page === 'Journey') return <Journey projects={projects} activeProject={activeProject} onSelectProject={setActiveProject} onUpdateProject={updateProject} onPage={setPage} onBack={() => setPage('Library')} onOpenBookStudio={openBookStudio} scrollY={journeyScrollY} />;
+    if (page === 'Journey') {
+      const journeyProject = projects.find((project) => project.title === activeProject) ?? projects[0];
+      return journeyProject ? <Journey projects={projects} activeProject={activeProject} onSelectProject={setActiveProject} onUpdateProject={updateProject} onPage={setPage} onBack={() => setPage('Library')} onOpenBookStudio={openBookStudio} scrollY={journeyScrollY} /> : <JourneyEmptyState onBack={() => setPage('Library')} onPage={setPage} />;
+    }
     if (page === 'Community') { const communityProjects = projects.filter((project) => !project.archived && !project.deletedAt).map((project) => { const snapshot = getJourneySnapshot(project); const communityParts = getWriteParts(project, planBlueprints[project.type] ?? planBlueprints['Custom Project']).map((part) => ({ id: part.key, title: part.title, text: project.plan.drafts[part.key] ?? '' })).filter((part) => part.text.trim()); return { id: project.cloudId, title: project.title, genre: project.type, progress: snapshot.progressPercent, stage: snapshot.stage, parts: communityParts, mark: project.mark, color: project.color, coverImagePath: project.images?.find((image) => image.placement === 'cover')?.storagePath }; }); const communityProject = communityProjects.find((project) => project.title === activeProject); return <Community userId={cloudUserId} projects={communityProjects} activeProject={communityProject} onSelectProject={setActiveProject} />; }
     if (page === 'BookStudio') return <BookStudio projects={projects} project={projects.find((project) => project.title === studioRoute.title) ?? projects.find((project) => project.title === activeProject)} userId={cloudUserId} initialSection={studioRoute.section} onBack={() => setPage('Library')} onPage={setPage} onSelectProject={setActiveProject} onUpdateProject={updateProject} onOpenBookStudio={openBookStudio} />;
-    if (page === 'Profile') return <Profile projects={projects} cloudSyncState={cloudSyncState} cloudConflictCount={cloudConflictCount} cloudBackupEnabled={cloudBackupEnabled} onCloudBackupChange={setCloudBackupEnabled} onSyncNow={() => { void runBookezSync(true); }} onReviewConflicts={() => { void reviewBookezConflicts(); }} onPage={setPage} onOpenBookStudio={openBookStudio} onLogout={async () => { try { await signOutBookez(); } finally { setCloudUserId(null); setCloudMigrationReady(true); setAccountState('signedOut'); setPage('Library'); } }} onDeleteAccount={deleteAccountData} />;
+    if (page === 'Profile') return <Profile projects={projects} reminders={reminders} onRemindersChange={onRemindersChange} profileReminders={profileReminders} onProfileRemindersChange={setProfileReminders} cloudSyncState={cloudSyncState} cloudConflictCount={cloudConflictCount} cloudBackupEnabled={cloudBackupEnabled} onCloudBackupChange={setCloudBackupEnabled} onSyncNow={() => { void runBookezSync(true); }} onReviewConflicts={() => { void reviewBookezConflicts(); }} onPage={setPage} onOpenBookStudio={openBookStudio} onOpenOnboarding={() => setOnboardingVisible(true)} onLogout={async () => { try { await signOutBookez(); } finally { setCloudUserId(null); setCloudMigrationReady(true); setAccountState('signedOut'); setPage('Library'); } }} onDeleteAccount={deleteAccountData} />;
     return <Stats projects={projects} activeProject={activeProject} onSelectProject={setActiveProject} onPage={setPage} />;
   };
-  return <><StatusBar style="dark" /><Ambient><SafeAreaView style={s.safe}>{!authReady ? null : accountState === 'active' ? <><Reanimated.ScrollView contentContainerStyle={s.content} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" onScroll={page === 'Journey' ? journeyScrollHandler : undefined} scrollEventThrottle={16}>{renderPage()}</Reanimated.ScrollView><Navigation page={page} onPage={setPage} projects={projects} activeProject={activeProject} /></> : accountState === 'signedOut' ? <AuthSheet visible onClose={() => undefined} signedInEmail={null} dismissible={false} /> : <ScrollView contentContainerStyle={s.content} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled"><AccountExit deleted onReturn={returnFromAccount} /></ScrollView>}</SafeAreaView></Ambient></>;
+  return <><StatusBar style="dark" /><Ambient><SafeAreaView style={s.safe}>{!authReady ? null : accountState === 'active' ? <><Reanimated.ScrollView ref={appScrollRef} contentContainerStyle={s.content} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" onScroll={page === 'Journey' ? journeyScrollHandler : undefined} scrollEventThrottle={16}>{renderPage()}</Reanimated.ScrollView><Navigation page={page} onPage={setPage} projects={projects} activeProject={activeProject} /></> : accountState === 'signedOut' ? <AuthSheet visible onClose={() => undefined} signedInEmail={null} dismissible={false} /> : <ScrollView contentContainerStyle={s.content} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled"><AccountExit deleted onReturn={returnFromAccount} /></ScrollView>}</SafeAreaView></Ambient><PasswordUpdateScreen visible={passwordResetVisible} onComplete={() => setPasswordResetVisible(false)} /><BookezOnboarding visible={onboardingVisible && accountState === 'active' && onboardingOwnerChecked === onboardingOwner} onFinish={completeOnboarding} /></>;
 });
 
 const studioCommunityShareS = StyleSheet.create({
@@ -5011,17 +5615,39 @@ const journeyPopupS = StyleSheet.create({
 
 const journeyEnhancementS = StyleSheet.create({
   mapDismiss: { ...StyleSheet.absoluteFill, zIndex: 1 },
+  routeBase: { height: 4, backgroundColor: 'rgba(244,247,253,0.92)', shadowColor: '#26354B', shadowOpacity: 0.23, shadowRadius: 3, shadowOffset: { width: 0, height: 1 }, elevation: 1 },
+  routeComplete: { height: 5, backgroundColor: '#9187EF', shadowColor: '#C9C4FF', shadowOpacity: 0.8, shadowRadius: 4, shadowOffset: { width: 0, height: 0 }, elevation: 2 },
   miniHit: { zIndex: 5 },
   miniDotRecommended: { width: 34, height: 34, borderRadius: 17, borderWidth: 3 },
   miniDotSelected: { borderColor: C.periwinkle, shadowColor: C.periwinkle, shadowOpacity: 0.38, shadowRadius: 9, shadowOffset: { width: 0, height: 2 }, elevation: 4, transform: [{ scale: 1.07 }] },
-  miniLabel: { position: 'absolute', minHeight: 27, paddingHorizontal: 5, paddingVertical: 3, borderRadius: 8, justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.86)', zIndex: 2 },
-  miniLabelText: { color: C.muted, fontSize: 8, lineHeight: 10, fontWeight: '600' },
-  nodeOrbit: { position: 'absolute', width: 92, height: 92, borderRadius: 46, borderWidth: 2, borderColor: '#E5E2F2', zIndex: 3 },
+  miniLabel: { position: 'absolute', minHeight: 24, paddingHorizontal: 7, paddingVertical: 3, borderRadius: 8, justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.82)', borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(255,255,255,0.92)', zIndex: 2 },
+  miniLabelText: { color: '#303750', fontSize: 7, lineHeight: 9, fontWeight: '800', textShadowColor: 'rgba(255,255,255,0.5)', textShadowRadius: 1 },
+  majorHit: { width: 96, height: 96 },
+  majorMedallion: { width: 68, height: 68, borderRadius: 34, borderWidth: 4 },
+  majorIcon: { fontSize: 20 },
+  finalMedallion: { borderColor: '#F5D98A' },
+  milestoneFlag: { minHeight: 60, padding: 10, borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.92)', borderColor: 'rgba(244,243,249,0.96)' },
+  nodeOrbit: { position: 'absolute', width: 82, height: 82, borderRadius: 41, borderWidth: 2, borderColor: 'rgba(245,246,252,0.95)', zIndex: 3 },
   nodeOrbitComplete: { borderColor: '#BEB8F5', backgroundColor: 'rgba(139,138,232,0.08)' },
   nodeOrbitCurrent: { borderColor: '#F6B59D', backgroundColor: 'rgba(247,131,133,0.08)' },
   nodeOrbitSelected: { borderColor: C.periwinkle, borderWidth: 3 },
   popupTailLeft: { position: 'absolute', left: -7, width: 0, height: 0, borderTopWidth: 7, borderBottomWidth: 7, borderRightWidth: 7, borderTopColor: 'transparent', borderBottomColor: 'transparent', borderRightColor: '#DCD8F7' },
   popupTailRight: { position: 'absolute', right: -7, width: 0, height: 0, borderTopWidth: 7, borderBottomWidth: 7, borderLeftWidth: 7, borderTopColor: 'transparent', borderBottomColor: 'transparent', borderLeftColor: '#DCD8F7' },
+  lockIcon: { width: 14, height: 16, alignItems: 'center', justifyContent: 'flex-end' },
+  lockShackle: { position: 'absolute', top: 0, left: 3, width: 8, height: 9, borderWidth: 2, borderBottomWidth: 0, borderColor: '#85889D', borderTopLeftRadius: 5, borderTopRightRadius: 5 },
+  lockShackleLight: { borderColor: '#FFF' },
+  lockBody: { width: 13, height: 10, borderRadius: 3, alignItems: 'center', justifyContent: 'center', backgroundColor: '#85889D' },
+  lockBodyLight: { backgroundColor: '#FFF' },
+  lockKeyhole: { width: 2, height: 4, borderRadius: 1, backgroundColor: '#F3F2F8' },
+  lockKeyholeLight: { backgroundColor: '#7C7F94' },
+  manuscriptGlyph: { width: 32, height: 27, alignItems: 'center', justifyContent: 'center' },
+  manuscriptPage: { position: 'absolute', top: 3, width: 15, height: 20, borderRadius: 3, backgroundColor: '#F7F6FF', borderWidth: 1, borderColor: 'rgba(70,69,100,0.16)' },
+  manuscriptPageLeft: { left: 1, transform: [{ rotate: '-5deg' }] },
+  manuscriptPageRight: { right: 1, transform: [{ rotate: '5deg' }] },
+  manuscriptPageComplete: { backgroundColor: '#FFF9DA', borderColor: 'rgba(159,112,15,0.28)' },
+  manuscriptSpine: { position: 'absolute', top: 4, width: 3, height: 19, borderRadius: 2, backgroundColor: '#A5A1BA' },
+  manuscriptSpineComplete: { backgroundColor: '#D4A836' },
+  manuscriptLockBadge: { position: 'absolute', right: -5, bottom: -4, width: 19, height: 19, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: '#777A8E', borderWidth: 2, borderColor: '#ECEBF2', transform: [{ scale: 0.78 }] },
   bookVisual: { width: 92, height: 54, marginTop: 12, marginBottom: 2, borderRadius: 16, backgroundColor: '#EEF1FF', borderWidth: 1, borderColor: '#DDE1FC', alignItems: 'center', justifyContent: 'center' },
   bookVisualComplete: { backgroundColor: '#FFF7DC', borderColor: '#F0D27C' },
   bookPage: { position: 'absolute', width: 38, height: 34, borderRadius: 5, backgroundColor: '#FFF', transform: [{ rotate: '-8deg' }], shadowColor: '#7D79AA', shadowOpacity: 0.14, shadowRadius: 4, shadowOffset: { width: 1, height: 2 }, elevation: 2 },
@@ -5063,13 +5689,16 @@ const journeyEnhancementS = StyleSheet.create({
 
 const journeyLandscapeS = StyleSheet.create({
   background: { position: 'absolute', top: 0, left: 0, overflow: 'hidden', borderRadius: 25 },
-  worldImageFrame: { position: 'absolute', top: -52, right: 0, bottom: -52, left: 0, overflow: 'hidden' },
-  worldImage: { width: '100%', height: '100%', opacity: 0.92 },
-  worldCenterVeil: { position: 'absolute', top: 0, bottom: 0, left: '10%', width: '80%', opacity: 0.52 },
-  worldLight: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, opacity: 0.34 },
+  worldImageFrame: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, overflow: 'hidden' },
+  worldImage: { position: 'absolute' },
+  biomeArtwork: { position: 'absolute', opacity: 1 },
+  worldLight: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, opacity: 0.1 },
   worldReaction: { position: 'absolute', top: '12%', right: '16%', bottom: '12%', left: '16%', borderRadius: 999 },
   atmosphere: { position: 'absolute', top: 0, left: '12%', width: '76%', height: '38%', borderRadius: 999 },
   biomeSection: { position: 'absolute', left: 0, right: 0, overflow: 'hidden' },
+  biomeSide: { position: 'absolute', top: 0, bottom: 0, overflow: 'hidden' },
+  biomeSideInnerFade: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 },
+  biomeTransitionFade: { position: 'absolute', top: 0, right: 0, left: 0 },
   biomeTint: { position: 'absolute', top: -30, bottom: -30, left: '16%', width: '68%', opacity: 0.46 },
   sideWash: { position: 'absolute', top: 0, bottom: 0, left: 0 },
   sideWashRight: { left: '58%' },
@@ -5120,6 +5749,19 @@ const journeyLandscapeS = StyleSheet.create({
   sunsetRidgeMain: { position: 'absolute', left: 17, bottom: 0, width: 119, height: 91, borderTopLeftRadius: 76, borderTopRightRadius: 33, borderBottomRightRadius: 10, transform: [{ rotate: '-14deg' }], opacity: 0.64 },
   sunsetRidgeFace: { position: 'absolute', left: 69, bottom: 39, width: 66, height: 49, borderTopLeftRadius: 48, borderTopRightRadius: 22, transform: [{ rotate: '-23deg' }], opacity: 0.46 },
   summitLight: { position: 'absolute', left: '20%', width: '60%', opacity: 0.6 },
+  motionCloudFar: { position: 'absolute', top: '10%', left: '8%', width: 105, height: 28, borderRadius: 30, backgroundColor: 'rgba(255,255,255,0.65)' },
+  motionCloudNear: { position: 'absolute', top: '24%', right: '7%', width: 82, height: 23, borderRadius: 26, backgroundColor: 'rgba(255,255,255,0.58)' },
+  motionCloudPuffLarge: { position: 'absolute', left: 17, top: -7, width: 40, height: 28, borderRadius: 22, backgroundColor: 'rgba(255,255,255,0.72)' },
+  motionCloudPuffSmall: { position: 'absolute', left: 57, top: 4, width: 27, height: 18, borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.58)' },
+  motionWaterBand: { position: 'absolute', top: '54%', left: '-12%', width: 116, height: 9, borderRadius: 8, backgroundColor: 'rgba(255,255,255,0.78)' },
+  motionWaterBandSecond: { position: 'absolute', top: '63%', left: '22%', width: 92, height: 5, borderRadius: 6, backgroundColor: 'rgba(220,248,255,0.82)' },
+  motionDust: { position: 'absolute', top: '66%', left: '35%', width: 60, height: 32 },
+  motionDustDot: { position: 'absolute', left: 11, top: 9, width: 5, height: 5, borderRadius: 3, backgroundColor: '#F4D19B' },
+  motionDustDotSmall: { left: 39, top: 20, width: 3, height: 3, backgroundColor: '#E4B77D' },
+  motionPollen: { position: 'absolute', top: '42%', left: '18%', width: 24, height: 24, alignItems: 'center', justifyContent: 'center' },
+  motionPollenText: { color: '#FFF0A8', fontSize: 13, fontWeight: '700' },
+  motionMoonGlow: { position: 'absolute', top: '18%', left: '18%', width: 58, height: 58, borderRadius: 29, backgroundColor: 'rgba(169,184,255,0.28)' },
+  motionSunsetLight: { position: 'absolute', top: '30%', left: '30%', width: 70, height: '48%', backgroundColor: 'rgba(255,214,128,0.22)', transform: [{ rotate: '12deg' }] },
   ambientParticle: { position: 'absolute', width: 20, height: 20, alignItems: 'center', justifyContent: 'center' },
   ambientSparkle: { fontWeight: '700', lineHeight: 16 },
   ambientDot: { opacity: 0.7 },
@@ -5194,7 +5836,7 @@ const authS = StyleSheet.create({
   dismiss: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 },
   keyboard: { flex: 1, justifyContent: 'flex-end' },
   sheet: { flex: 1, overflow: 'hidden', backgroundColor: '#F8F7FF' },
-  content: { flexGrow: 1, justifyContent: 'center', paddingHorizontal: 24, paddingTop: 30, paddingBottom: 36 },
+  content: { flexGrow: 1, justifyContent: 'center', paddingHorizontal: 24, paddingTop: 8, paddingBottom: 88 },
   orbOne: { position: 'absolute', top: -85, right: -58, width: 220, height: 220, borderRadius: 110, backgroundColor: 'rgba(201,188,245,0.48)' },
   orbTwo: { position: 'absolute', top: 168, left: -88, width: 170, height: 170, borderRadius: 85, backgroundColor: 'rgba(165,220,247,0.30)' },
   topBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
@@ -5242,10 +5884,70 @@ const authS = StyleSheet.create({
   disabled: { opacity: 0.55 },
 });
 
+const passwordResetS = StyleSheet.create({
+  modal: { flex: 1, overflow: 'hidden', backgroundColor: '#F8F7FF' },
+  keyboard: { flex: 1 },
+  content: { flexGrow: 1, justifyContent: 'center', paddingHorizontal: 24, paddingTop: 24, paddingBottom: 58 },
+  orbOne: { position: 'absolute', top: -70, right: -62, width: 210, height: 210, borderRadius: 105, backgroundColor: 'rgba(201,188,245,0.42)' },
+  orbTwo: { position: 'absolute', top: 250, left: -100, width: 185, height: 185, borderRadius: 93, backgroundColor: 'rgba(165,220,247,0.24)' },
+  brandRow: { flexDirection: 'row', alignItems: 'center' },
+  brandMark: { width: 38, height: 38, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: C.ink, borderWidth: 2, borderColor: '#E5B95C', shadowColor: C.ink, shadowOpacity: 0.16, shadowRadius: 9, shadowOffset: { width: 0, height: 4 }, elevation: 2 },
+  brandMarkText: { color: '#FFF9E8', fontSize: 20 },
+  brandName: { color: C.ink, fontSize: 11, letterSpacing: 1.8, fontWeight: '800', marginLeft: 10 },
+  brandSub: { color: C.muted, fontSize: 8, marginTop: 2, marginLeft: 10 },
+  hero: { marginTop: 36, maxWidth: 340 },
+  eyebrow: { color: C.periwinkle, fontSize: 8, letterSpacing: 1.2, fontWeight: '800' },
+  title: { color: C.ink, fontSize: 29, lineHeight: 34, fontWeight: '800', marginTop: 9, letterSpacing: -0.5 },
+  copy: { color: C.muted, fontSize: 11, lineHeight: 17, marginTop: 10, maxWidth: 340 },
+  fieldLabel: { color: '#7C7BC3', fontSize: 8, letterSpacing: 1, fontWeight: '800', marginTop: 19, marginBottom: 7 },
+  passwordWrap: { minHeight: 52, borderRadius: 15, flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.92)', borderWidth: 1, borderColor: 'rgba(201,188,245,0.72)', shadowColor: C.periwinkle, shadowOpacity: 0.06, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 1 },
+  passwordInput: { flex: 1, minHeight: 50, paddingHorizontal: 15, color: C.ink, fontSize: 13 },
+  passwordToggle: { paddingHorizontal: 14, minHeight: 50, alignItems: 'center', justifyContent: 'center' },
+  passwordToggleText: { color: C.periwinkle, fontSize: 9, fontWeight: '800' },
+  requirements: { marginTop: 10, padding: 12, borderRadius: 15, backgroundColor: 'rgba(255,255,255,0.62)', borderWidth: 1, borderColor: 'rgba(201,188,245,0.48)', flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  requirementRow: { width: '47%', flexDirection: 'row', alignItems: 'center' },
+  requirementMark: { width: 17, height: 17, borderRadius: 9, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F1F0F7' },
+  requirementMarkMet: { backgroundColor: '#E5F4E8' },
+  requirementMarkText: { color: '#A1A4B7', fontSize: 12, lineHeight: 15, fontWeight: '800' },
+  requirementMarkTextMet: { color: '#4D8B59' },
+  requirementText: { color: C.muted, fontSize: 8, marginLeft: 6 },
+  requirementTextMet: { color: '#4D8B59', fontWeight: '700' },
+  matchHint: { color: '#C96567', fontSize: 9, marginTop: 7 },
+  matchHintMet: { color: '#4D8B59' },
+  errorBox: { marginTop: 13, padding: 11, borderRadius: 13, flexDirection: 'row', alignItems: 'flex-start', backgroundColor: '#FFF0F0', borderWidth: 1, borderColor: '#F5D7D8' },
+  errorIcon: { width: 16, height: 16, borderRadius: 8, textAlign: 'center', color: '#C96567', fontSize: 11, lineHeight: 16, fontWeight: '800', marginRight: 8, backgroundColor: '#FFDCDD' },
+  error: { flex: 1, color: '#C96567', fontSize: 10, lineHeight: 14 },
+  primary: { minHeight: 54, marginTop: 22, paddingHorizontal: 16, borderRadius: 16, backgroundColor: C.periwinkle, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', shadowColor: C.periwinkle, shadowOpacity: 0.25, shadowRadius: 12, shadowOffset: { width: 0, height: 6 }, elevation: 3 },
+  primaryText: { color: '#FFF', fontSize: 11, fontWeight: '800' },
+  primaryArrow: { color: '#FFF', fontSize: 19, marginLeft: 10, marginTop: -1 },
+  disabled: { opacity: 0.55 },
+  footnote: { color: '#9A9CB1', fontSize: 8, lineHeight: 12, textAlign: 'center', marginTop: 14, paddingHorizontal: 14 },
+  successState: { flex: 1, justifyContent: 'center', paddingBottom: 30 },
+  successIcon: { width: 62, height: 62, borderRadius: 22, alignItems: 'center', justifyContent: 'center', backgroundColor: '#E5F4E8', borderWidth: 1, borderColor: '#CDE9D2', marginBottom: 24 },
+  successIconText: { color: '#4D8B59', fontSize: 30, fontWeight: '800' },
+});
+
 const imagePreviewS = StyleSheet.create({ chapterVisuals: { gap: 9 }, backCover: { marginTop: 20, paddingTop: 13, borderTopWidth: 1, borderTopColor: '#EEE7DD' }, backCoverLabel: { color: C.muted, fontSize: 7, letterSpacing: 0.8, fontWeight: '700' } });
 
-const imageS = StyleSheet.create({
-  card: { marginTop: 12, padding: 12, borderRadius: 20, backgroundColor: '#FFF', borderWidth: 1, borderColor: '#E5E4F0', shadowColor: '#706C98', shadowOpacity: 0.06, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 1 }, cardCompact: { marginTop: 8, padding: 9 }, cardHeader: { flexDirection: 'row', alignItems: 'center' }, cardIcon: { width: 34, height: 34, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: '#EAF4FF' }, cardIconText: { color: '#4B7B9D', fontSize: 16 }, cardCopy: { flex: 1, minWidth: 0, marginLeft: 9 }, cardKicker: { color: '#4B7B9D', fontSize: 7, letterSpacing: 0.75, fontWeight: '700' }, cardTitle: { color: C.ink, fontSize: 13, fontWeight: '700', marginTop: 3 }, cardHint: { color: C.muted, fontSize: 8, lineHeight: 12, marginTop: 3 }, addButton: { width: 32, height: 32, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: '#EAF4FF' }, addButtonText: { color: '#4B7B9D', fontSize: 19 }, hiddenCard: { marginTop: 12, padding: 12, borderRadius: 18, backgroundColor: '#F7F7FA', borderWidth: 1, borderColor: '#E6E5ED', flexDirection: 'row', alignItems: 'center' }, hiddenIcon: { width: 34, height: 34, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: '#E8E8EE' }, hiddenIconText: { color: '#8F91A3', fontSize: 17 }, enableButton: { minHeight: 31, paddingHorizontal: 10, borderRadius: 10, backgroundColor: '#EAF4FF', alignItems: 'center', justifyContent: 'center' }, enableButtonText: { color: '#4B7B9D', fontSize: 8, fontWeight: '700' }, emptyButton: { marginTop: 10, minHeight: 56, paddingHorizontal: 9, borderRadius: 14, backgroundColor: '#F8FAFD', flexDirection: 'row', alignItems: 'center' }, emptyIcon: { color: '#76B8DC', fontSize: 20, width: 29, textAlign: 'center' }, emptyCopy: { flex: 1, marginLeft: 7 }, emptyTitle: { color: C.ink, fontSize: 10, fontWeight: '700' }, emptyHint: { color: C.muted, fontSize: 8, marginTop: 3 }, emptyArrow: { color: '#76B8DC', fontSize: 20 }, imageRow: { marginTop: 9, padding: 8, borderRadius: 15, backgroundColor: '#F8FAFD', flexDirection: 'row', alignItems: 'flex-start', flexWrap: 'wrap' }, thumbnail: { width: 51, height: 51, borderRadius: 12, backgroundColor: '#E8EFF5' }, imageCopy: { flex: 1, minWidth: 0, marginLeft: 8, marginRight: 4 }, imageTitle: { color: C.ink, fontSize: 10, fontWeight: '700', marginTop: 2 }, imageMeta: { color: C.muted, fontSize: 8, marginTop: 4 }, imageActions: { marginTop: 7, flexDirection: 'row', alignItems: 'center', gap: 5, flexWrap: 'wrap' }, detailButton: { minHeight: 25, paddingHorizontal: 7, borderRadius: 8, backgroundColor: '#EAF4FF', alignItems: 'center', justifyContent: 'center' }, detailButtonText: { color: '#4B7B9D', fontSize: 7, fontWeight: '700' }, captionButton: { minHeight: 25, paddingHorizontal: 7, borderRadius: 8, backgroundColor: '#F0EEFF', alignItems: 'center', justifyContent: 'center' }, captionButtonText: { color: C.periwinkle, fontSize: 7, fontWeight: '700' }, replaceButton: { minHeight: 25, paddingHorizontal: 7, borderRadius: 8, backgroundColor: '#FFF3E9', alignItems: 'center', justifyContent: 'center' }, replaceButtonText: { color: '#A97819', fontSize: 7, fontWeight: '700' }, removeButton: { width: 25, height: 25, borderRadius: 9, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFF0EC' }, removeButtonText: { color: '#C96567', fontSize: 16, lineHeight: 18 }, details: { width: '100%', marginTop: 9, paddingTop: 9, borderTopWidth: 1, borderTopColor: '#E3EAF0' }, detailInput: { minHeight: 37, marginTop: 6, paddingHorizontal: 9, paddingVertical: 7, borderRadius: 10, backgroundColor: '#FFF', borderWidth: 1, borderColor: '#DDE8EF', color: C.ink, fontSize: 9 }, captionEditor: { marginTop: 2 }, removeCaptionButton: { alignSelf: 'flex-start', marginTop: 5, paddingVertical: 3 }, removeCaptionText: { color: '#9A9CB1', fontSize: 7, fontWeight: '700' }, detailFieldRow: { marginTop: 9 }, detailLabel: { color: '#7D8F9C', fontSize: 7, letterSpacing: 0.6, fontWeight: '700' }, detailPills: { gap: 5, paddingTop: 6, paddingRight: 8 }, detailPill: { minHeight: 27, paddingHorizontal: 8, borderRadius: 9, backgroundColor: '#FFF', borderWidth: 1, borderColor: '#DDE8EF', alignItems: 'center', justifyContent: 'center' }, detailPillSelected: { backgroundColor: '#EAF4FF', borderColor: '#76B8DC' }, detailPillText: { color: C.muted, fontSize: 7, fontWeight: '700' }, detailPillTextSelected: { color: '#4B7B9D' }, detailTwoColumn: { flexDirection: 'row', gap: 6 }, detailHalf: { flex: 1 }, detailSwitchRow: { marginTop: 10, flexDirection: 'row', alignItems: 'center' }, detailSwitchCopy: { flex: 1, marginRight: 8 }, detailSwitchTitle: { color: C.ink, fontSize: 9, fontWeight: '700' }, detailSwitchHint: { color: C.muted, fontSize: 7, lineHeight: 11, marginTop: 2 }, detailResolution: { color: '#9A9CB1', fontSize: 7, marginTop: 10 }, preview: { marginTop: 10, borderRadius: 16, overflow: 'hidden', backgroundColor: '#FFF' }, previewPlaceholder: { minHeight: 125, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderStyle: 'dashed', borderColor: '#C7DCE8' }, previewImage: { width: '100%', height: 170, backgroundColor: '#EEF5F9' }, previewOverlay: { position: 'absolute', top: 8, left: 8, paddingHorizontal: 7, paddingVertical: 4, borderRadius: 7, backgroundColor: 'rgba(42,72,93,0.72)' }, previewPlacement: { color: '#FFF', fontSize: 7, fontWeight: '700' }, previewCaption: { color: C.muted, fontSize: 9, lineHeight: 13, padding: 9, paddingBottom: 2 }, previewCredit: { color: '#9A9CB1', fontSize: 7, paddingHorizontal: 9, paddingBottom: 8 }, placeholderIcon: { color: '#76B8DC', fontSize: 24 }, placeholderTitle: { color: C.ink, fontSize: 11, fontWeight: '700', marginTop: 6 }, placeholderHint: { color: C.muted, fontSize: 8, marginTop: 4 },
+const imageS = Object.assign(StyleSheet.create({
+  card: { marginTop: 12, padding: 12, borderRadius: 20, backgroundColor: '#FFF', borderWidth: 1, borderColor: '#E5E4F0', shadowColor: '#706C98', shadowOpacity: 0.06, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 1 }, cardCompact: { marginTop: 8, padding: 9 }, cardHeader: { flexDirection: 'row', alignItems: 'center' }, cardIcon: { width: 34, height: 34, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: '#EAF4FF' }, cardIconText: { color: '#4B7B9D', fontSize: 16 }, cardCopy: { flex: 1, minWidth: 0, marginLeft: 9 }, cardKicker: { color: '#4B7B9D', fontSize: 7, letterSpacing: 0.75, fontWeight: '700' }, cardTitle: { color: C.ink, fontSize: 13, fontWeight: '700', marginTop: 3 }, cardHint: { color: C.muted, fontSize: 8, lineHeight: 12, marginTop: 3 }, addButton: { width: 32, height: 32, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: '#EAF4FF' }, addButtonText: { color: '#4B7B9D', fontSize: 19 }, guideCard: { marginTop: 10, padding: 10, borderRadius: 15, backgroundColor: '#F3F7FC', borderWidth: 1, borderColor: '#E1ECF4' }, guideEyebrow: { color: '#4B7B9D', fontSize: 7, letterSpacing: 0.7, fontWeight: '800' }, guideTitle: { color: C.ink, fontSize: 10, fontWeight: '700', marginTop: 4 }, guideGrid: { marginTop: 8, gap: 7 }, guideItem: { flexDirection: 'row', alignItems: 'center' }, guideIcon: { width: 22, height: 22, borderRadius: 8, textAlign: 'center', textAlignVertical: 'center', color: '#4B7B9D', fontSize: 12, backgroundColor: '#E4F1FA', overflow: 'hidden' }, guideCopy: { flex: 1, marginLeft: 7 }, guideItemTitle: { color: C.ink, fontSize: 8, fontWeight: '700' }, guideItemHint: { color: C.muted, fontSize: 7, lineHeight: 10, marginTop: 1 }, coverSection: { marginTop: 10, padding: 10, borderRadius: 15, backgroundColor: '#FBF9FF', borderWidth: 1, borderColor: '#E8E2FA' }, coverSectionHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' }, coverEyebrow: { color: C.periwinkle, fontSize: 7, letterSpacing: 0.7, fontWeight: '800' }, coverTitle: { color: C.ink, fontSize: 11, fontWeight: '700', marginTop: 3 }, coverReady: { color: '#8F8AB8', fontSize: 6, letterSpacing: 0.55, fontWeight: '800', marginTop: 2 }, coverEmpty: { marginTop: 8, minHeight: 58, paddingHorizontal: 7, borderRadius: 12, backgroundColor: '#FFF', flexDirection: 'row', alignItems: 'center' }, coverEmptyIcon: { width: 29, height: 38, borderRadius: 7, alignItems: 'center', justifyContent: 'center', backgroundColor: '#EEEAFD' }, coverEmptyIconText: { color: C.periwinkle, fontSize: 16 }, coverCopy: { flex: 1, minWidth: 0, marginLeft: 8 }, coverName: { color: C.ink, fontSize: 9, fontWeight: '700' }, coverHint: { color: C.muted, fontSize: 7, lineHeight: 10, marginTop: 3 }, coverArrow: { color: C.periwinkle, fontSize: 19, marginLeft: 6 }, coverRow: { marginTop: 8, padding: 7, borderRadius: 12, backgroundColor: '#FFF', flexDirection: 'row', alignItems: 'flex-start' }, coverThumbnail: { width: 45, height: 58, borderRadius: 7, backgroundColor: '#E9E4FA' }, coverActions: { marginTop: 6, flexDirection: 'row', alignItems: 'center', gap: 5 }, coverReplaceButton: { minHeight: 23, paddingHorizontal: 7, borderRadius: 7, backgroundColor: '#F0EEFF', alignItems: 'center', justifyContent: 'center' }, coverReplaceText: { color: C.periwinkle, fontSize: 7, fontWeight: '700' }, coverRemoveButton: { minHeight: 23, paddingHorizontal: 7, borderRadius: 7, backgroundColor: '#FFF0EC', alignItems: 'center', justifyContent: 'center' }, coverRemoveText: { color: '#C96567', fontSize: 7, fontWeight: '700' }, hiddenCard: { marginTop: 12, padding: 12, borderRadius: 18, backgroundColor: '#F7F7FA', borderWidth: 1, borderColor: '#E6E5ED', flexDirection: 'row', alignItems: 'center' }, hiddenIcon: { width: 34, height: 34, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: '#E8E8EE' }, hiddenIconText: { color: '#8F91A3', fontSize: 17 }, enableButton: { minHeight: 31, paddingHorizontal: 10, borderRadius: 10, backgroundColor: '#EAF4FF', alignItems: 'center', justifyContent: 'center' }, enableButtonText: { color: '#4B7B9D', fontSize: 8, fontWeight: '700' }, emptyButton: { marginTop: 10, minHeight: 56, paddingHorizontal: 9, borderRadius: 14, backgroundColor: '#F8FAFD', flexDirection: 'row', alignItems: 'center' }, emptyIcon: { color: '#76B8DC', fontSize: 20, width: 29, textAlign: 'center' }, emptyCopy: { flex: 1, marginLeft: 7 }, emptyTitle: { color: C.ink, fontSize: 10, fontWeight: '700' }, emptyHint: { color: C.muted, fontSize: 8, marginTop: 3 }, emptyArrow: { color: '#76B8DC', fontSize: 20 }, imageRow: { marginTop: 9, padding: 8, borderRadius: 15, backgroundColor: '#F8FAFD', flexDirection: 'row', alignItems: 'flex-start', flexWrap: 'wrap' }, thumbnail: { width: 51, height: 51, borderRadius: 12, backgroundColor: '#E8EFF5' }, imageCopy: { flex: 1, minWidth: 0, marginLeft: 8, marginRight: 4 }, imageTitle: { color: C.ink, fontSize: 10, fontWeight: '700', marginTop: 2 }, imageMeta: { color: C.muted, fontSize: 8, marginTop: 4 }, imageActions: { marginTop: 7, flexDirection: 'row', alignItems: 'center', gap: 5, flexWrap: 'wrap' }, detailButton: { minHeight: 25, paddingHorizontal: 7, borderRadius: 8, backgroundColor: '#EAF4FF', alignItems: 'center', justifyContent: 'center' }, detailButtonText: { color: '#4B7B9D', fontSize: 7, fontWeight: '700' }, captionButton: { minHeight: 25, paddingHorizontal: 7, borderRadius: 8, backgroundColor: '#F0EEFF', alignItems: 'center', justifyContent: 'center' }, captionButtonText: { color: C.periwinkle, fontSize: 7, fontWeight: '700' }, replaceButton: { minHeight: 25, paddingHorizontal: 7, borderRadius: 8, backgroundColor: '#FFF3E9', alignItems: 'center', justifyContent: 'center' }, replaceButtonText: { color: '#A97819', fontSize: 7, fontWeight: '700' }, removeButton: { width: 25, height: 25, borderRadius: 9, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFF0EC' }, removeButtonText: { color: '#C96567', fontSize: 16, lineHeight: 18 }, details: { width: '100%', marginTop: 9, paddingTop: 9, borderTopWidth: 1, borderTopColor: '#E3EAF0' }, detailInput: { minHeight: 37, marginTop: 6, paddingHorizontal: 9, paddingVertical: 7, borderRadius: 10, backgroundColor: '#FFF', borderWidth: 1, borderColor: '#DDE8EF', color: C.ink, fontSize: 9 }, captionEditor: { marginTop: 2 }, removeCaptionButton: { alignSelf: 'flex-start', marginTop: 5, paddingVertical: 3 }, removeCaptionText: { color: '#9A9CB1', fontSize: 7, fontWeight: '700' }, detailFieldRow: { marginTop: 9 }, detailLabel: { color: '#7D8F9C', fontSize: 7, letterSpacing: 0.6, fontWeight: '700' }, detailPills: { gap: 5, paddingTop: 6, paddingRight: 8 }, detailPill: { minHeight: 27, paddingHorizontal: 8, borderRadius: 9, backgroundColor: '#FFF', borderWidth: 1, borderColor: '#DDE8EF', alignItems: 'center', justifyContent: 'center' }, detailPillSelected: { backgroundColor: '#EAF4FF', borderColor: '#76B8DC' }, detailPillText: { color: C.muted, fontSize: 7, fontWeight: '700' }, detailPillTextSelected: { color: '#4B7B9D' }, detailTwoColumn: { flexDirection: 'row', gap: 6 }, detailHalf: { flex: 1 }, detailSwitchRow: { marginTop: 10, flexDirection: 'row', alignItems: 'center' }, detailSwitchCopy: { flex: 1, marginRight: 8 }, detailSwitchTitle: { color: C.ink, fontSize: 9, fontWeight: '700' }, detailSwitchHint: { color: C.muted, fontSize: 7, lineHeight: 11, marginTop: 2 }, detailResolution: { color: '#9A9CB1', fontSize: 7, marginTop: 10 }, preview: { marginTop: 10, borderRadius: 16, overflow: 'hidden', backgroundColor: '#FFF' }, previewPlaceholder: { minHeight: 125, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderStyle: 'dashed', borderColor: '#C7DCE8' }, previewImage: { width: '100%', height: 170, backgroundColor: '#EEF5F9' }, previewOverlay: { position: 'absolute', top: 8, left: 8, paddingHorizontal: 7, paddingVertical: 4, borderRadius: 7, backgroundColor: 'rgba(42,72,93,0.72)' }, previewPlacement: { color: '#FFF', fontSize: 7, fontWeight: '700' }, previewCaption: { color: C.muted, fontSize: 9, lineHeight: 13, padding: 9, paddingBottom: 2 }, previewCredit: { color: '#9A9CB1', fontSize: 7, paddingHorizontal: 9, paddingBottom: 8 }, placeholderIcon: { color: '#76B8DC', fontSize: 24 }, placeholderTitle: { color: C.ink, fontSize: 11, fontWeight: '700', marginTop: 6 }, placeholderHint: { color: C.muted, fontSize: 8, marginTop: 4 },
+}), {
+  placementHeader: { marginTop: 6, flexDirection: 'row' as const, alignItems: 'center' as const, justifyContent: 'space-between' as const },
+  placementToggle: { minHeight: 28, paddingHorizontal: 9, borderRadius: 9, backgroundColor: '#F0EEFF', alignItems: 'center' as const, justifyContent: 'center' as const },
+  placementToggleText: { color: C.periwinkle, fontSize: 8, fontWeight: '700' as const },
+  advancedPlacementLabel: { color: '#9A9CB1', fontSize: 7, marginTop: 8 },
+});
+
+const imagePlacementS = StyleSheet.create({
+  placementPicker: { marginTop: 8, flexDirection: 'row', gap: 6 },
+  placementChoice: { flex: 1, minHeight: 77, padding: 5, borderRadius: 10, backgroundColor: '#FFF', borderWidth: 1, borderColor: '#DDE8EF', alignItems: 'center', justifyContent: 'center' },
+  placementChoiceSelected: { backgroundColor: '#F0EEFF', borderColor: C.periwinkle },
+  placementDiagram: { minHeight: 35, width: '100%', paddingHorizontal: 3, borderRadius: 5, backgroundColor: '#F7F8FC', alignItems: 'center', justifyContent: 'center' },
+  placementDiagramText: { color: '#7A7E9A', fontSize: 6, lineHeight: 10, textAlign: 'center' },
+  placementDiagramLarge: { color: C.periwinkle, fontWeight: '800' },
+  placementChoiceLabel: { color: C.muted, fontSize: 7, fontWeight: '700', marginTop: 5, textAlign: 'center' },
+  placementChoiceLabelSelected: { color: C.periwinkle },
+  placementChoiceCheck: { position: 'absolute', top: 4, right: 5, color: C.periwinkle, fontSize: 9, fontWeight: '800' },
 });
 
 const mediaStyles = StyleSheet.create({
@@ -5313,6 +6015,62 @@ const citationStyles = StyleSheet.create({
   imageCitationSavedThumb: { width: 38, height: 38, borderRadius: 9, backgroundColor: '#E5E1FA' },
 });
 
+const onboardingS = StyleSheet.create({
+  backdrop: { flex: 1, padding: 16, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(32,41,84,0.34)' },
+  sheet: { width: '100%', maxWidth: 390, maxHeight: '94%', padding: 18, borderRadius: 28, backgroundColor: '#FBFAFF', shadowColor: '#39365B', shadowOpacity: 0.22, shadowRadius: 24, shadowOffset: { width: 0, height: 9 }, elevation: 12 },
+  header: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' },
+  overline: { color: C.periwinkle, fontSize: 8, letterSpacing: 1, fontWeight: '800' },
+  headerHint: { color: '#9A9CB1', fontSize: 9, marginTop: 4 },
+  closeButton: { width: 30, height: 30, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F0EEF8' },
+  closeButtonText: { color: C.muted, fontSize: 19, lineHeight: 21 },
+  hero: { height: 148, marginTop: 17, borderRadius: 22, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
+  heroIcon: { width: 74, height: 74, borderRadius: 27, alignItems: 'center', justifyContent: 'center', zIndex: 1 },
+  heroIconText: { color: C.ink, fontSize: 34, fontWeight: '700' },
+  heroGlow: { position: 'absolute', width: 220, height: 220, borderRadius: 110, backgroundColor: 'rgba(255,255,255,0.38)' },
+  aiHero: { height: 204, marginTop: 17, padding: 12, borderRadius: 22, backgroundColor: '#F1EEFF', borderWidth: 1, borderColor: '#DFD8FA', overflow: 'hidden' },
+  aiOrb: { position: 'absolute', width: 175, height: 175, borderRadius: 88, right: -65, top: -85, backgroundColor: '#CFC5FF' },
+  aiScan: { position: 'absolute', top: 40, left: -45, width: 2, height: 130, backgroundColor: 'rgba(255,255,255,0.72)', transform: [{ rotate: '22deg' }] },
+  aiHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  aiKicker: { color: '#7771B7', fontSize: 6, letterSpacing: 0.8, fontWeight: '800' },
+  aiHeaderTitle: { color: C.ink, fontSize: 13, fontWeight: '800', marginTop: 2 },
+  aiSpark: { width: 26, height: 26, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.74)' },
+  aiSparkText: { color: C.periwinkle, fontSize: 14 },
+  aiDraftCard: { marginTop: 8, padding: 8, borderRadius: 11, backgroundColor: 'rgba(255,255,255,0.72)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.88)' },
+  aiDraftLabelRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  aiDraftLabel: { color: '#8D8AB0', fontSize: 6, letterSpacing: 0.65, fontWeight: '800' },
+  aiSelectHint: { color: '#AAA7BE', fontSize: 6 },
+  aiDraftText: { color: C.ink, fontSize: 9, lineHeight: 13, marginTop: 5 },
+  aiSelectionLine: { width: '64%', height: 3, marginTop: 5, borderRadius: 2, backgroundColor: '#C7BEF8' },
+  aiToolRow: { marginTop: 8, flexDirection: 'row', alignItems: 'center', gap: 5 },
+  aiTool: { paddingHorizontal: 7, minHeight: 24, borderRadius: 8, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.68)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.88)' },
+  aiToolSelected: { backgroundColor: C.periwinkle, borderColor: C.periwinkle },
+  aiToolText: { color: '#6E6B8E', fontSize: 7, fontWeight: '800' },
+  aiToolTextSelected: { color: '#FFF' },
+  aiMore: { minHeight: 24, paddingHorizontal: 6, borderRadius: 8, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.46)' },
+  aiMoreText: { color: '#8D8AA9', fontSize: 7, fontWeight: '700' },
+  aiPreviewCard: { marginTop: 8, padding: 8, borderRadius: 11, backgroundColor: '#FFF', borderWidth: 1, borderColor: '#E1DBF8', shadowColor: '#7E75B8', shadowOpacity: 0.1, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 2 },
+  aiPreviewTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  aiPreviewLabel: { color: C.periwinkle, fontSize: 6, letterSpacing: 0.65, fontWeight: '800' },
+  aiPreviewCheck: { color: '#A9A3D5', fontSize: 12 },
+  aiPreviewText: { color: C.ink, fontSize: 9, lineHeight: 13, marginTop: 4 },
+  aiPreviewHint: { color: '#9693AD', fontSize: 6, marginTop: 4 },
+  eyebrow: { color: C.periwinkle, fontSize: 8, letterSpacing: 0.85, fontWeight: '800', marginTop: 20 },
+  title: { color: C.ink, fontSize: 25, lineHeight: 30, letterSpacing: -0.6, fontWeight: '700', marginTop: 5 },
+  body: { color: C.muted, fontSize: 11, lineHeight: 17, marginTop: 8 },
+  steps: { marginTop: 16, gap: 10 },
+  step: { flexDirection: 'row', alignItems: 'flex-start' },
+  stepDot: { width: 8, height: 8, borderRadius: 4, marginTop: 4, marginRight: 9 },
+  stepText: { flex: 1, color: '#565E80', fontSize: 10, lineHeight: 15 },
+  progress: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, marginTop: 20 },
+  progressDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: '#DCD9E9' },
+  footer: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 18 },
+  secondaryButton: { minHeight: 45, justifyContent: 'center', paddingHorizontal: 8 },
+  secondaryButtonText: { color: C.muted, fontSize: 10, fontWeight: '700' },
+  primaryButton: { minHeight: 45, paddingHorizontal: 16, borderRadius: 14, flexDirection: 'row', alignItems: 'center', backgroundColor: C.periwinkle },
+  primaryButtonText: { color: '#FFF', fontSize: 10, fontWeight: '800' },
+  primaryButtonArrow: { color: '#FFF', fontSize: 17, marginLeft: 10 },
+});
+
 const s: any = Object.assign(StyleSheet.create({
   accountActionCopy: { flex: 1, minWidth: 0, marginRight: 8 },
   profileHero: { marginTop: 6, padding: 16, borderRadius: 24, backgroundColor: '#FFF', borderWidth: 1, borderColor: '#ECEAF4', shadowColor: '#706C98', shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 5 }, elevation: 2 }, profileHeroIdentity: { flexDirection: 'row', alignItems: 'center' }, profileHeroCopy: { flex: 1, minWidth: 0, marginLeft: 12 }, profileAvatarCompact: { width: 64, height: 64, borderRadius: 32 }, profileAvatarTextCompact: { fontSize: 24 }, profileHaloCompact: { width: 74, height: 74, borderRadius: 37 }, profileNameInHero: { marginTop: 3, fontSize: 20 }, profileOverline: { color: C.periwinkle, fontSize: 7, letterSpacing: 1, fontWeight: '700' }, profileMemberSince: { color: '#9A9CB1', fontSize: 8, marginTop: 4 }, profileEditButton: { minHeight: 35, marginTop: 14, borderRadius: 11, backgroundColor: '#F3F1FF', alignItems: 'center', justifyContent: 'center' }, profileEditButtonText: { color: C.periwinkle, fontSize: 9, fontWeight: '700' }, profileSnapshotCard: { marginTop: 13, padding: 15, borderRadius: 22, backgroundColor: '#F4F2FF', borderWidth: 1, borderColor: '#E5E1FA' }, profileSnapshotHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }, profileSectionEyebrow: { color: C.periwinkle, fontSize: 7, letterSpacing: 0.9, fontWeight: '700' }, profileSnapshotTitle: { color: C.ink, fontSize: 15, fontWeight: '700', marginTop: 4 }, profileSnapshotProject: { color: C.muted, fontSize: 8, fontWeight: '700' }, profileSnapshotGrid: { marginTop: 14, flexDirection: 'row', flexWrap: 'wrap', gap: 7 }, profileSnapshotMetric: { width: '48%', minHeight: 58, padding: 9, borderRadius: 14, backgroundColor: 'rgba(255,255,255,0.76)' }, profileSnapshotValue: { color: C.ink, fontSize: 16, fontWeight: '700' }, profileSnapshotLabel: { color: C.muted, fontSize: 6, letterSpacing: 0.6, fontWeight: '700', marginTop: 5 }, profileInlineAction: { minHeight: 33, marginTop: 11, paddingHorizontal: 9, borderRadius: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: 'rgba(255,255,255,0.58)' }, profileInlineActionText: { color: C.periwinkle, fontSize: 9, fontWeight: '700' }, profileInlineActionArrow: { color: C.periwinkle, fontSize: 16 }, profileEmptyAchievement: { marginTop: 11, padding: 10, borderRadius: 13, backgroundColor: '#FAF9FF' }, profileNextAchievement: { color: '#AA7A18', fontSize: 8, lineHeight: 12, marginTop: 5 }, profileEditSheet: { padding: 20, paddingBottom: 24, borderTopLeftRadius: 29, borderTopRightRadius: 29, backgroundColor: '#FBFAFF' }, profileEditTitle: { color: C.ink, fontSize: 25, fontWeight: '700', letterSpacing: -0.5, marginTop: 5 }, profileEditCopy: { color: C.muted, fontSize: 10, lineHeight: 15, marginTop: 7 }, profileEditInput: { minHeight: 47, marginTop: 16, paddingHorizontal: 13, borderRadius: 13, borderWidth: 1, borderColor: '#DCDCEA', color: C.ink, fontSize: 13, backgroundColor: '#FFF' }, profileEditError: { color: '#C96567', fontSize: 9, lineHeight: 13, marginTop: 8 }, profileSaveDisabled: { opacity: 0.6 }, aboutVersion: { color: '#9A9CB1', fontSize: 9, marginTop: 13 },
@@ -5330,16 +6088,16 @@ const s: any = Object.assign(StyleSheet.create({
   journeyNodeIconStep: { fontSize: 16 },
   journeyMilestoneCardStep: { padding: 9, borderRadius: 14, backgroundColor: 'rgba(255,255,255,0.78)' },
   writeProjectBarRight: { justifyContent: 'flex-end' }, writeTopCopy: { flex: 1, minWidth: 0, paddingRight: 10 }, writeTopProgress: { marginTop: 5 }, writeTitleHint: { color: C.muted, fontSize: 10, lineHeight: 15, marginTop: 6, maxWidth: 260 },
-  writeUtilityDock: { marginTop: 14, flexDirection: 'row', alignItems: 'center', gap: 10 },
-  writeUtilityTile: { width: 52, height: 52, padding: 9, borderRadius: 16, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFF', borderWidth: 1, borderColor: '#E7E5F0', shadowColor: '#716C91', shadowOpacity: 0.06, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 1 },
-  writeUtilityTileStatsActive: { backgroundColor: '#F5F3FF', borderColor: '#CFC8F6' },
-  writeUtilityTileRhythmActive: { backgroundColor: '#FFF9E9', borderColor: '#F1D68D' },
-  writeUtilityIcon: { width: 31, height: 31, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
-  writeUtilityIconStats: { backgroundColor: C.periwinkle },
-  writeUtilityIconImage: { backgroundColor: '#EAF4FF' },
-  writeUtilityIconRhythm: { backgroundColor: C.gold },
-  writeUtilityIconText: { color: '#FFF', fontSize: 14, fontWeight: '700' },
-  writeUtilityIconImageText: { color: '#4B7B9D', fontSize: 20 },
+  writeUtilityDock: { marginTop: 14, padding: 5, borderRadius: 17, backgroundColor: 'rgba(255,255,255,0.54)', borderWidth: 1, borderColor: 'rgba(224,220,238,0.7)', flexDirection: 'row', alignItems: 'center', gap: 8 },
+  writeUtilityTile: { width: 52, height: 52, padding: 9, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FBFAFD', borderWidth: 1, borderColor: '#E6E2EF', shadowColor: '#777292', shadowOpacity: 0.04, shadowRadius: 7, shadowOffset: { width: 0, height: 2 }, elevation: 1 },
+  writeUtilityTileStatsActive: { backgroundColor: '#F0EDFF', borderColor: '#C7C0F4' },
+  writeUtilityTileRhythmActive: { backgroundColor: '#F7F4FF', borderColor: '#D6D0EE' },
+  writeUtilityIcon: { width: 29, height: 29, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  writeUtilityIconStats: { backgroundColor: '#827BE0' },
+  writeUtilityIconImage: { backgroundColor: '#8B9CBF' },
+  writeUtilityIconRhythm: { backgroundColor: '#A69DCA' },
+  writeUtilityIconText: { color: '#FFF', fontSize: 13, fontWeight: '700' },
+  writeUtilityIconImageText: { color: '#FFF', fontSize: 18 },
   writeUtilityTip: { alignSelf: 'flex-start', marginTop: 7, paddingVertical: 7, paddingHorizontal: 9, borderRadius: 10, backgroundColor: '#FFF', borderWidth: 1, borderColor: '#E7E5F0', shadowColor: '#716C91', shadowOpacity: 0.05, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 1 },
   writeUtilityTipText: { color: C.muted, fontSize: 8, lineHeight: 12 },
   writeSessionDetailsUtility: { marginTop: 12, padding: 10, borderRadius: 20, backgroundColor: '#F6F4FF', borderWidth: 1, borderColor: '#E6E1FA' },
@@ -5356,7 +6114,7 @@ const s: any = Object.assign(StyleSheet.create({
   planHero: { marginHorizontal: -20, marginTop: -18, paddingHorizontal: 20, paddingTop: 18, paddingBottom: 22, overflow: 'hidden', backgroundColor: '#F0EDFF', borderBottomLeftRadius: 32, borderBottomRightRadius: 32 },
   planHeroTopRow: { minHeight: 49, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }, planHeroTopLabel: { flex: 1, color: '#8E8AAF', fontSize: 8, letterSpacing: 1, fontWeight: '700' }, planHeroOverline: { color: '#72789B', fontSize: 9, letterSpacing: 1.05, fontWeight: '700' }, planHeroTitle: { color: '#353B6B', fontWeight: '700', fontSize: 28, lineHeight: 32, letterSpacing: -0.7, marginTop: 8 }, planHeroCopy: { color: '#72789B', fontSize: 12, lineHeight: 17, marginTop: 10, maxWidth: 260 }, planHeroContent: { marginTop: 18, flexDirection: 'row', alignItems: 'center', gap: 12 }, planHeroContentCompact: { flexDirection: 'column', alignItems: 'stretch' }, planHeroCopyBlock: { flex: 1, minWidth: 0 }, planHeroCopyBlockCompact: { flex: 0 }, planHeroVisual: { width: 121, height: 132, flexShrink: 0, justifyContent: 'center' }, planHeroVisualCompact: { alignSelf: 'flex-end', width: 150, marginTop: 18 }, planVisualBook: { height: 94, width: '100%', flexDirection: 'row', alignItems: 'stretch', paddingHorizontal: 2 }, planVisualPage: { flex: 1, paddingHorizontal: 10, paddingTop: 11, backgroundColor: '#FDFCFF', borderWidth: 1, borderColor: '#DED9F6', justifyContent: 'flex-start', shadowColor: '#706C98', shadowOpacity: 0.08, shadowRadius: 7, shadowOffset: { width: 0, height: 4 }, elevation: 1 }, planVisualPageLeft: { borderTopLeftRadius: 17, borderBottomLeftRadius: 17, transform: [{ rotate: '-4deg' }] }, planVisualPageRight: { borderTopRightRadius: 17, borderBottomRightRadius: 17, transform: [{ rotate: '4deg' }] }, planVisualSpine: { width: 2, height: '76%', alignSelf: 'center', backgroundColor: '#C4B9ED' }, planVisualPageNumber: { color: '#9D94D4', fontSize: 10, lineHeight: 12, fontWeight: '800' }, planVisualRuleLong: { width: '100%', height: 3, marginTop: 14, borderRadius: 2, backgroundColor: '#DCD7F4' }, planVisualRuleMedium: { width: '72%', height: 3, marginTop: 7, borderRadius: 2, backgroundColor: '#E8E4F8' }, planVisualRuleShort: { width: '49%', height: 3, marginTop: 7, borderRadius: 2, backgroundColor: '#E8E4F8' }, planVisualCaption: { marginTop: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 6 }, planVisualCaptionLine: { width: 24, height: 1, backgroundColor: '#AAA2D9' }, planVisualCaptionText: { color: '#8E88B8', fontSize: 6, letterSpacing: 0.65, fontWeight: '800' },
   planTypeRow: { gap: 8, paddingTop: 18, paddingBottom: 3, paddingRight: 20 }, planTypePill: { height: 44, paddingHorizontal: 10, borderRadius: 16, flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.7)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.55)' }, planTypePillActive: { backgroundColor: '#FFF', borderColor: C.periwinkle }, planTypeDot: { width: 25, height: 25, borderRadius: 9, alignItems: 'center', justifyContent: 'center' }, planTypeDotText: { color: '#FFF', fontSize: 12 }, planTypeText: { color: C.muted, fontSize: 10, fontWeight: '700', marginLeft: 7 }, planTypeTextActive: { color: C.ink },
-  planSelectedCard: { marginTop: 12, padding: 15, borderRadius: 20, backgroundColor: '#F8F6FD', borderWidth: 1, borderColor: '#E9E4F5', shadowColor: '#5D5881', shadowOpacity: 0.04, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 1, flexDirection: 'row', alignItems: 'center' }, planSelectedIcon: { width: 43, height: 43, borderRadius: 15, alignItems: 'center', justifyContent: 'center', marginRight: 12 }, planSelectedIconText: { color: '#FFF', fontSize: 18 }, planSelectedOverline: { color: '#8D7CFF', fontSize: 8, letterSpacing: 1, fontWeight: '700' }, planSelectedTitle: { color: '#353B6B', fontSize: 15, fontWeight: '700', marginTop: 3 }, planSelectedSub: { color: '#72789B', fontSize: 10, marginTop: 3 }, planJourneyLink: { minHeight: 35, paddingHorizontal: 9, borderRadius: 12, backgroundColor: '#F1EEFF', flexDirection: 'row', alignItems: 'center', gap: 5 }, planJourneyLinkText: { color: '#8D7CFF', fontSize: 9, fontWeight: '700' }, planSelectedArrow: { color: '#EEDFB3', fontSize: 15 },
+  planSelectedCard: { marginTop: 12, padding: 15, borderRadius: 20, backgroundColor: '#F8F6FD', borderWidth: 1, borderColor: '#E9E4F5', shadowColor: '#5D5881', shadowOpacity: 0.04, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 1, flexDirection: 'row', alignItems: 'center' }, planSelectedIcon: { width: 43, height: 43, borderRadius: 15, alignItems: 'center', justifyContent: 'center', marginRight: 12 }, planSelectedIconText: { color: '#FFF', fontSize: 18 }, planSelectedOverline: { color: '#8D7CFF', fontSize: 8, letterSpacing: 1, fontWeight: '700' }, planSelectedTitle: { color: '#2F3565', fontSize: 18, lineHeight: 22, letterSpacing: -0.25, fontWeight: '800', marginTop: 3 }, planSelectedSub: { color: '#72789B', fontSize: 10, marginTop: 4 }, planJourneyLink: { minHeight: 35, paddingHorizontal: 9, borderRadius: 12, backgroundColor: '#F1EEFF', flexDirection: 'row', alignItems: 'center', gap: 5 }, planJourneyLinkText: { color: '#8D7CFF', fontSize: 9, fontWeight: '700' }, planSelectedArrow: { color: '#EEDFB3', fontSize: 15 },
   planSteps: { marginTop: 15, padding: 5, borderRadius: 19, backgroundColor: '#F4F1FF', borderWidth: 1, borderColor: '#E9E4F5', flexDirection: 'row', gap: 4 }, planStep: { flex: 1, minHeight: 54, paddingHorizontal: 5, borderRadius: 15, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }, planStepActive: { backgroundColor: '#FCFBFE', shadowColor: '#5D5881', shadowOpacity: 0.045, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 1 }, planStepNumber: { width: 22, height: 22, borderRadius: 11, backgroundColor: '#E5E1F0', alignItems: 'center', justifyContent: 'center', marginRight: 6 }, planStepNumberActive: { backgroundColor: '#8D7CFF' }, planStepNumberText: { color: '#72789B', fontSize: 10, fontWeight: '700' }, planStepNumberTextActive: { color: '#FFF' }, planStepLabel: { color: '#72789B', fontSize: 10, fontWeight: '700' }, planStepLabelActive: { color: '#353B6B' }, planStepShort: { color: '#9297B2', fontSize: 8, marginTop: 2 },
   planStepCard: { marginTop: 16, padding: 17, borderRadius: 23, backgroundColor: 'rgba(255,255,255,0.82)' }, planSectionKicker: { color: '#8D7CFF', fontSize: 8, letterSpacing: 1, fontWeight: '700' }, planSectionTitle: { color: '#353B6B', fontSize: 23, lineHeight: 28, letterSpacing: -0.5, fontWeight: '700', marginTop: 6 }, planSectionCopy: { color: '#72789B', fontSize: 11, lineHeight: 17, marginTop: 7 }, metricRow: { flexDirection: 'row', gap: 10, marginTop: 17 }, metricCard: { flex: 1, padding: 13, borderRadius: 17, backgroundColor: '#F8F6FD', borderWidth: 1, borderColor: '#E9E4F5' }, metricLabel: { color: '#72789B', fontSize: 8, letterSpacing: 0.7, fontWeight: '700' }, metricInput: { color: '#4D527D', fontSize: 26, fontWeight: '700', paddingVertical: 5, paddingHorizontal: 0 }, metricHint: { color: '#72789B', fontSize: 9, lineHeight: 13 }, planTip: { marginTop: 14, padding: 12, borderRadius: 15, backgroundColor: '#F1EEFF', flexDirection: 'row', alignItems: 'flex-start' }, planTipIcon: { color: '#8D7CFF', fontSize: 14, marginRight: 8 }, planTipText: { flex: 1, color: '#62688E', fontSize: 10, lineHeight: 15 }, primaryMetricCard: { marginTop: 17, padding: 15, borderRadius: 19, backgroundColor: '#F4F1FF', borderWidth: 1, borderColor: '#DED6F8' }, primaryMetricHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' }, primaryMetricTitle: { color: '#4D527D', fontSize: 15, fontWeight: '700', marginTop: 4 }, primaryMetricUnit: { color: '#8D7CFF', fontSize: 8, letterSpacing: 0.8, fontWeight: '700', marginTop: 2 }, primaryMetricInput: { color: '#4D527D', fontSize: 34, fontWeight: '700', paddingVertical: 4, paddingHorizontal: 0 }, primaryMetricHint: { color: '#72789B', fontSize: 9, lineHeight: 14 }, scopeExample: { color: '#9699AF', fontSize: 9, lineHeight: 14, marginTop: 7 }, scopeControlCard: { marginTop: 14, padding: 14, borderRadius: 19, backgroundColor: '#F8F6FD', borderWidth: 1, borderColor: '#E9E4F5' }, scopeControlKicker: { color: '#8D7CFF', fontSize: 8, letterSpacing: 0.9, fontWeight: '700' }, scopeControlTitle: { color: '#353B6B', fontSize: 15, fontWeight: '700', marginTop: 4 }, scopeControlCopy: { color: '#72789B', fontSize: 10, lineHeight: 15, marginTop: 4 }, scopeFieldLabel: { color: '#72789B', fontSize: 8, letterSpacing: 0.75, fontWeight: '700', marginTop: 15 }, scopeChoiceGrid: { marginTop: 8, flexDirection: 'row', flexWrap: 'wrap', gap: 6 }, scopeChoice: { minHeight: 34, paddingHorizontal: 10, borderRadius: 11, justifyContent: 'center', backgroundColor: '#FCFBFE', borderWidth: 1, borderColor: '#E9E4F5' }, scopeChoiceActive: { backgroundColor: '#F1EEFF', borderColor: '#C9C1F6' }, scopeChoiceText: { color: '#72789B', fontSize: 9, fontWeight: '700' }, scopeChoiceTextActive: { color: '#8D7CFF' }, customDaysBlock: { marginTop: 10, padding: 10, borderRadius: 13, backgroundColor: '#F4F1FF' }, customDaysHint: { color: '#72789B', fontSize: 9 }, dayChoiceRow: { marginTop: 8, flexDirection: 'row', justifyContent: 'space-between' }, dayChoice: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center', backgroundColor: '#E9E4F5' }, dayChoiceActive: { backgroundColor: '#8D7CFF' }, dayChoiceText: { color: '#72789B', fontSize: 9, fontWeight: '700' }, dayChoiceTextActive: { color: '#FFF' }, scopeDivider: { height: 1, backgroundColor: '#E7E1F3', marginVertical: 14 }, scopeSwitchRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, scopeSwitchCopy: { flex: 1, paddingRight: 10 }, scopeSwitchTitle: { color: '#353B6B', fontSize: 11, fontWeight: '700' }, scopeSwitchHint: { color: '#72789B', fontSize: 9, lineHeight: 13, marginTop: 3 }, scopeChoiceHint: { color: '#72789B', fontSize: 9, lineHeight: 14, marginTop: 8 }, customPaceRow: { marginTop: 9, minHeight: 42, paddingHorizontal: 11, borderRadius: 12, backgroundColor: '#FCFBFE', flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: '#E9E4F5' }, customPaceInput: { flex: 1, color: '#353B6B', fontSize: 12, paddingVertical: 8 }, customPaceUnit: { color: '#72789B', fontSize: 7, letterSpacing: 0.5, fontWeight: '700' }, scopeDeadlineLabel: { marginTop: 17 }, deadlineButton: { marginTop: 8, minHeight: 51, paddingHorizontal: 12, borderRadius: 13, backgroundColor: '#FCFBFE', borderWidth: 1, borderColor: '#E9E4F5', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, deadlineButtonLabel: { color: '#353B6B', fontSize: 11, fontWeight: '700' }, deadlineButtonHint: { color: '#72789B', fontSize: 8, marginTop: 3 }, deadlineButtonArrow: { color: '#8D7CFF', fontSize: 22 }, scopeModalShade: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(53,59,107,0.22)' }, scopeModalDismiss: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 }, scopeDateSheet: { padding: 20, paddingBottom: 28, borderTopLeftRadius: 28, borderTopRightRadius: 28, backgroundColor: '#FCFBFE' }, scopeDateTitle: { color: '#353B6B', fontSize: 22, fontWeight: '700', marginTop: 7 }, scopeDateCopy: { color: '#72789B', fontSize: 10, lineHeight: 15, marginTop: 6 }, scopeDateInput: { marginTop: 17, minHeight: 49, paddingHorizontal: 13, borderRadius: 14, backgroundColor: '#FCFBFE', borderWidth: 1, borderColor: '#E9E4F5', color: '#353B6B', fontSize: 14 }, scopeDateHint: { color: '#9297B2', fontSize: 9, marginTop: 5 }, scopeDateActions: { marginTop: 18, flexDirection: 'row', gap: 9 }, scopeDateSecondary: { flex: 1, minHeight: 45, borderRadius: 14, backgroundColor: '#F1EEFF', alignItems: 'center', justifyContent: 'center' }, scopeDateSecondaryText: { color: '#72789B', fontSize: 10, fontWeight: '700' }, scopeDatePrimary: { flex: 1, minHeight: 45, borderRadius: 14, backgroundColor: '#8D7CFF', alignItems: 'center', justifyContent: 'center' }, scopeDatePrimaryText: { color: '#FFF', fontSize: 10, fontWeight: '700' },
   structureList: { marginTop: 16, gap: 8 }, structureRow: { padding: 11, borderRadius: 16, flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: '#E9E4F5', backgroundColor: '#FCFBFE' }, structureRowActive: { borderColor: '#D8D1FA', backgroundColor: '#F1EEFF' }, structureCheck: { width: 23, height: 23, borderRadius: 8, borderWidth: 1.5, borderColor: '#CBC6DD', alignItems: 'center', justifyContent: 'center' }, structureCheckOn: { backgroundColor: '#8D7CFF', borderColor: '#8D7CFF' }, structureCheckText: { color: '#FFF', fontSize: 13, fontWeight: '700' }, structureCopy: { flex: 1, marginLeft: 10, marginRight: 5 }, structureLabel: { color: '#353B6B', fontSize: 12, fontWeight: '700' }, structureHelper: { color: '#72789B', fontSize: 9, lineHeight: 13, marginTop: 3 }, structureFooter: { color: '#72789B', fontSize: 10, marginTop: 13, textAlign: 'right' },
@@ -5369,24 +6127,25 @@ const s: any = Object.assign(StyleSheet.create({
   orb: { position: 'absolute', borderRadius: 999, opacity: 0.46 }, orbOne: { width: 270, height: 270, backgroundColor: C.lavender, top: -110, right: -100 }, orbTwo: { width: 230, height: 230, backgroundColor: C.sky, top: 310, left: -155 }, orbThree: { width: 190, height: 190, backgroundColor: C.peach, bottom: 20, right: -110 },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }, overline: { color: C.muted, fontSize: 9, letterSpacing: 1.15, fontWeight: '700' }, pageTitle: { color: C.ink, fontSize: 31, letterSpacing: -0.8, fontWeight: '700', marginTop: 4 }, headerActions: { flexDirection: 'row', alignItems: 'center', gap: 9 }, tinyButton: { width: 39, height: 39, backgroundColor: 'rgba(255,255,255,0.7)', borderRadius: 20, alignItems: 'center', justifyContent: 'center' }, tinyButtonText: { color: C.periwinkle, fontSize: 18 }, avatar: { width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFF8F3', shadowColor: '#666187', shadowOpacity: 0.14, shadowRadius: 9, shadowOffset: { width: 0, height: 4 }, elevation: 3 }, avatarText: { color: C.coral, fontWeight: '700', fontSize: 16 }, avatarDot: { width: 10, height: 10, borderRadius: 5, position: 'absolute', right: 0, bottom: 2, borderWidth: 2, borderColor: '#FFF8F3', backgroundColor: C.sage },
   intro: { fontSize: 15, lineHeight: 21, color: C.muted, marginBottom: 21, maxWidth: 310 }, focusCard: { height: 206, borderRadius: 28, padding: 21, overflow: 'hidden', shadowColor: '#5D598A', shadowOpacity: 0.21, shadowRadius: 19, shadowOffset: { width: 0, height: 10 }, elevation: 7 }, focusHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, focusEyebrow: { color: '#F7F9FF', fontSize: 9, letterSpacing: 1.05, fontWeight: '700' }, focusPickerButton: { minHeight: 27, paddingHorizontal: 9, borderRadius: 10, flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.18)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.32)' }, focusPickerButtonText: { color: '#FFF', fontSize: 8, fontWeight: '700' }, focusPickerButtonArrow: { color: '#FFF', fontSize: 13, marginLeft: 4, marginTop: -3 }, focusTitle: { color: '#FFF', fontSize: 26, fontWeight: '700', letterSpacing: -0.5, marginTop: 10 }, focusCopy: { color: '#F5F4FF', fontSize: 12, marginTop: 5, maxWidth: 245 }, focusProgress: { color: '#ECEBFF', fontSize: 9, fontWeight: '700', marginTop: 7 }, focusActions: { position: 'absolute', left: 21, right: 21, bottom: 17, flexDirection: 'row', alignItems: 'center', gap: 8 }, lightAction: { flex: 1, borderRadius: 15, paddingHorizontal: 13, paddingVertical: 9, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: 'rgba(255,255,255,0.22)' }, lightActionText: { fontSize: 11, color: '#FFF', fontWeight: '700' }, lightArrow: { color: '#FFF', fontSize: 16 }, focusJourneyAction: { paddingHorizontal: 11, paddingVertical: 9, borderRadius: 15, borderWidth: 1, borderColor: 'rgba(255,255,255,0.4)' }, focusJourneyActionText: { color: '#FFF', fontSize: 10, fontWeight: '700' }, focusShape: { position: 'absolute', right: -15, bottom: -58, fontSize: 195, color: '#FFF1DF', opacity: 0.55, transform: [{ rotate: '-12deg' }] }, focusPickerShade: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(32,41,84,0.24)' }, focusPickerDismiss: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 }, focusPickerSheet: { maxHeight: '72%', padding: 20, paddingBottom: 28, borderTopLeftRadius: 29, borderTopRightRadius: 29, backgroundColor: '#FBFAFF' }, focusPickerOverline: { color: C.periwinkle, fontSize: 8, letterSpacing: 1, fontWeight: '700', marginTop: 17 }, focusPickerTitle: { color: C.ink, fontSize: 22, fontWeight: '700', marginTop: 5 }, focusPickerHint: { color: C.muted, fontSize: 10, lineHeight: 15, marginTop: 5, marginBottom: 7 }, focusPickerRow: { minHeight: 59, marginTop: 7, paddingHorizontal: 10, borderRadius: 15, flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF', borderWidth: 1, borderColor: '#E8E7F1' }, focusPickerRowSelected: { backgroundColor: '#F3F1FF', borderColor: '#D9D2FA' }, focusPickerMark: { width: 34, height: 34, borderRadius: 12, alignItems: 'center', justifyContent: 'center' }, focusPickerMarkText: { color: '#FFF', fontSize: 15 }, focusPickerCopy: { flex: 1, marginLeft: 9 }, focusPickerBookTitle: { color: C.ink, fontSize: 12, fontWeight: '700' }, focusPickerBookMeta: { color: C.muted, fontSize: 9, marginTop: 3 }, focusPickerCheck: { color: C.periwinkle, fontSize: 17, fontWeight: '700', marginLeft: 8 },
-  sectionBar: { marginTop: 28, marginBottom: 13, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }, sectionTitle: { fontSize: 18, fontWeight: '700', letterSpacing: -0.3, color: C.ink }, link: { color: C.periwinkle, fontSize: 9, fontWeight: '700', letterSpacing: 0.8 }, newProjectButton: { paddingVertical: 8, paddingHorizontal: 10, borderRadius: 11, backgroundColor: '#EEEDFF' }, newProjectText: { color: C.periwinkle, fontSize: 9, fontWeight: '700', letterSpacing: 0.65 }, projectRow: { minHeight: 74, marginBottom: 9, padding: 12, borderRadius: 19, flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.68)' }, projectRowActive: { backgroundColor: '#FFF', shadowColor: '#68638D', shadowOpacity: 0.11, shadowRadius: 11, shadowOffset: { width: 0, height: 5 }, elevation: 2 }, projectMark: { width: 44, height: 44, borderRadius: 15, alignItems: 'center', justifyContent: 'center' }, projectMarkText: { color: '#FFF', fontSize: 18 }, projectCopy: { flex: 1, marginLeft: 12 }, projectTitle: { color: C.ink, fontWeight: '700', fontSize: 14 }, projectDetail: { color: C.muted, marginTop: 4, fontSize: 10, letterSpacing: 0.25 }, continueTag: { paddingHorizontal: 8, paddingVertical: 6, borderRadius: 9, backgroundColor: '#EEEDFF' }, continueTagText: { fontSize: 8, letterSpacing: 0.6, color: C.periwinkle, fontWeight: '700' }, chevron: { color: C.periwinkle, fontSize: 25 }, addProjectRow: { marginTop: 4, borderRadius: 19, borderWidth: 1.5, borderStyle: 'dashed', borderColor: '#C8C8E8', minHeight: 72, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.32)' }, addProjectPlus: { width: 38, height: 38, borderRadius: 14, backgroundColor: '#EEEDFF', alignItems: 'center', justifyContent: 'center' }, addProjectPlusText: { color: C.periwinkle, fontSize: 24, fontWeight: '400' }, addProjectTitle: { color: C.ink, fontSize: 13, fontWeight: '700', marginLeft: 12 }, addProjectSub: { color: C.muted, fontSize: 10, marginLeft: 12, marginTop: 4 },
+  sectionBar: { marginTop: 28, marginBottom: 13, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }, sectionTitle: { fontSize: 18, fontWeight: '700', letterSpacing: -0.3, color: C.ink }, link: { color: C.periwinkle, fontSize: 9, fontWeight: '700', letterSpacing: 0.8 }, newProjectButton: { paddingVertical: 8, paddingHorizontal: 10, borderRadius: 11, backgroundColor: '#EEEDFF' }, newProjectText: { color: C.periwinkle, fontSize: 9, fontWeight: '700', letterSpacing: 0.65 }, projectRow: { minHeight: 74, marginBottom: 9, padding: 12, borderRadius: 19, flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.68)' }, projectRowActive: { backgroundColor: '#FFF', shadowColor: '#68638D', shadowOpacity: 0.11, shadowRadius: 11, shadowOffset: { width: 0, height: 5 }, elevation: 2 }, projectMark: { width: 44, height: 44, borderRadius: 15, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }, libraryProjectCover: { width: '100%', height: '100%' }, projectMarkText: { color: '#FFF', fontSize: 18 }, projectCopy: { flex: 1, marginLeft: 12 }, projectTitle: { color: C.ink, fontWeight: '700', fontSize: 14 }, projectDetail: { color: C.muted, marginTop: 4, fontSize: 10, letterSpacing: 0.25 }, continueTag: { paddingHorizontal: 8, paddingVertical: 6, borderRadius: 9, backgroundColor: '#EEEDFF' }, continueTagText: { fontSize: 8, letterSpacing: 0.6, color: C.periwinkle, fontWeight: '700' }, chevron: { color: C.periwinkle, fontSize: 25 }, addProjectRow: { marginTop: 4, borderRadius: 19, borderWidth: 1.5, borderStyle: 'dashed', borderColor: '#C8C8E8', minHeight: 72, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.32)' }, addProjectPlus: { width: 38, height: 38, borderRadius: 14, backgroundColor: '#EEEDFF', alignItems: 'center', justifyContent: 'center' }, addProjectPlusText: { color: C.periwinkle, fontSize: 24, fontWeight: '400' }, addProjectTitle: { color: C.ink, fontSize: 13, fontWeight: '700', marginLeft: 12 }, addProjectSub: { color: C.muted, fontSize: 10, marginLeft: 12, marginTop: 4 },
   modalShade: { flex: 1, backgroundColor: 'rgba(29, 33, 69, 0.35)', justifyContent: 'flex-end' }, composerSheet: { height: '88%', paddingHorizontal: 20, paddingTop: 12, paddingBottom: 26, backgroundColor: '#FAFAFF', borderTopLeftRadius: 32, borderTopRightRadius: 32 }, sheetHandle: { width: 38, height: 4, borderRadius: 4, backgroundColor: '#D9D9E7', alignSelf: 'center' }, composerHeader: { marginTop: 17, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }, composerOverline: { color: C.periwinkle, letterSpacing: 1, fontSize: 9, fontWeight: '700' }, composerTitle: { color: C.ink, fontSize: 23, letterSpacing: -0.5, fontWeight: '700', marginTop: 5 }, closeButton: { height: 34, width: 34, borderRadius: 17, backgroundColor: '#F0F0F9', alignItems: 'center', justifyContent: 'center' }, closeButtonText: { color: C.muted, fontSize: 23, lineHeight: 24 }, projectInput: { marginTop: 17, minHeight: 50, paddingHorizontal: 15, backgroundColor: '#FFF', borderRadius: 15, color: C.ink, fontSize: 14, borderWidth: 1, borderColor: '#E5E5F0' }, typePrompt: { color: C.muted, fontSize: 9, letterSpacing: 0.9, fontWeight: '700', marginTop: 20, marginBottom: 10 }, typeScroller: { flex: 1 }, typeGrid: { paddingBottom: 14, gap: 8 }, typeCard: { padding: 10, minHeight: 63, borderRadius: 17, flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: '#EBEBF2', backgroundColor: '#FFF' }, typeCardSelected: { borderColor: C.periwinkle, backgroundColor: '#F4F2FF' }, typeIcon: { width: 35, height: 35, borderRadius: 12, alignItems: 'center', justifyContent: 'center' }, typeIconText: { color: '#FFF', fontSize: 16 }, typeCopy: { flex: 1, marginLeft: 10 }, typeName: { color: C.ink, fontSize: 12, fontWeight: '700' }, typeExample: { color: C.muted, fontSize: 9, marginTop: 3 }, typeCheck: { width: 20, height: 20, borderRadius: 10, borderWidth: 1.5, borderColor: '#D2D4E2', alignItems: 'center', justifyContent: 'center' }, typeCheckSelected: { backgroundColor: C.periwinkle, borderColor: C.periwinkle }, typeCheckText: { color: '#FFF', fontSize: 11, fontWeight: '700' }, createProjectButton: { marginTop: 11, backgroundColor: C.periwinkle, height: 53, borderRadius: 17, paddingHorizontal: 18, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', shadowColor: '#7470C9', shadowOpacity: 0.28, shadowRadius: 12, shadowOffset: { width: 0, height: 6 }, elevation: 5 }, createProjectButtonText: { color: '#FFF', fontSize: 14, fontWeight: '700' }, createProjectArrow: { color: '#FFF', fontSize: 21 },
   structureLegend: { marginTop: 12, flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 10 }, structureLegendItem: { flexDirection: 'row', alignItems: 'center', gap: 5 }, structureLegendDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#D9DAE8' }, structureLegendDotRecommended: { backgroundColor: C.periwinkle }, structureLegendText: { color: C.muted, fontSize: 8, fontWeight: '700' }, structureLegendHint: { color: '#A4A7BE', fontSize: 8, marginLeft: 3 }, recommendationLegend: { marginTop: 13, padding: 10, borderRadius: 15, backgroundColor: '#FAF9FF', borderWidth: 1, borderColor: '#E8E5F7' }, recommendationLegendTitle: { color: C.muted, fontSize: 7, letterSpacing: 0.8, fontWeight: '700' }, recommendationLegendItems: { marginTop: 7, flexDirection: 'row', flexWrap: 'wrap', gap: 5 }, recommendationLegendChip: { paddingHorizontal: 6, paddingVertical: 4, borderRadius: 6 }, recommendationLegendText: { fontSize: 6, letterSpacing: 0.35, fontWeight: '700' }, structureFilterRow: { marginTop: 13, padding: 4, borderRadius: 14, backgroundColor: '#F1F0F8', flexDirection: 'row', gap: 4 }, structureFilterButton: { flex: 1, paddingVertical: 7, borderRadius: 10, alignItems: 'center' }, structureFilterButtonActive: { backgroundColor: '#FFF', shadowColor: '#6E6A91', shadowOpacity: 0.08, shadowRadius: 5, shadowOffset: { width: 0, height: 2 }, elevation: 1 }, structureFilterText: { color: C.muted, fontSize: 8, fontWeight: '700' }, structureFilterTextActive: { color: C.ink }, structureChecklistHeader: { marginTop: 13, padding: 11, borderRadius: 15, backgroundColor: '#F4F2FF', borderWidth: 1, borderColor: '#E4E1F4', flexDirection: 'row', alignItems: 'center' }, structureChecklistCopy: { flex: 1 }, structureChecklistTitle: { color: C.ink, fontSize: 9, letterSpacing: 0.8, fontWeight: '700' }, structureChecklistHint: { color: C.muted, fontSize: 9, marginTop: 4 }, structureCategory: { color: '#9A9CB1', fontSize: 6, letterSpacing: 0.7, fontWeight: '700', marginBottom: 3 }, partTag: { paddingHorizontal: 5, paddingVertical: 3, borderRadius: 5, fontSize: 6, letterSpacing: 0.35, fontWeight: '700' }, essentialTag: { color: '#A45467', backgroundColor: '#FFE7E6' }, stronglyRecommendedTag: { color: '#715BC3', backgroundColor: '#E9E1FF' }, recommendedTag: { color: C.periwinkle, backgroundColor: '#EEEDFF' }, commonTag: { color: '#4E8B67', backgroundColor: '#E8F6EA' }, whenRelevantTag: { color: '#A97819', backgroundColor: '#FFF3CB' }, optionalTag: { color: C.muted, backgroundColor: '#F1F1F6' },
   structureFooterRow: { marginTop: 13, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, structureFooterCompact: { color: C.muted, fontSize: 10 }, structurePager: { flexDirection: 'row', alignItems: 'center', gap: 7 }, structurePagerButton: { width: 27, height: 27, borderRadius: 10, backgroundColor: '#EEEDFF', alignItems: 'center', justifyContent: 'center' }, structurePagerButtonDisabled: { opacity: 0.35 }, structurePagerButtonText: { color: C.periwinkle, fontSize: 19, lineHeight: 21 }, structurePagerCount: { color: C.muted, fontSize: 9, fontWeight: '700', minWidth: 27, textAlign: 'center' }, referencePlanCard: { marginTop: 16, padding: 13, borderRadius: 18, backgroundColor: '#F7F7FA', borderWidth: 1, borderColor: '#E6E5ED' }, referencePlanHeader: { flexDirection: 'row', alignItems: 'flex-start' }, referencePlanIcon: { width: 33, height: 33, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: '#E8E8EE' }, referencePlanIconText: { color: '#8F91A3', fontSize: 16 }, referencePlanCopy: { flex: 1, minWidth: 0, marginLeft: 9, marginRight: 7 }, referencePlanEyebrow: { color: '#9A9CAA', fontSize: 7, letterSpacing: 0.7, fontWeight: '700' }, referencePlanTitle: { color: C.ink, fontSize: 14, fontWeight: '700', marginTop: 3 }, referencePlanHint: { color: '#9294A4', fontSize: 9, lineHeight: 13, marginTop: 4 }, referencePlanToggle: { minWidth: 43, minHeight: 27, paddingHorizontal: 7, borderRadius: 9, backgroundColor: '#E8E8EE', alignItems: 'center', justifyContent: 'center' }, referencePlanToggleOn: { backgroundColor: '#DCD7FB' }, referencePlanToggleText: { color: '#999BAA', fontSize: 7, letterSpacing: 0.5, fontWeight: '700' }, referencePlanToggleTextOn: { color: C.periwinkle }, referencePlanBody: { marginTop: 11, paddingTop: 10, borderTopWidth: 1, borderTopColor: '#E4E3EA' }, referencePlanFieldLabel: { color: '#999BAA', fontSize: 7, letterSpacing: 0.65, fontWeight: '700' }, referencePlanInput: { minHeight: 70, marginTop: 6, padding: 9, borderRadius: 10, backgroundColor: '#FFF', borderWidth: 1, borderColor: '#E3E2EA', color: C.ink, fontSize: 10, lineHeight: 15, textAlignVertical: 'top' }, referencePlanExample: { color: '#A4A5B1', fontSize: 8, lineHeight: 12, marginTop: 7 },
   storyMapPager: { marginTop: 16, padding: 9, borderRadius: 16, backgroundColor: '#F4F2FF', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, storyMapPagerButton: { width: 30, height: 30, borderRadius: 10, backgroundColor: '#FFF', alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: '#E4E1F4' }, storyMapPagerButtonDisabled: { opacity: 0.35 }, storyMapPagerButtonText: { color: C.periwinkle, fontSize: 20, lineHeight: 22 }, storyMapPagerCopy: { flex: 1, alignItems: 'center' }, storyMapPagerLabel: { color: C.ink, fontSize: 11, fontWeight: '700' }, storyMapPagerCount: { color: C.muted, fontSize: 8, letterSpacing: 0.7, fontWeight: '700', marginTop: 3 }, storyMapPageHint: { color: C.muted, fontSize: 10, lineHeight: 15, marginTop: 6, marginBottom: 2 },
-  writeProjectBar: { marginTop: 3, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-start', gap: 7 }, writeProjectSwitcher: { maxWidth: 235, minHeight: 50, flexShrink: 1, paddingHorizontal: 9, paddingVertical: 7, borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.86)', borderWidth: 1, borderColor: '#E0DDF8', flexDirection: 'row', alignItems: 'center' }, writeProjectIcon: { width: 34, height: 34, borderRadius: 12, alignItems: 'center', justifyContent: 'center' }, writeProjectIconText: { color: '#FFF', fontSize: 15 }, writeProjectCopy: { flex: 1, marginLeft: 9 }, writeProjectOverline: { color: C.periwinkle, fontSize: 7, letterSpacing: 0.8, fontWeight: '700' }, writeProjectTitle: { color: C.ink, fontSize: 12, fontWeight: '700', marginTop: 2 }, writeProjectChevron: { color: C.periwinkle, fontSize: 19, lineHeight: 20, marginLeft: 8 }, writeJourneyLink: { minHeight: 37, paddingHorizontal: 9, borderRadius: 13, backgroundColor: '#F4F2FF', flexDirection: 'row', alignItems: 'center', gap: 4 }, writeJourneyLinkText: { color: C.periwinkle, fontSize: 9, fontWeight: '700' }, writeJourneyLinkArrow: { color: C.periwinkle, fontSize: 13 }, writeProgress: { width: 95, flexShrink: 0, marginLeft: 8, paddingVertical: 7, paddingHorizontal: 8, borderRadius: 13, backgroundColor: '#EEEDFF', borderWidth: 1, borderColor: '#E1DDFB' }, writeProgressTop: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between' }, writeProgressValue: { color: C.ink, fontSize: 14, fontWeight: '700' }, writeProgressLabel: { color: C.periwinkle, fontSize: 7, letterSpacing: 0.5, fontWeight: '700' }, writeProgressTrack: { height: 4, marginTop: 5, borderRadius: 3, backgroundColor: '#DCD8F4', overflow: 'hidden' }, writeProgressFill: { height: 4, borderRadius: 3, backgroundColor: C.periwinkle }, writeProgressText: { color: C.muted, fontSize: 7, letterSpacing: 0.35, fontWeight: '700', marginTop: 5 }, writeFormat: { color: C.muted, fontSize: 9, marginTop: 10 },
-  writeAssistArea: { marginTop: 11 }, writeAssistTiles: { flexDirection: 'row', alignItems: 'center', gap: 10 }, writeAssistTile: { width: 52, height: 52, borderRadius: 16, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFF', borderWidth: 1, borderColor: '#E8E7F1', shadowColor: '#777292', shadowOpacity: 0.06, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 1 }, writeAssistTileHelpActive: { backgroundColor: '#F2F0FF', borderColor: '#C8C1F7' }, writeAssistTileNotesActive: { backgroundColor: '#FFF9E9', borderColor: '#F2D994' }, writeAssistTileCompassActive: { backgroundColor: '#EEF8FF', borderColor: '#BFE1F1' }, writeAssistIcon: { width: 31, height: 31, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: C.periwinkle }, writeAssistIconHelp: { backgroundColor: C.periwinkle }, writeAssistIconNotes: { backgroundColor: '#F5C75C' }, writeAssistIconCompass: { backgroundColor: '#76B8DC' }, writeAssistIconText: { color: '#FFF', fontSize: 14 }, writeAssistPanel: { marginTop: 10, padding: 13, borderRadius: 18, borderWidth: 1 }, writeAssistPanelHelp: { backgroundColor: '#F7F5FF', borderColor: '#E4E0FC' }, writeAssistPanelNotes: { backgroundColor: '#FFFDF4', borderColor: '#F5E5B7' }, writeAssistPanelCompass: { backgroundColor: '#F3FAFF', borderColor: '#DFF1FB' }, writeAssistPanelHeader: { paddingBottom: 8, borderBottomWidth: 1, borderBottomColor: '#F1DEAA' }, writeAssistPanelTitle: { color: C.ink, fontSize: 8, letterSpacing: 0.9, fontWeight: '700' }, writeAssistPanelHint: { color: '#A97819', fontSize: 9, lineHeight: 13, marginTop: 4 }, writeAssistBar: { marginTop: 11, borderRadius: 17, backgroundColor: '#F2F0FF', borderWidth: 1, borderColor: '#E4E0FC' }, writeAssistButton: { minHeight: 55, paddingHorizontal: 11, flexDirection: 'row', alignItems: 'center' }, writeAssistCopy: { flex: 1, marginLeft: 9 }, writeAssistTitle: { color: C.ink, fontSize: 11, fontWeight: '700' }, writeAssistSub: { color: C.muted, fontSize: 8, marginTop: 3 }, writeAssistChevron: { color: C.periwinkle, fontSize: 18 }, writeHelpDrawer: { padding: 11, paddingTop: 0 }, writeHelpIntro: { color: C.muted, fontSize: 9, lineHeight: 14, paddingVertical: 9, borderTopWidth: 1, borderTopColor: '#E2DFF5' }, writeHelpPrompt: { minHeight: 37, paddingHorizontal: 10, marginTop: 6, borderRadius: 11, flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF' }, writeHelpPromptSelected: { backgroundColor: '#FFF6DB' }, writeHelpPromptText: { flex: 1, color: C.ink, fontSize: 10 }, writeHelpPromptTextSelected: { color: '#8C6B29', fontWeight: '700' }, writeHelpPromptArrow: { color: C.periwinkle, fontSize: 15 }, writeHelpSelected: { color: '#A97819', fontSize: 9, lineHeight: 14, marginTop: 9 },
+  writeProjectBar: { marginTop: 3, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-start', gap: 8 }, writeProjectSwitcher: { maxWidth: 235, minHeight: 52, flexShrink: 1, paddingHorizontal: 9, paddingVertical: 7, borderRadius: 16, backgroundColor: '#FFFEFC', borderWidth: 1, borderColor: '#D9D4F1', shadowColor: '#726C98', shadowOpacity: 0.08, shadowRadius: 10, shadowOffset: { width: 0, height: 3 }, elevation: 2, flexDirection: 'row', alignItems: 'center' }, writeProjectIcon: { width: 34, height: 34, borderRadius: 12, alignItems: 'center', justifyContent: 'center' }, writeProjectIconText: { color: '#FFF', fontSize: 15 }, writeProjectCopy: { flex: 1, marginLeft: 9 }, writeProjectOverline: { color: C.periwinkle, fontSize: 7, letterSpacing: 0.8, fontWeight: '700' }, writeProjectTitle: { color: C.ink, fontSize: 12, fontWeight: '700', marginTop: 2 }, writeProjectChevron: { color: C.periwinkle, fontSize: 19, lineHeight: 20, marginLeft: 8 }, writeJourneyLink: { minHeight: 35, paddingHorizontal: 8, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.52)', borderWidth: 1, borderColor: 'rgba(216,211,245,0.72)', flexDirection: 'row', alignItems: 'center', gap: 4 }, writeJourneyLinkText: { color: '#7774A7', fontSize: 9, fontWeight: '700' }, writeJourneyLinkArrow: { color: '#7774A7', fontSize: 13 }, writeHero: { marginTop: 14, padding: 16, borderRadius: 24, backgroundColor: '#F3F1FF', borderWidth: 1, borderColor: '#E3DDF9', shadowColor: '#7772AF', shadowOpacity: 0.08, shadowRadius: 14, shadowOffset: { width: 0, height: 6 }, elevation: 2 }, writeHeroCompact: { padding: 15 }, writeProgress: { width: 102, flexShrink: 0, marginLeft: 12, paddingVertical: 3, paddingHorizontal: 0, borderRadius: 0, backgroundColor: 'transparent' }, writeProgressTop: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between' }, writeProgressValue: { color: C.ink, fontSize: 16, fontWeight: '700' }, writeProgressLabel: { color: C.muted, fontSize: 7, letterSpacing: 0.55, fontWeight: '700' }, writeProgressTrack: { height: 5, marginTop: 5, borderRadius: 3, backgroundColor: '#E4E1EE', overflow: 'hidden' }, writeProgressFill: { height: 5, borderRadius: 3, backgroundColor: C.periwinkle }, writeProgressText: { color: C.muted, fontSize: 7, letterSpacing: 0.35, fontWeight: '700', marginTop: 5 }, writeFormat: { color: C.muted, fontSize: 9, marginTop: 10 }, writeContinueButton: { marginTop: 15, minHeight: 64, paddingHorizontal: 14, paddingVertical: 11, borderRadius: 17, backgroundColor: C.ink, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', shadowColor: '#39365B', shadowOpacity: 0.18, shadowRadius: 10, shadowOffset: { width: 0, height: 5 }, elevation: 3 }, writeContinueCopy: { flex: 1, minWidth: 0 }, writeContinueLabel: { color: '#FFF', fontSize: 10, letterSpacing: 0.85, fontWeight: '800' }, writeContinueHint: { color: '#C9C9E2', fontSize: 10, lineHeight: 14, marginTop: 4 }, writeContinueArrow: { color: '#FFF', fontSize: 28, lineHeight: 30, marginLeft: 13, marginTop: -2 },
+  writeAssistArea: { marginTop: 12 }, writeAssistTiles: { padding: 5, borderRadius: 17, backgroundColor: 'rgba(255,255,255,0.54)', borderWidth: 1, borderColor: 'rgba(224,220,238,0.7)', flexDirection: 'row', alignItems: 'center', gap: 8 }, writeAssistTile: { width: 52, height: 52, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FBFAFD', borderWidth: 1, borderColor: '#E6E2EF', shadowColor: '#777292', shadowOpacity: 0.04, shadowRadius: 7, shadowOffset: { width: 0, height: 2 }, elevation: 1 }, writeAssistTileHelpActive: { backgroundColor: '#F0EDFF', borderColor: '#C7C0F4' }, writeAssistTileNotesActive: { backgroundColor: '#F7F4FF', borderColor: '#D6D0EE' }, writeAssistTileCompassActive: { backgroundColor: '#F3F4FB', borderColor: '#CDD3E5' }, writeAssistIcon: { width: 29, height: 29, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: C.periwinkle }, writeAssistIconHelp: { backgroundColor: '#827BE0' }, writeAssistIconNotes: { backgroundColor: '#A69DCA' }, writeAssistIconCompass: { backgroundColor: '#8B9CBF' }, writeAssistIconText: { color: '#FFF', fontSize: 13 }, writeAssistPanel: { marginTop: 10, padding: 13, borderRadius: 18, borderWidth: 1 }, writeAssistPanelHelp: { backgroundColor: '#F7F5FF', borderColor: '#E4E0FC' }, writeAssistPanelNotes: { backgroundColor: '#FFFDF4', borderColor: '#F5E5B7' }, writeAssistPanelCompass: { backgroundColor: '#F3FAFF', borderColor: '#DFF1FB' }, writeAssistPanelHeader: { paddingBottom: 8, borderBottomWidth: 1, borderBottomColor: '#F1DEAA' }, writeAssistPanelTitle: { color: C.ink, fontSize: 8, letterSpacing: 0.9, fontWeight: '700' }, writeAssistPanelHint: { color: '#A97819', fontSize: 9, lineHeight: 13, marginTop: 4 }, writeAssistBar: { marginTop: 11, borderRadius: 17, backgroundColor: '#F2F0FF', borderWidth: 1, borderColor: '#E4E0FC' }, writeAssistButton: { minHeight: 55, paddingHorizontal: 11, flexDirection: 'row', alignItems: 'center' }, writeAssistCopy: { flex: 1, marginLeft: 9 }, writeAssistTitle: { color: C.ink, fontSize: 11, fontWeight: '700' }, writeAssistSub: { color: C.muted, fontSize: 8, marginTop: 3 }, writeAssistChevron: { color: C.periwinkle, fontSize: 18 }, writeHelpDrawer: { padding: 11, paddingTop: 0 }, writeHelpIntro: { color: C.muted, fontSize: 9, lineHeight: 14, paddingVertical: 9, borderTopWidth: 1, borderTopColor: '#E2DFF5' }, writeHelpPrompt: { minHeight: 37, paddingHorizontal: 10, marginTop: 6, borderRadius: 11, flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF' }, writeHelpPromptSelected: { backgroundColor: '#FFF6DB' }, writeHelpPromptText: { flex: 1, color: C.ink, fontSize: 10 }, writeHelpPromptTextSelected: { color: '#8C6B29', fontWeight: '700' }, writeHelpPromptArrow: { color: C.periwinkle, fontSize: 15 }, writeHelpSelected: { color: '#A97819', fontSize: 9, lineHeight: 14, marginTop: 9 },
   writeSessionBar: { marginTop: 13, minHeight: 42, paddingHorizontal: 13, borderRadius: 14, backgroundColor: '#FFF', flexDirection: 'row', alignItems: 'center', shadowColor: '#777391', shadowOpacity: 0.06, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 1 }, writeSessionMetric: { flexDirection: 'row', alignItems: 'baseline', gap: 4 }, writeSessionValue: { color: C.ink, fontSize: 12, fontWeight: '700' }, writeSessionLabel: { color: C.muted, fontSize: 7, letterSpacing: 0.55, fontWeight: '700' }, writeSessionDot: { color: '#B1B2C4', marginHorizontal: 8, fontSize: 12 }, writeSessionGoal: { flex: 1 }, writeSessionGoalText: { color: C.periwinkle, fontSize: 10, fontWeight: '700' }, writeSessionChevron: { color: C.muted, fontSize: 16 }, writeSessionDetails: { marginTop: 1, padding: 12, borderRadius: 14, backgroundColor: '#F8F7FF', flexDirection: 'row', justifyContent: 'space-between' }, writeSessionDetailValue: { color: C.ink, fontSize: 12, fontWeight: '700', textAlign: 'center' }, writeSessionDetailLabel: { color: C.muted, fontSize: 6, letterSpacing: 0.45, fontWeight: '700', marginTop: 3, textAlign: 'center' },
   writeCompass: { marginTop: 11, padding: 13, borderRadius: 19, backgroundColor: '#EEF8FF', borderWidth: 1, borderColor: '#DFF1FB' }, writeCompassHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, writeCompassTitleRow: { flexDirection: 'row', alignItems: 'center', flex: 1 }, writeCompassIcon: { width: 31, height: 31, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: '#76B8DC' }, writeCompassIconText: { color: '#FFF', fontSize: 16 }, writeCompassKicker: { color: '#4B7B9D', fontSize: 8, letterSpacing: 0.85, fontWeight: '700', marginLeft: 9 }, writeCompassSub: { color: '#6D8FA5', fontSize: 8, marginTop: 3, marginLeft: 9 }, writeCompassRefresh: { minHeight: 28, paddingHorizontal: 8, borderRadius: 9, backgroundColor: '#FFF' }, writeCompassRefreshText: { color: '#4B7B9D', fontSize: 8, fontWeight: '700' }, writeCompassRow: { marginTop: 12, paddingTop: 9, borderTopWidth: 1, borderTopColor: '#D9EDF6' }, writeCompassLabel: { color: '#4B7B9D', fontSize: 7, letterSpacing: 0.7, fontWeight: '700' }, writeCompassText: { color: '#5D7890', fontSize: 10, lineHeight: 15, marginTop: 3 }, writeEditorLabelGroup: { flexDirection: 'row', alignItems: 'center', gap: 8 }, writeContextButton: { minHeight: 25, paddingHorizontal: 7, borderRadius: 9, flexDirection: 'row', alignItems: 'center', backgroundColor: '#F1EEFF' }, writeContextIcon: { color: C.periwinkle, fontSize: 11 }, writeContextText: { color: C.periwinkle, fontSize: 8, fontWeight: '700', marginLeft: 4 }, writeContextShade: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(32,41,84,0.23)' }, writeContextDismiss: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 }, writeContextSheet: { maxHeight: '82%', padding: 20, paddingBottom: 27, borderTopLeftRadius: 29, borderTopRightRadius: 29, backgroundColor: '#FBFAFF' }, writeContextHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 11 }, writeContextKicker: { color: C.periwinkle, fontSize: 8, letterSpacing: 1, fontWeight: '700' }, writeContextTitle: { color: C.ink, fontSize: 22, fontWeight: '700', marginTop: 5 }, writeContextRow: { paddingVertical: 11, borderTopWidth: 1, borderTopColor: '#ECEBF3', flexDirection: 'row', alignItems: 'flex-start' }, writeContextRowIcon: { width: 30, height: 30, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F2F0FF' }, writeContextRowIconText: { color: C.periwinkle, fontSize: 14 }, writeContextRowCopy: { flex: 1, marginLeft: 10 }, writeContextRowLabel: { color: C.ink, fontSize: 11, fontWeight: '700' }, writeContextRowValue: { color: C.muted, fontSize: 10, lineHeight: 15, marginTop: 3 },
-  writePartHeader: { marginTop: 18, padding: 14, borderRadius: 21, backgroundColor: '#FFF', flexDirection: 'row', alignItems: 'center', shadowColor: '#706C98', shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 5 }, elevation: 2 }, writePartNumber: { width: 44, height: 44, borderRadius: 15, backgroundColor: C.periwinkle, alignItems: 'center', justifyContent: 'center', marginRight: 12 }, writePartNumberText: { color: '#FFF', fontSize: 13, fontWeight: '700' }, writePartCopy: { flex: 1 }, writePartKicker: { color: C.periwinkle, fontSize: 8, letterSpacing: 0.9, fontWeight: '700' }, writePartTitle: { color: C.ink, fontSize: 19, fontWeight: '700', marginTop: 4 }, writePartHelper: { color: C.muted, fontSize: 10, lineHeight: 14, marginTop: 4 },
+  writePartHeader: { marginTop: 16, padding: 13, borderRadius: 18, backgroundColor: 'rgba(255,255,255,0.86)', borderWidth: 1, borderColor: '#EEEAF4', flexDirection: 'row', alignItems: 'center', shadowColor: '#706C98', shadowOpacity: 0.05, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 1 }, writePartNumber: { width: 42, height: 42, borderRadius: 14, backgroundColor: C.periwinkle, alignItems: 'center', justifyContent: 'center', marginRight: 12 }, writePartNumberText: { color: '#FFF', fontSize: 13, fontWeight: '700' }, writePartCopy: { flex: 1 }, writePartKicker: { color: C.periwinkle, fontSize: 8, letterSpacing: 0.7, fontWeight: '700' }, writePartTitle: { color: C.ink, fontSize: 19, fontWeight: '700', marginTop: 4 }, writePartHelper: { color: C.muted, fontSize: 10, lineHeight: 14, marginTop: 4 },
   writeNotesBanner: { marginTop: 13, padding: 13, borderRadius: 19, backgroundColor: '#FFF9E9', borderWidth: 1, borderColor: '#F5E5B7', shadowColor: '#B4914D', shadowOpacity: 0.08, shadowRadius: 9, shadowOffset: { width: 0, height: 4 }, elevation: 1 }, writeNotesTapArea: { flexDirection: 'row', alignItems: 'flex-start' }, writeNotesIcon: { width: 30, height: 30, borderRadius: 11, backgroundColor: '#F5C75C', alignItems: 'center', justifyContent: 'center', marginRight: 10 }, writeNotesIconText: { color: '#FFF', fontSize: 13 }, writeNotesCopy: { flex: 1 }, writeNotesTitleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, writeNotesLabel: { color: '#A97819', fontSize: 8, letterSpacing: 0.75, fontWeight: '700' }, writeNotesAction: { color: '#A97819', fontSize: 7, letterSpacing: 0.65, fontWeight: '700' }, writeNoteRow: { marginTop: 6 }, writeNoteLabel: { color: '#9A7628', fontSize: 8, fontWeight: '700' }, writeNoteText: { color: '#7E682F', fontSize: 10, lineHeight: 14, marginTop: 2 }, writeNotesEmpty: { color: '#8C6B29', fontSize: 10, lineHeight: 15, marginTop: 5 }, writeSavedNote: { marginTop: 10, marginLeft: 40, paddingTop: 9, borderTopWidth: 1, borderTopColor: '#F1DEAA' }, writeSavedNoteLabel: { color: '#A97819', fontSize: 7, letterSpacing: 0.7, fontWeight: '700' }, writeSavedNoteText: { color: '#7E682F', fontSize: 10, lineHeight: 14, marginTop: 3 }, writeQuickNote: { marginTop: 11, marginLeft: 40, paddingTop: 10, borderTopWidth: 1, borderTopColor: '#F1DEAA' }, writeQuickNoteLabel: { color: '#A97819', fontSize: 7, letterSpacing: 0.7, fontWeight: '700' }, writeQuickNoteInput: { minHeight: 65, padding: 0, paddingTop: 8, color: '#6D5D34', fontSize: 11, lineHeight: 16, textAlignVertical: 'top' },
-  writeEditorCard: { marginTop: 15, padding: 15, borderRadius: 21, backgroundColor: '#FFFDF9', shadowColor: '#807A96', shadowOpacity: 0.12, shadowRadius: 14, shadowOffset: { width: 0, height: 7 }, elevation: 3 }, writeEditorTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }, writeEditorLabel: { color: C.coral, fontSize: 8, letterSpacing: 1.1, fontWeight: '700' }, writeEditorHint: { color: C.muted, fontSize: 8 }, writeEditorInput: { minHeight: 270, padding: 0, paddingTop: 14, color: '#353B5B', fontSize: 16, lineHeight: 25, textAlignVertical: 'top' }, writeTools: { marginTop: 11, paddingTop: 10, borderTopWidth: 1, borderTopColor: '#EEEAF2', flexDirection: 'row', alignItems: 'center', gap: 7 }, writeToolButton: { minHeight: 32, paddingHorizontal: 9, borderRadius: 10, backgroundColor: '#F1EEFF', flexDirection: 'row', alignItems: 'center', gap: 5 }, writeToolDisabled: { opacity: 0.4 }, writeToolIcon: { color: C.periwinkle, fontSize: 11, fontWeight: '700' }, writeToolText: { color: C.ink, fontSize: 9, fontWeight: '700' }, writeToolHint: { color: '#A1A4BB', fontSize: 8, marginLeft: 'auto' }, writeNavigation: { marginTop: 15, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 10 }, writeNextButton: { flex: 1, minHeight: 47, paddingHorizontal: 15, borderRadius: 15, backgroundColor: C.periwinkle, alignItems: 'center', justifyContent: 'center' }, writeNextButtonText: { color: '#FFF', fontSize: 11, fontWeight: '700' }, writeSecondaryButton: { minHeight: 43, paddingHorizontal: 13, borderRadius: 14, borderWidth: 1, borderColor: '#D9DAE8', backgroundColor: 'rgba(255,255,255,0.8)', alignItems: 'center', justifyContent: 'center' }, writeSecondaryButtonText: { color: C.muted, fontSize: 10, fontWeight: '700' }, writeButtonDisabled: { opacity: 0.35 },
+  writeEditorCard: { marginTop: 13, padding: 16, borderRadius: 18, backgroundColor: '#FFFEFC', borderWidth: 1, borderColor: '#E8E5EE', shadowColor: '#807A96', shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 6 }, elevation: 2 }, writeEditorTop: { minHeight: 26, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }, writeEditorLabel: { color: C.periwinkle, fontSize: 8, letterSpacing: 1.05, fontWeight: '700' }, writeEditorHint: { color: C.muted, fontSize: 8 }, writeEditorInput: { minHeight: 300, padding: 0, paddingTop: 16, color: '#313752', fontSize: 16, lineHeight: 26, textAlignVertical: 'top' }, writeTools: { marginTop: 14, paddingTop: 11, borderTopWidth: 1, borderTopColor: '#E9E7F0', flexDirection: 'row', alignItems: 'center', gap: 7 }, writeToolButton: { minHeight: 34, paddingHorizontal: 9, borderRadius: 10, backgroundColor: '#F5F3FD', borderWidth: 1, borderColor: '#E5E0F4', flexDirection: 'row', alignItems: 'center', gap: 5 }, writeToolDisabled: { opacity: 0.4 }, writeToolIcon: { color: C.periwinkle, fontSize: 11, fontWeight: '700' }, writeToolText: { color: C.ink, fontSize: 9, fontWeight: '700' }, writeToolHint: { color: '#A1A4BB', fontSize: 8, marginLeft: 'auto' }, writeNavigation: { marginTop: 15, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 10 }, writeNextButton: { flex: 1, minHeight: 47, paddingHorizontal: 15, borderRadius: 15, backgroundColor: C.periwinkle, alignItems: 'center', justifyContent: 'center' }, writeNextButtonText: { color: '#FFF', fontSize: 11, fontWeight: '700' }, writeSecondaryButton: { minHeight: 43, paddingHorizontal: 13, borderRadius: 14, borderWidth: 1, borderColor: '#D9DAE8', backgroundColor: 'rgba(255,255,255,0.8)', alignItems: 'center', justifyContent: 'center' }, writeSecondaryButtonText: { color: C.muted, fontSize: 10, fontWeight: '700' }, writeButtonDisabled: { opacity: 0.35 },
+  writeAIUndo: { minHeight: 35, marginTop: 8, paddingHorizontal: 12, borderRadius: 12, backgroundColor: '#F1F0FF', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, writeAIUndoText: { color: '#76749B', fontSize: 9, fontWeight: '700' }, writeAIUndoAction: { color: C.periwinkle, fontSize: 9, fontWeight: '800' },
   writeEmpty: { marginTop: 20, padding: 24, borderRadius: 23, backgroundColor: '#FFF', alignItems: 'center' }, writeEmptyIcon: { color: C.periwinkle, fontSize: 25 }, writeEmptyTitle: { color: C.ink, fontSize: 18, fontWeight: '700', marginTop: 10 }, writeEmptyCopy: { color: C.muted, fontSize: 11, lineHeight: 17, textAlign: 'center', marginTop: 7 }, writeComplete: { marginTop: 20, padding: 25, borderRadius: 23, backgroundColor: '#EEF9EF', alignItems: 'center', borderWidth: 1, borderColor: '#D7EED9' }, writeCompleteIcon: { color: '#69A772', fontSize: 28 }, writeCompleteTitle: { color: C.ink, fontSize: 19, fontWeight: '700', textAlign: 'center', marginTop: 9 }, writeCompleteCopy: { color: '#66836B', fontSize: 11, lineHeight: 17, textAlign: 'center', marginTop: 7 },
   writeMenuShade: { flex: 1, backgroundColor: 'rgba(29,33,69,0.22)', paddingTop: 57, paddingHorizontal: 20, alignItems: 'flex-start' }, writeMenu: { width: 292, padding: 12, borderRadius: 22, backgroundColor: '#FBFAFF', shadowColor: '#4E4A7F', shadowOpacity: 0.22, shadowRadius: 20, shadowOffset: { width: 0, height: 9 }, elevation: 8 }, writeMenuHeader: { color: C.periwinkle, fontSize: 8, letterSpacing: 1, fontWeight: '700', marginHorizontal: 5, marginTop: 2 }, writeMenuHint: { color: C.muted, fontSize: 10, marginHorizontal: 5, marginTop: 4, marginBottom: 9 }, writeMenuRow: { minHeight: 56, paddingHorizontal: 9, borderRadius: 15, flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF', borderWidth: 1, borderColor: '#ECEBF4', marginTop: 7 }, writeMenuRowActive: { backgroundColor: '#F3F1FF', borderColor: '#D9D2FA' }, writeMenuIcon: { width: 32, height: 32, borderRadius: 11, alignItems: 'center', justifyContent: 'center' }, writeMenuIconText: { color: '#FFF', fontSize: 14 }, writeMenuCopy: { flex: 1, marginLeft: 9 }, writeMenuProject: { color: C.ink, fontSize: 12, fontWeight: '700' }, writeMenuType: { color: C.muted, fontSize: 9, marginTop: 3 }, writeMenuCheck: { color: C.periwinkle, fontSize: 16, fontWeight: '700', marginLeft: 7 },
-  writeTop: { marginTop: 16, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }, writeTitle: { color: C.ink, fontSize: 29, lineHeight: 34, letterSpacing: -0.7, fontWeight: '700', marginTop: 6 }, saveChip: { marginTop: 8, paddingVertical: 8, paddingHorizontal: 10, borderWidth: 1, borderColor: '#D5D7E5', borderRadius: 12 }, saveChipDone: { backgroundColor: '#EFFAEF', borderColor: '#D5EFD7' }, saveChipText: { color: C.muted, fontSize: 9, letterSpacing: 0.5, fontWeight: '700' }, saveChipTextDone: { color: '#5B9C67' },
+  writeTop: { marginTop: 0, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }, writeTopCompact: { flexDirection: 'column' }, writeTopProgressCompact: { width: '100%', marginLeft: 0, marginTop: 15, paddingTop: 12, borderTopWidth: 1, borderTopColor: '#E4E0F5' }, writeTitle: { color: C.ink, fontSize: 27, lineHeight: 32, letterSpacing: -0.7, fontWeight: '700', marginTop: 6 }, saveChip: { marginTop: 8, paddingVertical: 8, paddingHorizontal: 10, borderWidth: 1, borderColor: '#D5D7E5', borderRadius: 12 }, saveChipDone: { backgroundColor: '#EFFAEF', borderColor: '#D5EFD7' }, saveChipText: { color: C.muted, fontSize: 9, letterSpacing: 0.5, fontWeight: '700' }, saveChipTextDone: { color: '#5B9C67' },
   journeyHeader: { marginTop: -4, flexDirection: 'row', alignItems: 'center', minHeight: 54 }, journeyBackButton: { width: 39, height: 39, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.72)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.8)' }, journeyBackIcon: { color: C.ink, fontSize: 28, lineHeight: 29, marginTop: -2 }, journeyHeaderCopy: { flex: 1, marginLeft: 12 }, journeyOverline: { color: C.muted, fontSize: 8, letterSpacing: 1, fontWeight: '700' }, journeyHeaderTitle: { color: C.ink, fontSize: 23, fontWeight: '700', letterSpacing: -0.4, marginTop: 4 }, journeyOverflowButton: { width: 39, height: 39, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.72)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.8)' }, journeyOverflowText: { color: C.muted, fontSize: 15, letterSpacing: 1, marginTop: -7 }, journeyBookPicker: { marginTop: 13, padding: 10, borderRadius: 18, flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.78)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.86)' }, journeyBookMark: { width: 39, height: 39, borderRadius: 13, alignItems: 'center', justifyContent: 'center' }, journeyBookMarkText: { color: '#FFF', fontSize: 17 }, journeyBookPickerCopy: { flex: 1, marginLeft: 10 }, journeyBookPickerLabel: { color: C.periwinkle, fontSize: 7, letterSpacing: 0.9, fontWeight: '700' }, journeyBookPickerTitle: { color: C.ink, fontSize: 14, fontWeight: '700', marginTop: 3 }, journeyBookPickerMeta: { color: C.muted, fontSize: 9, marginTop: 3 }, journeyPickerChevron: { color: C.periwinkle, fontSize: 20, lineHeight: 21, marginHorizontal: 6 },
   journeySummaryCard: { marginTop: 14, padding: 16, borderRadius: 23, backgroundColor: '#FFF', shadowColor: '#66638D', shadowOpacity: 0.13, shadowRadius: 17, shadowOffset: { width: 0, height: 8 }, elevation: 4 }, journeySummaryTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }, journeySummaryEyebrow: { color: C.periwinkle, fontSize: 8, letterSpacing: 1, fontWeight: '700' }, journeySummaryStage: { color: C.ink, fontSize: 19, fontWeight: '700', marginTop: 5 }, journeySummaryPercent: { color: C.periwinkle, fontSize: 25, fontWeight: '700', letterSpacing: -0.5 }, journeyProgressTrack: { height: 8, marginTop: 13, borderRadius: 4, backgroundColor: '#E8E6F4', overflow: 'hidden' }, journeyProgressFill: { height: 8, borderRadius: 4, backgroundColor: C.periwinkle }, journeyStatsRow: { marginTop: 16, flexDirection: 'row', alignItems: 'center' }, journeyStat: { flex: 1 }, journeyStatDivider: { width: 1, height: 37, backgroundColor: '#E7E6EF', marginHorizontal: 14 }, journeyStatValue: { color: C.ink, fontSize: 15, fontWeight: '700' }, journeyStatLabel: { color: C.muted, fontSize: 7, letterSpacing: 0.65, fontWeight: '700', marginTop: 5 }, journeyStatSub: { color: '#9A9CB1', fontSize: 8, marginTop: 3 }, journeyNextRow: { marginTop: 16, paddingTop: 13, borderTopWidth: 1, borderTopColor: '#EFEFF4', flexDirection: 'row', alignItems: 'center' }, journeyNextDot: { width: 31, height: 31, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFF1C9' }, journeyNextDotText: { color: '#B4871A', fontSize: 14 }, journeyNextCopy: { flex: 1, marginLeft: 9 }, journeyNextEyebrow: { color: '#A97819', fontSize: 7, letterSpacing: 0.7, fontWeight: '700' }, journeyNextTitle: { color: C.ink, fontSize: 12, fontWeight: '700', marginTop: 3 }, journeyNextMeta: { color: '#9A9CB1', fontSize: 8, marginTop: 4 }, journeyNextArrow: { color: C.periwinkle, fontSize: 19 }, journeyContinueButton: { marginTop: 14, minHeight: 50, paddingHorizontal: 14, borderRadius: 16, backgroundColor: C.periwinkle, flexDirection: 'row', alignItems: 'center', shadowColor: '#7772CF', shadowOpacity: 0.25, shadowRadius: 11, shadowOffset: { width: 0, height: 6 }, elevation: 4 }, journeyContinueText: { color: '#FFF', fontSize: 12, fontWeight: '700' }, journeyContinueAction: { flex: 1, color: '#EDEBFF', fontSize: 9, textAlign: 'right', marginRight: 9 }, journeyContinueArrow: { color: '#FFF', fontSize: 18 },
-  journeyMapHeading: { marginTop: 27, marginBottom: 4, flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between' }, journeyMapEyebrow: { color: C.muted, fontSize: 8, letterSpacing: 0.9, fontWeight: '700' }, journeyMapTitle: { color: C.ink, fontSize: 17, fontWeight: '700', marginTop: 5 }, journeyMapHint: { color: '#9A9CB1', fontSize: 8, marginBottom: 2 }, journeyMap: { position: 'relative', marginTop: 9 }, journeyRoute: { position: 'absolute', height: 3, borderRadius: 3, backgroundColor: '#D7D4EA', shadowColor: '#FFF', shadowOpacity: 0.8, shadowRadius: 2, shadowOffset: { width: 0, height: 1 } }, journeyRouteComplete: { backgroundColor: C.periwinkle }, journeyMilestone: { position: 'absolute', alignItems: 'center' }, journeyNode: { width: 55, height: 55, borderRadius: 28, alignItems: 'center', justifyContent: 'center', borderWidth: 4, shadowColor: '#68638D', shadowOpacity: 0.18, shadowRadius: 11, shadowOffset: { width: 0, height: 5 }, elevation: 4 }, journeyNodeComplete: { backgroundColor: C.periwinkle, borderColor: '#DDD9FF' }, journeyNodeCurrent: { backgroundColor: C.coral, borderColor: '#FFE0D4' }, journeyNodeFuture: { backgroundColor: '#F5F4FA', borderColor: '#D9D8E6', shadowOpacity: 0.06 }, journeyNodeIcon: { color: '#FFF', fontSize: 21, fontWeight: '700' }, journeyMilestoneCard: { width: 142, marginTop: 8, padding: 10, borderRadius: 15, backgroundColor: 'rgba(255,255,255,0.88)', borderWidth: 1, borderColor: 'rgba(231,230,242,0.95)', shadowColor: '#777391', shadowOpacity: 0.08, shadowRadius: 9, shadowOffset: { width: 0, height: 4 }, elevation: 2 }, journeyMilestoneCardCurrent: { backgroundColor: '#FFF7F0', borderColor: '#F4D5C7' }, journeyMilestoneCardComplete: { borderColor: '#DDD9FA' }, journeyMilestoneTitleRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 5 }, journeyMilestoneTitle: { flex: 1, color: C.ink, fontSize: 11, fontWeight: '700', lineHeight: 14 }, journeyMilestoneState: { fontSize: 6, letterSpacing: 0.45, fontWeight: '700', marginTop: 1 }, journeyStateComplete: { color: '#6A71B5' }, journeyStateCurrent: { color: C.coral }, journeyStateFuture: { color: '#A7A8BB' }, journeyMilestoneDetail: { color: C.muted, fontSize: 8, lineHeight: 12, marginTop: 5 },
+  journeyMapHeading: { marginTop: 31, marginBottom: 7, flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between' }, journeyMapEyebrow: { color: C.muted, fontSize: 8, letterSpacing: 0.9, fontWeight: '700' }, journeyMapTitle: { color: C.ink, fontSize: 17, fontWeight: '700', marginTop: 5 }, journeyMapHint: { color: '#747B9C', fontSize: 8, marginBottom: 2, paddingHorizontal: 8, paddingVertical: 5, borderRadius: 9, backgroundColor: '#F1F0F8' }, journeyMap: { position: 'relative', marginTop: 10, borderWidth: 1, borderColor: 'rgba(255,255,255,0.78)' }, journeyRoute: { position: 'absolute', height: 3, borderRadius: 3, backgroundColor: '#D7D4EA', shadowColor: '#FFF', shadowOpacity: 0.8, shadowRadius: 2, shadowOffset: { width: 0, height: 1 } }, journeyRouteComplete: { backgroundColor: C.periwinkle }, journeyMilestone: { position: 'absolute', alignItems: 'center' }, journeyNode: { width: 55, height: 55, borderRadius: 28, alignItems: 'center', justifyContent: 'center', borderWidth: 4, shadowColor: '#68638D', shadowOpacity: 0.18, shadowRadius: 11, shadowOffset: { width: 0, height: 5 }, elevation: 4 }, journeyNodeComplete: { backgroundColor: C.periwinkle, borderColor: '#DDD9FF' }, journeyNodeCurrent: { backgroundColor: C.coral, borderColor: '#FFE0D4' }, journeyNodeFuture: { backgroundColor: '#F5F4FA', borderColor: '#D9D8E6', shadowOpacity: 0.06 }, journeyNodeIcon: { color: '#FFF', fontSize: 21, fontWeight: '700' }, journeyMilestoneCard: { width: 142, marginTop: 8, padding: 10, borderRadius: 15, backgroundColor: 'rgba(255,255,255,0.88)', borderWidth: 1, borderColor: 'rgba(231,230,242,0.95)', shadowColor: '#777391', shadowOpacity: 0.08, shadowRadius: 9, shadowOffset: { width: 0, height: 4 }, elevation: 2 }, journeyMilestoneCardCurrent: { backgroundColor: '#FFF7F0', borderColor: '#F4D5C7' }, journeyMilestoneCardComplete: { borderColor: '#DDD9FA' }, journeyMilestoneTitleRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 5 }, journeyMilestoneTitle: { flex: 1, color: C.ink, fontSize: 11, fontWeight: '700', lineHeight: 14 }, journeyMilestoneState: { fontSize: 6, letterSpacing: 0.45, fontWeight: '700', marginTop: 1 }, journeyStateComplete: { color: '#6A71B5' }, journeyStateCurrent: { color: C.coral }, journeyStateFuture: { color: '#A7A8BB' }, journeyMilestoneDetail: { color: C.muted, fontSize: 8, lineHeight: 12, marginTop: 5 },
   journeyModalShade: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(32,41,84,0.22)' }, journeyModalDismiss: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 }, journeySelectorSheet: { padding: 20, paddingBottom: 26, borderTopLeftRadius: 29, borderTopRightRadius: 29, backgroundColor: '#FBFAFF', shadowColor: '#39365B', shadowOpacity: 0.2, shadowRadius: 20, shadowOffset: { width: 0, height: -5 }, elevation: 10 }, journeySheetEyebrow: { color: C.periwinkle, fontSize: 8, letterSpacing: 1, fontWeight: '700' }, journeySheetTitle: { color: C.ink, fontSize: 23, fontWeight: '700', letterSpacing: -0.4, marginTop: 5 }, journeySheetHint: { color: C.muted, fontSize: 10, marginTop: 5, marginBottom: 9 }, journeyBookRow: { minHeight: 67, marginTop: 8, padding: 9, borderRadius: 17, flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF', borderWidth: 1, borderColor: '#EBEAF2' }, journeyBookRowActive: { backgroundColor: '#F3F1FF', borderColor: '#D8D1FA' }, journeyBookRowCopy: { flex: 1, marginLeft: 10 }, journeyBookRowTitle: { color: C.ink, fontSize: 12, fontWeight: '700' }, journeyBookRowMeta: { color: C.muted, fontSize: 9, marginTop: 3 }, journeyBookRowEdited: { color: '#9A9CB1', fontSize: 8, marginTop: 4 }, journeyBookRowCheck: { color: C.periwinkle, fontSize: 17, fontWeight: '700', marginLeft: 7 }, journeyMenuShade: { flex: 1, alignItems: 'flex-end', backgroundColor: 'rgba(32,41,84,0.18)', paddingTop: 58, paddingHorizontal: 20 }, journeyMenu: { width: 218, padding: 13, borderRadius: 20, backgroundColor: '#FBFAFF', shadowColor: '#39365B', shadowOpacity: 0.2, shadowRadius: 17, shadowOffset: { width: 0, height: 7 }, elevation: 8 }, journeyMenuTitle: { color: C.ink, fontSize: 13, fontWeight: '700', marginTop: 4, marginBottom: 7 }, journeyMenuRow: { minHeight: 38, paddingHorizontal: 5, flexDirection: 'row', alignItems: 'center', borderTopWidth: 1, borderTopColor: '#ECEBF3' }, journeyMenuIcon: { color: C.periwinkle, fontSize: 14, width: 22 }, journeyMenuLabel: { flex: 1, color: C.ink, fontSize: 10, fontWeight: '600' }, journeyMenuArrow: { color: C.muted, fontSize: 18 },
   journeyHero: { paddingTop: 13, alignItems: 'center' }, journeyTitle: { color: C.ink, textAlign: 'center', fontSize: 27, fontWeight: '700', lineHeight: 32, letterSpacing: -0.7, marginTop: 8 }, journeyRing: { height: 153, width: 153, borderRadius: 77, marginTop: 23, borderWidth: 15, borderColor: C.periwinkle, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.65)', shadowColor: '#7772AF', shadowOpacity: 0.15, shadowRadius: 16, shadowOffset: { width: 0, height: 8 }, elevation: 5 }, journeyRingValue: { color: C.ink, fontSize: 32, fontWeight: '700' }, journeyRingLabel: { color: C.muted, fontSize: 8, letterSpacing: 0.8, marginTop: 2, fontWeight: '700' }, nextCard: { marginTop: 25, borderRadius: 21, backgroundColor: '#FFF4E9', padding: 15, flexDirection: 'row', alignItems: 'center' }, nextIcon: { width: 40, height: 40, borderRadius: 20, backgroundColor: C.peach, alignItems: 'center', justifyContent: 'center' }, nextIconText: { color: '#A35B4D', fontSize: 19 }, nextOverline: { color: '#B36B61', fontSize: 8, letterSpacing: 0.75, fontWeight: '700', marginLeft: 11 }, nextTitle: { color: C.ink, fontSize: 12, lineHeight: 17, fontWeight: '700', marginLeft: 11, marginTop: 4 }, journeyRow: { minHeight: 67, flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: 'rgba(111,111,153,0.1)' }, journeyIcon: { width: 38, height: 38, borderRadius: 14, justifyContent: 'center', alignItems: 'center' }, journeyIconText: { color: '#FFF', fontSize: 16 }, journeyRowTitle: { color: C.ink, fontSize: 13, fontWeight: '700', marginLeft: 11 }, journeyRowDate: { color: C.muted, fontSize: 9, letterSpacing: 0.5, marginTop: 4, marginLeft: 11 }, journeyArrow: { color: C.periwinkle, fontSize: 21 },
   profileTop: { alignItems: 'center', paddingTop: 17 }, profileAvatar: { width: 84, height: 84, borderRadius: 42, backgroundColor: '#FFF7F1', alignItems: 'center', justifyContent: 'center', shadowColor: '#65608A', shadowOpacity: 0.16, shadowRadius: 14, shadowOffset: { width: 0, height: 6 }, elevation: 4 }, profileAvatarText: { fontSize: 33, color: C.coral, fontWeight: '700' }, profileHalo: { position: 'absolute', width: 96, height: 96, borderRadius: 48, borderWidth: 2, borderColor: '#FFF', opacity: 0.8 }, profileName: { color: C.ink, fontSize: 23, fontWeight: '700', marginTop: 16 }, profileEmail: { color: C.muted, fontSize: 12, marginTop: 5 }, pathfinder: { paddingHorizontal: 11, paddingVertical: 7, backgroundColor: '#FFF3CB', borderRadius: 13, marginTop: 13 }, pathfinderText: { color: '#A97819', fontSize: 9, letterSpacing: 0.7, fontWeight: '700' }, profileBadgesCard: { marginTop: 20, padding: 14, borderRadius: 21, backgroundColor: '#FFF', borderWidth: 1, borderColor: '#EAE8F1', shadowColor: '#706C98', shadowOpacity: 0.07, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 2 }, profileBadgesHeader: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between' }, profileBadgesEyebrow: { color: C.periwinkle, fontSize: 7, letterSpacing: 0.8, fontWeight: '700' }, profileBadgesTitle: { color: C.ink, fontSize: 15, fontWeight: '700', marginTop: 4 }, profileBadgesCount: { color: C.muted, fontSize: 8, fontWeight: '700' }, profileBadgesRow: { marginTop: 13, flexDirection: 'row', gap: 8 }, profileBadge: { flex: 1, minWidth: 0, alignItems: 'center' }, profileBadgeIcon: { width: 38, height: 38, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: '#E8F5E9' }, profileBadgeIconText: { color: '#4D8B59', fontSize: 10, fontWeight: '700', textAlign: 'center' }, profileBadgeTitle: { color: C.muted, fontSize: 7, lineHeight: 10, textAlign: 'center', marginTop: 6 }, profileBadgesEmpty: { color: C.muted, fontSize: 9, lineHeight: 14, marginTop: 12 }, preferenceTitle: { marginTop: 28, marginBottom: 10, color: C.ink, fontSize: 17, fontWeight: '700' }, preferences: { backgroundColor: 'rgba(255,255,255,0.75)', borderRadius: 20, paddingHorizontal: 15 }, prefRow: { minHeight: 70, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }, prefTitle: { color: C.ink, fontSize: 13, fontWeight: '700' }, prefSub: { color: C.muted, fontSize: 10, marginTop: 4 }, prefLine: { height: 1, backgroundColor: '#EBEBF1' }, settingsRow: { paddingVertical: 15, flexDirection: 'row', justifyContent: 'space-between', borderBottomWidth: 1, borderBottomColor: 'rgba(111,111,153,0.1)' }, settingsText: { color: C.ink, fontSize: 13, fontWeight: '600' },
@@ -5395,8 +6154,8 @@ const s: any = Object.assign(StyleSheet.create({
   librarySectionEyebrow: { color: C.muted, fontSize: 8, letterSpacing: 1, fontWeight: '700', marginTop: 22, marginBottom: 9 }, libraryProjectCard: { marginBottom: 11, padding: 12, borderRadius: 21, backgroundColor: 'rgba(255,255,255,0.82)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.9)', shadowColor: '#68638D', shadowOpacity: 0.08, shadowRadius: 10, shadowOffset: { width: 0, height: 5 }, elevation: 2 }, libraryProjectCardArchived: { opacity: 0.66 }, libraryProjectTop: { flexDirection: 'row', alignItems: 'center' }, projectType: { color: C.muted, fontSize: 9, marginTop: 3 }, projectOverflowButton: { width: 34, height: 34, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F4F2FF' }, projectOverflowText: { color: C.muted, fontSize: 13, letterSpacing: 1, marginTop: -6 }, projectStats: { marginTop: 11, paddingTop: 10, borderTopWidth: 1, borderTopColor: '#EBEBF2', flexDirection: 'row', alignItems: 'center', gap: 6 }, projectStatText: { color: C.muted, fontSize: 9, flexShrink: 1 }, projectStatDot: { color: '#B4B5C8', fontSize: 9 }, librarySourcesRow: { marginTop: 10, minHeight: 54, paddingHorizontal: 9, borderRadius: 15, backgroundColor: '#F8F7FF', borderWidth: 1, borderColor: '#E7E3F8', flexDirection: 'row', alignItems: 'center' }, librarySourcesIcon: { width: 31, height: 31, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: '#E8E5FA' }, librarySourcesIconText: { color: C.periwinkle, fontSize: 15 }, librarySourcesCopy: { flex: 1, minWidth: 0, marginLeft: 9 }, librarySourcesTitle: { color: C.ink, fontSize: 10, fontWeight: '800' }, librarySourcesHint: { color: C.muted, fontSize: 8, lineHeight: 12, marginTop: 3 }, librarySourcesArrow: { color: C.periwinkle, fontSize: 20, marginLeft: 8 }, projectCardActions: { marginTop: 11, flexDirection: 'row', gap: 8 }, projectContinueButton: { flex: 1, minHeight: 39, paddingHorizontal: 12, borderRadius: 13, backgroundColor: C.periwinkle, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, projectContinueText: { color: '#FFF', fontSize: 10, fontWeight: '700' }, projectContinueArrow: { color: '#FFF', fontSize: 16 }, projectPreviewButton: { minHeight: 39, paddingHorizontal: 12, borderRadius: 13, borderWidth: 1, borderColor: '#D8D5F5', backgroundColor: '#F7F5FF', alignItems: 'center', justifyContent: 'center' }, projectPreviewText: { color: C.periwinkle, fontSize: 10, fontWeight: '700' }, librarySourcesShade: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(29,33,69,0.28)' }, librarySourcesDismiss: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 }, librarySourcesSheet: { height: '90%', paddingHorizontal: 18, paddingTop: 12, paddingBottom: 18, borderTopLeftRadius: 30, borderTopRightRadius: 30, backgroundColor: '#FBFAFF' }, librarySourcesHeader: { marginTop: 16, flexDirection: 'row', alignItems: 'center' }, librarySourcesMark: { width: 42, height: 42, borderRadius: 14, alignItems: 'center', justifyContent: 'center' }, librarySourcesMarkText: { color: '#FFF', fontSize: 17 }, librarySourcesHeaderCopy: { flex: 1, minWidth: 0, marginLeft: 10 }, librarySourcesOverline: { color: C.periwinkle, fontSize: 7, letterSpacing: 0.9, fontWeight: '800' }, librarySourcesHeaderTitle: { color: C.ink, fontSize: 17, fontWeight: '800', marginTop: 3 }, librarySourcesHeaderHint: { color: C.muted, fontSize: 8, marginTop: 3 }, librarySourcesIntro: { marginTop: 13, padding: 11, borderRadius: 13, backgroundColor: '#F4F2FF', color: C.muted, fontSize: 9, lineHeight: 14 }, librarySourcesScroll: { flex: 1, marginTop: 10 }, librarySourcesContent: { paddingBottom: 26 }, libraryMenuShade: { flex: 1, backgroundColor: 'rgba(29,33,69,0.22)', paddingTop: 80, paddingHorizontal: 20, alignItems: 'flex-end' }, libraryMenu: { width: 270, padding: 13, borderRadius: 22, backgroundColor: '#FBFAFF', shadowColor: '#4E4A7F', shadowOpacity: 0.22, shadowRadius: 20, shadowOffset: { width: 0, height: 9 }, elevation: 8 }, libraryMenuOverline: { color: C.periwinkle, fontSize: 8, letterSpacing: 1, fontWeight: '700', marginBottom: 4 }, libraryMenuTitle: { color: C.ink, fontSize: 15, fontWeight: '700', marginBottom: 5 }, libraryMenuRow: { minHeight: 40, paddingHorizontal: 5, borderTopWidth: 1, borderTopColor: '#ECEBF3', flexDirection: 'row', alignItems: 'center' }, libraryMenuIcon: { color: C.periwinkle, width: 26, fontSize: 15 }, libraryMenuIconDelete: { color: C.coral, width: 26, fontSize: 18 }, libraryMenuLabel: { flex: 1, color: C.ink, fontSize: 10, fontWeight: '600' }, libraryMenuDeleteLabel: { flex: 1, color: C.coral, fontSize: 10, fontWeight: '600' }, libraryMenuArrow: { color: C.muted, fontSize: 18 }, renameModalShade: { flex: 1, justifyContent: 'center', padding: 20, backgroundColor: 'rgba(32,41,84,0.25)' }, renameSheet: { padding: 20, borderRadius: 24, backgroundColor: '#FBFAFF' }, renameTitle: { color: C.ink, fontSize: 22, fontWeight: '700', marginTop: 4 }, renameInput: { minHeight: 46, marginTop: 16, paddingHorizontal: 13, borderRadius: 13, borderWidth: 1, borderColor: '#DCDCEA', color: C.ink, fontSize: 13, backgroundColor: '#FFF' }, renameActions: { marginTop: 15, flexDirection: 'row', justifyContent: 'flex-end', gap: 9 }, renameCancel: { minHeight: 40, paddingHorizontal: 13, borderRadius: 12, alignItems: 'center', justifyContent: 'center' }, renameCancelText: { color: C.muted, fontSize: 10, fontWeight: '700' }, renameSave: { minHeight: 40, paddingHorizontal: 14, borderRadius: 12, backgroundColor: C.periwinkle, alignItems: 'center', justifyContent: 'center' }, renameSaveText: { color: '#FFF', fontSize: 10, fontWeight: '700' },
   studioPage: { paddingBottom: 7 }, studioHeader: { minHeight: 57, flexDirection: 'row', alignItems: 'center' }, studioBackButton: { width: 39, height: 39, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.72)' }, studioBackIcon: { color: C.ink, fontSize: 28, lineHeight: 29, marginTop: -2 }, studioHeaderCopy: { flex: 1, marginLeft: 11, marginRight: 8 }, studioOverline: { color: C.muted, fontSize: 7, letterSpacing: 1, fontWeight: '700' }, studioHeaderTitle: { color: C.ink, fontSize: 20, fontWeight: '700', marginTop: 3 }, studioHeaderMeta: { color: C.muted, fontSize: 8, marginTop: 3 }, studioOverflowButton: { width: 39, height: 39, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.72)' }, studioOverflowText: { color: C.muted, fontSize: 14, letterSpacing: 1, marginTop: -7 }, studioTabs: { gap: 7, paddingTop: 10, paddingBottom: 4, paddingRight: 20 }, studioTab: { minWidth: 80, minHeight: 35, paddingHorizontal: 12, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.65)' }, studioTabSelected: { backgroundColor: C.periwinkle }, studioTabText: { color: C.muted, fontSize: 10, fontWeight: '700' }, studioTabTextSelected: { color: '#FFF' }, studioKicker: { color: C.periwinkle, fontSize: 8, letterSpacing: 1, fontWeight: '700' }, studioSummaryCard: { marginTop: 15, padding: 16, borderRadius: 22, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#FFF', shadowColor: '#6B6794', shadowOpacity: 0.1, shadowRadius: 12, shadowOffset: { width: 0, height: 6 }, elevation: 3 }, studioSummaryTitle: { color: C.ink, fontSize: 17, fontWeight: '700', marginTop: 5 }, studioSummaryCopy: { color: C.muted, fontSize: 9, marginTop: 5 }, studioStatusDot: { width: 35, height: 35, borderRadius: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFF1D0' }, studioStatusDotFinished: { backgroundColor: '#E9F7EB' }, studioStatusDotText: { color: '#A97819', fontSize: 20, fontWeight: '700' }, studioAccordion: { marginTop: 10, borderRadius: 19, backgroundColor: 'rgba(255,255,255,0.8)', borderWidth: 1, borderColor: '#ECEBF3' }, studioAccordionHeader: { minHeight: 66, padding: 12, flexDirection: 'row', alignItems: 'center' }, studioAccordionIcon: { width: 27, height: 27, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F0EEFF' }, studioAccordionIconText: { color: C.periwinkle, fontSize: 17, fontWeight: '700' }, studioAccordionCopy: { flex: 1, marginLeft: 10 }, studioAccordionTitle: { color: C.ink, fontSize: 13, fontWeight: '700' }, studioAccordionHint: { color: C.muted, fontSize: 9, marginTop: 3 }, studioAccordionChevron: { color: C.periwinkle, fontSize: 18, marginLeft: 8 }, studioAccordionBody: { paddingHorizontal: 12, paddingBottom: 12, borderTopWidth: 1, borderTopColor: '#EEEEF4' }, studioOrderRow: { minHeight: 53, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#F0EFF5', flexDirection: 'row', alignItems: 'center', gap: 5 }, studioOrderNumber: { width: 27, height: 27, borderRadius: 9, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F0EEFF' }, studioOrderNumberText: { color: C.periwinkle, fontSize: 8, fontWeight: '700' }, studioOrderCopy: { flex: 1, minWidth: 0 }, studioOrderTitle: { color: C.ink, fontSize: 11, fontWeight: '700' }, studioOrderMeta: { color: C.muted, fontSize: 8, marginTop: 3 }, studioMoveButton: { width: 26, height: 26, borderRadius: 9, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F4F2FF' }, studioMoveDisabled: { opacity: 0.3 }, studioMoveText: { color: C.periwinkle, fontSize: 14, fontWeight: '700' }, studioOpenWrite: { minHeight: 27, paddingHorizontal: 7, borderRadius: 9, backgroundColor: '#FFF3E9', alignItems: 'center', justifyContent: 'center' }, studioOpenWriteText: { color: '#A97819', fontSize: 8, fontWeight: '700' }, studioMatterRow: { paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#F0EFF5', flexDirection: 'row', alignItems: 'flex-start' }, studioCheck: { width: 23, height: 23, borderRadius: 8, borderWidth: 1.5, borderColor: '#D2D2DF', alignItems: 'center', justifyContent: 'center' }, studioCheckOn: { backgroundColor: C.periwinkle, borderColor: C.periwinkle }, studioCheckText: { color: '#FFF', fontSize: 12, fontWeight: '700' }, studioMatterCopy: { flex: 1, marginLeft: 10 }, studioMatterTitle: { color: C.ink, fontSize: 11, fontWeight: '700' }, studioMatterMeta: { color: C.muted, fontSize: 8, marginTop: 3 }, studioMatterInput: { minHeight: 51, marginTop: 7, padding: 8, borderRadius: 10, borderWidth: 1, borderColor: '#E2E1EC', color: C.ink, fontSize: 10, lineHeight: 15, textAlignVertical: 'top', backgroundColor: '#FFF' }, studioManuscriptRow: { minHeight: 53, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#F0EFF5', flexDirection: 'row', alignItems: 'center' }, studioManuscriptDot: { width: 27, height: 27, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F2F1F7' }, studioManuscriptDotComplete: { backgroundColor: '#E9F7EB' }, studioManuscriptDotText: { color: C.muted, fontSize: 15, fontWeight: '700' }, studioControlRow: { minHeight: 51, borderBottomWidth: 1, borderBottomColor: '#F0EFF5', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, studioControlLabel: { color: C.ink, fontSize: 10, fontWeight: '700' }, studioControlOptions: { flexDirection: 'row', gap: 6 }, studioOption: { minHeight: 30, paddingHorizontal: 9, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F2F1F7' }, studioOptionSelected: { backgroundColor: '#EEEDFF', borderWidth: 1, borderColor: C.periwinkle }, studioOptionText: { color: C.muted, fontSize: 9, fontWeight: '700' }, studioPrimaryButton: { minHeight: 49, marginTop: 16, paddingHorizontal: 15, borderRadius: 15, backgroundColor: C.periwinkle, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, studioPrimaryButtonText: { color: '#FFF', fontSize: 11, fontWeight: '700' }, studioPrimaryButtonArrow: { color: '#FFF', fontSize: 19 }, studioStopButton: { backgroundColor: C.coral }, studioMenuShade: { flex: 1, backgroundColor: 'rgba(29,33,69,0.22)', paddingTop: 75, paddingHorizontal: 20, alignItems: 'flex-end' }, studioMenu: { width: 260, padding: 13, borderRadius: 21, backgroundColor: '#FBFAFF' }, studioPickerShade: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(32,41,84,0.22)' }, studioPickerDismiss: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 }, studioPickerSheet: { padding: 20, paddingBottom: 25, borderTopLeftRadius: 29, borderTopRightRadius: 29, backgroundColor: '#FBFAFF' }, studioPickerOverline: { color: C.periwinkle, fontSize: 8, letterSpacing: 1, fontWeight: '700' }, studioPickerTitle: { color: C.ink, fontSize: 22, fontWeight: '700', marginTop: 5, marginBottom: 8 }, studioPickerRow: { minHeight: 57, marginTop: 8, padding: 9, borderRadius: 16, flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF', borderWidth: 1, borderColor: '#ECEBF3' }, studioPickerRowSelected: { backgroundColor: '#F3F1FF', borderColor: '#D9D2FA' }, studioPickerMark: { width: 36, height: 36, borderRadius: 12, alignItems: 'center', justifyContent: 'center' }, studioPickerMarkText: { color: '#FFF', fontSize: 16 }, studioPickerCopy: { flex: 1, marginLeft: 9 }, studioPickerBookTitle: { color: C.ink, fontSize: 11, fontWeight: '700' }, studioPickerBookMeta: { color: C.muted, fontSize: 8, marginTop: 3 }, studioPickerCheck: { color: C.periwinkle, fontSize: 17, fontWeight: '700' }, studioError: { minHeight: 500, alignItems: 'center', justifyContent: 'center', padding: 24 }, studioErrorIcon: { color: C.periwinkle, fontSize: 29 }, studioErrorTitle: { color: C.ink, fontSize: 22, fontWeight: '700', marginTop: 10 }, studioErrorCopy: { color: C.muted, fontSize: 11, textAlign: 'center', marginTop: 7, lineHeight: 17 },
   readerToolbar: { marginTop: 15, padding: 15, borderRadius: 20, backgroundColor: '#FFF', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, readerToolbarTitle: { color: C.ink, fontSize: 16, fontWeight: '700', marginTop: 5 }, readerListenButton: { minHeight: 35, paddingHorizontal: 10, borderRadius: 12, backgroundColor: '#FFF3E9', alignItems: 'center', justifyContent: 'center' }, readerListenText: { color: '#A97819', fontSize: 9, fontWeight: '700' }, readerToc: { marginTop: 11, padding: 13, borderRadius: 20, backgroundColor: '#F2F0FF' }, readerTocTitle: { color: C.ink, fontSize: 12, fontWeight: '700', marginBottom: 5 }, readerTocRow: { minHeight: 32, paddingHorizontal: 7, borderRadius: 9, flexDirection: 'row', alignItems: 'center' }, readerTocRowSelected: { backgroundColor: '#FFF' }, readerTocNumber: { color: C.periwinkle, width: 23, fontSize: 8, fontWeight: '700' }, readerTocLabel: { flex: 1, color: C.ink, fontSize: 9 }, readerTocState: { color: C.muted, fontSize: 10 }, readerBook: { marginTop: 14, padding: 18, borderRadius: 23, backgroundColor: '#FFFDF9', shadowColor: '#81798C', shadowOpacity: 0.1, shadowRadius: 15, shadowOffset: { width: 0, height: 7 }, elevation: 3 }, readerTitlePage: { minHeight: 180, alignItems: 'center', justifyContent: 'center', borderBottomWidth: 1, borderBottomColor: '#EEE7DD' }, readerTitleKicker: { color: C.coral, fontSize: 8, letterSpacing: 1.2, fontWeight: '700' }, readerBookTitle: { maxWidth: 275, color: C.ink, fontSize: 31, lineHeight: 36, fontWeight: '700', textAlign: 'center', marginTop: 13 }, readerBookTitleModern: { letterSpacing: 1, textTransform: 'uppercase' }, readerBookStatus: { color: C.muted, fontSize: 9, marginTop: 9 }, readerMatter: { paddingVertical: 24, borderBottomWidth: 1, borderBottomColor: '#EEE7DD' }, readerMatterTitle: { color: C.ink, fontSize: 15, fontWeight: '700', textAlign: 'center', marginBottom: 10 }, readerChapter: { paddingTop: 29, paddingBottom: 8 }, readerChapterTitle: { color: C.ink, fontSize: 21, lineHeight: 27, fontWeight: '700', marginBottom: 14 }, readerChapterTitleModern: { color: C.periwinkle, letterSpacing: 0.7, textTransform: 'uppercase', fontSize: 17 }, readerBody: { color: '#46465C', fontSize: 16, lineHeight: 25 }, readerMissing: { padding: 15, borderRadius: 15, backgroundColor: '#F5F2FF', alignItems: 'center' }, readerMissingIcon: { color: C.periwinkle, fontSize: 22 }, readerMissingTitle: { color: C.ink, fontSize: 12, fontWeight: '700', marginTop: 7 }, readerMissingCopy: { color: C.muted, fontSize: 9, lineHeight: 14, textAlign: 'center', marginTop: 4 }, readerWriteButton: { minHeight: 33, marginTop: 11, paddingHorizontal: 10, borderRadius: 10, backgroundColor: C.periwinkle, alignItems: 'center', justifyContent: 'center' }, readerWriteButtonText: { color: '#FFF', fontSize: 9, fontWeight: '700' }, listenHero: { marginTop: 15, padding: 17, borderRadius: 22, backgroundColor: '#F1F0FF', flexDirection: 'row', alignItems: 'center' }, listenOrb: { width: 55, height: 55, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: C.periwinkle }, listenOrbText: { color: '#FFF', fontSize: 25 }, listenHeroCopy: { flex: 1, marginLeft: 13 }, listenTitle: { color: C.ink, fontSize: 19, fontWeight: '700', marginTop: 5 }, listenCopy: { color: C.muted, fontSize: 10, lineHeight: 15, marginTop: 5 }, listenControls: { marginTop: 2 }, listenNote: { color: '#9A9CB1', fontSize: 8, textAlign: 'center', marginTop: 7 }, studioSectionTitle: { color: C.ink, fontSize: 16, fontWeight: '700', marginTop: 23, marginBottom: 9 }, listenRow: { minHeight: 61, padding: 10, marginBottom: 7, borderRadius: 16, backgroundColor: '#FFF', flexDirection: 'row', alignItems: 'center' }, listenRowIcon: { width: 33, height: 33, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFF3E9' }, listenRowIconText: { color: '#A97819', fontSize: 15 }, listenRowButton: { minHeight: 30, paddingHorizontal: 9, borderRadius: 10, backgroundColor: '#EEEDFF', justifyContent: 'center' }, listenRowButtonText: { color: C.periwinkle, fontSize: 8, fontWeight: '700' }, exportHero: { marginTop: 15, padding: 18, borderRadius: 22, backgroundColor: '#EAF4FF' }, exportTitle: { color: C.ink, fontSize: 24, lineHeight: 29, fontWeight: '700', marginTop: 6 }, exportCopy: { color: C.muted, fontSize: 11, lineHeight: 17, marginTop: 8 }, exportStats: { marginTop: 11, padding: 17, borderRadius: 19, backgroundColor: '#FFF', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-around' }, exportStatValue: { color: C.ink, fontSize: 22, fontWeight: '700', textAlign: 'center' }, exportStatLabel: { color: C.muted, fontSize: 8, letterSpacing: 0.7, fontWeight: '700', marginTop: 4, textAlign: 'center' }, exportStatDivider: { width: 1, height: 34, backgroundColor: '#E9E8F0' }, exportFootnote: { color: '#9A9CB1', fontSize: 9, lineHeight: 14, textAlign: 'center', marginTop: 14, paddingHorizontal: 12 },
-  navShell: { position: 'absolute', left: 13, right: 13, bottom: 12, height: 67, paddingHorizontal: 4, backgroundColor: 'rgba(255,255,255,0.94)', borderRadius: 24, flexDirection: 'row', alignItems: 'center', shadowColor: '#5F5C8B', shadowOpacity: 0.16, shadowRadius: 18, shadowOffset: { width: 0, height: 8 }, elevation: 7 }, navCreationGroup: { position: 'relative', flex: 1, minWidth: 0, height: '100%', flexDirection: 'row', alignItems: 'center' }, navSupportGroup: { flex: 1, minWidth: 0, height: '100%', flexDirection: 'row', alignItems: 'center' }, navWorkflowBreak: { width: 7, height: 25, marginHorizontal: 1, borderLeftWidth: 1, borderLeftColor: '#E7E6F0' }, navConnectorTrack: { position: 'absolute', top: 29, left: 0, right: 0, height: 3, zIndex: 0 }, navConnectorSegment: { position: 'absolute', top: 0, left: '16.67%', width: '33.33%', height: 2, borderRadius: 2, backgroundColor: '#E3E2ED' }, navConnectorSegmentSecond: { left: '50%' }, navConnectorSegmentReached: { backgroundColor: '#B8B2ED', shadowColor: C.periwinkle, shadowOpacity: 0.18, shadowRadius: 4, shadowOffset: { width: 0, height: 0 } }, navTravelLight: { position: 'absolute', top: 28, width: 8, height: 4, borderRadius: 3, backgroundColor: '#FFF', shadowColor: C.periwinkle, shadowOpacity: 0.75, shadowRadius: 5, shadowOffset: { width: 0, height: 0 }, zIndex: 1 }, navTabWrapper: { flex: 1, minWidth: 0, height: '100%', alignItems: 'center', justifyContent: 'center' }, navItem: { flex: 1, minWidth: 0, minHeight: 52, alignItems: 'center', justifyContent: 'center', zIndex: 2 }, navNode: { width: 29, height: 29, borderRadius: 15, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.88)', borderWidth: 1, borderColor: 'transparent' }, navNodeActive: { backgroundColor: '#F0EDFF', borderColor: '#C9C1F6', shadowColor: C.periwinkle, shadowOpacity: 0.25, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 2 }, navNodeReached: { backgroundColor: '#F2F0FF', borderColor: '#DDD8FA' }, navNodeFuture: { backgroundColor: 'rgba(255,255,255,0.72)', borderColor: '#E4E3EC' }, navIcon: { color: '#A3A6C1', fontSize: 17, lineHeight: 20 }, navIconActive: { color: C.periwinkle }, navLabel: { color: '#A3A6C1', fontSize: 8, lineHeight: 10, marginTop: 3 }, navLabelActive: { color: C.ink, fontWeight: '700' },
-  journeyRouteCompleteDynamic: { position: 'absolute', height: 4, borderRadius: 4, backgroundColor: C.periwinkle }, journeyMiniHit: { position: 'absolute', width: 44, height: 44, alignItems: 'center', justifyContent: 'center', zIndex: 3 }, journeyMiniDotPath: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F3F2F9', borderWidth: 2, borderColor: '#D8D7E5' }, journeyMiniDotPathComplete: { backgroundColor: '#E8F5E9', borderColor: '#A9D5B1' }, journeyMiniDotPathCurrent: { backgroundColor: '#FFF1E5', borderColor: '#F2B99C', shadowColor: C.coral, shadowOpacity: 0.25, shadowRadius: 7, shadowOffset: { width: 0, height: 2 }, elevation: 2 }, journeyMiniDotPathLocked: { backgroundColor: '#F2F1F5', borderColor: '#E0DFE8', opacity: 0.72 }, journeyMiniDotPathText: { color: '#8588A1', fontSize: 8, fontWeight: '700' }, journeyMiniDotPathTextComplete: { color: '#4D8B59' }, journeyNodeLarge: { width: 76, height: 76, borderRadius: 38, alignItems: 'center', justifyContent: 'center', borderWidth: 5, shadowColor: '#68638D', shadowOpacity: 0.18, shadowRadius: 12, shadowOffset: { width: 0, height: 5 }, elevation: 5, zIndex: 4 }, journeyNodeLargeComplete: { backgroundColor: C.periwinkle, borderColor: '#DDD9FF' }, journeyNodeLargeCurrent: { backgroundColor: C.coral, borderColor: '#FFE0D4', shadowColor: C.coral, shadowOpacity: 0.24, shadowRadius: 15 }, journeyNodeLargeFuture: { backgroundColor: '#F5F4FA', borderColor: '#D9D8E6', shadowOpacity: 0.06 }, journeyNodeLargeLocked: { backgroundColor: '#E8E7EF', borderColor: '#D2D1DD', shadowOpacity: 0.03 }, journeyMilestoneHit: { position: 'absolute', width: 92, height: 92, alignItems: 'center', justifyContent: 'center', zIndex: 4 }, journeyMilestoneLabel: { position: 'absolute', top: 0, width: 134, minHeight: 54, padding: 9, borderRadius: 14, backgroundColor: 'rgba(255,255,255,0.92)', borderWidth: 1, borderColor: '#E7E5F0', shadowColor: '#777391', shadowOpacity: 0.07, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 2, zIndex: 2 }, journeyMilestoneLabelLeft: { left: 6 }, journeyMilestoneLabelRight: { right: 6 }, journeyMilestoneLabelSelected: { borderColor: C.periwinkle, backgroundColor: '#F7F5FF' }, journeyMilestoneLabelTitle: { color: C.ink, fontSize: 10, lineHeight: 13, fontWeight: '700' }, journeyMilestoneLabelState: { fontSize: 6, letterSpacing: 0.6, fontWeight: '700', marginTop: 4 }, journeyMilestoneLabelMeta: { color: C.muted, fontSize: 7, marginTop: 3 }, journeyStateLocked: { color: '#8D8D9F' }, journeyDetailSheet: { maxHeight: '78%', padding: 20, paddingBottom: 28, borderTopLeftRadius: 29, borderTopRightRadius: 29, backgroundColor: '#FBFAFF', shadowColor: '#39365B', shadowOpacity: 0.2, shadowRadius: 20, shadowOffset: { width: 0, height: -5 }, elevation: 10 }, journeyDetailHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', marginTop: 10 }, journeyDetailHeaderCopy: { flex: 1, paddingRight: 12 }, journeyDetailPercent: { color: C.periwinkle, fontSize: 27, fontWeight: '700' }, journeyDetailDescription: { color: C.muted, fontSize: 10, lineHeight: 15, marginTop: 11 }, journeyDetailStatGrid: { marginTop: 13, flexDirection: 'row', flexWrap: 'wrap', gap: 8 }, journeyDetailStat: { flexGrow: 1, minWidth: '30%', padding: 9, borderRadius: 13, backgroundColor: '#F5F3FF' }, journeyDetailRequirement: { color: C.muted, fontSize: 9, lineHeight: 14, marginTop: 13, padding: 10, borderRadius: 12, backgroundColor: '#F8F7FC' }, journeyDetailAction: { minHeight: 47, marginTop: 14, paddingHorizontal: 14, borderRadius: 14, backgroundColor: C.periwinkle, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, journeyDetailActionText: { color: '#FFF', fontSize: 10, fontWeight: '700' }, journeyDetailActionArrow: { color: '#FFF', fontSize: 19 },
+  navShell: { position: 'absolute', left: 13, right: 13, bottom: 12, height: 67, paddingHorizontal: 4, backgroundColor: 'rgba(255,255,255,0.94)', borderRadius: 24, flexDirection: 'row', alignItems: 'center', shadowColor: '#5F5C8B', shadowOpacity: 0.16, shadowRadius: 18, shadowOffset: { width: 0, height: 8 }, elevation: 7 }, navCreationGroup: { position: 'relative', flex: 3, minWidth: 0, height: '100%', flexDirection: 'row', alignItems: 'center' }, navSupportGroup: { flex: 4, minWidth: 0, height: '100%', flexDirection: 'row', alignItems: 'center' }, navWorkflowBreak: { width: 7, height: 25, marginHorizontal: 1, borderLeftWidth: 1, borderLeftColor: '#E7E6F0' }, navConnectorTrack: { position: 'absolute', top: 29, left: 0, right: 0, height: 3, zIndex: 0 }, navConnectorSegment: { position: 'absolute', top: 0, left: '16.67%', width: '33.33%', height: 2, borderRadius: 2, backgroundColor: '#E3E2ED' }, navConnectorSegmentSecond: { left: '50%' }, navConnectorSegmentReached: { backgroundColor: '#B8B2ED', shadowColor: C.periwinkle, shadowOpacity: 0.18, shadowRadius: 4, shadowOffset: { width: 0, height: 0 } }, navTravelLight: { position: 'absolute', top: 28, width: 8, height: 4, borderRadius: 3, backgroundColor: '#FFF', shadowColor: C.periwinkle, shadowOpacity: 0.75, shadowRadius: 5, shadowOffset: { width: 0, height: 0 }, zIndex: 1 }, navTabWrapper: { flex: 1, minWidth: 0, height: '100%', alignItems: 'center', justifyContent: 'center' }, navItem: { flex: 1, minWidth: 0, minHeight: 52, alignItems: 'center', justifyContent: 'center', zIndex: 2 }, navNode: { width: 29, height: 29, borderRadius: 15, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.88)', borderWidth: 1, borderColor: 'transparent' }, navNodeActive: { backgroundColor: '#F0EDFF', borderColor: '#C9C1F6', shadowColor: C.periwinkle, shadowOpacity: 0.25, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 2 }, navNodeReached: { backgroundColor: '#F2F0FF', borderColor: '#DDD8FA' }, navNodeFuture: { backgroundColor: 'rgba(255,255,255,0.72)', borderColor: '#E4E3EC' }, navIcon: { color: '#A3A6C1', fontSize: 17, lineHeight: 20 }, navIconActive: { color: C.periwinkle }, navLabel: { alignSelf: 'stretch', color: '#A3A6C1', fontSize: 7, lineHeight: 9, marginTop: 3, textAlign: 'center' }, navLabelActive: { color: C.ink, fontWeight: '700' },
+  journeyRouteCompleteDynamic: { position: 'absolute', height: 4, borderRadius: 4, backgroundColor: C.periwinkle }, journeyMiniHit: { position: 'absolute', width: 48, height: 48, alignItems: 'center', justifyContent: 'center', zIndex: 3 }, journeyMiniDotPath: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F6F7FC', borderWidth: 2, borderColor: '#D8D7E5', shadowColor: '#36405A', shadowOpacity: 0.12, shadowRadius: 5, shadowOffset: { width: 0, height: 2 }, elevation: 2 }, journeyMiniDotPathComplete: { backgroundColor: '#E8F5E9', borderColor: '#A9D5B1' }, journeyMiniDotPathCurrent: { backgroundColor: '#FFF1E5', borderColor: '#F2B99C', shadowColor: C.coral, shadowOpacity: 0.25, shadowRadius: 7, shadowOffset: { width: 0, height: 2 }, elevation: 3 }, journeyMiniDotPathLocked: { backgroundColor: '#F2F1F5', borderColor: '#E0DFE8', opacity: 0.72 }, journeyMiniDotPathText: { color: '#777C98', fontSize: 9, fontWeight: '800' }, journeyMiniDotPathTextComplete: { color: '#4D8B59' }, journeyNodeLarge: { width: 80, height: 80, borderRadius: 40, alignItems: 'center', justifyContent: 'center', borderWidth: 5, shadowColor: '#303853', shadowOpacity: 0.23, shadowRadius: 14, shadowOffset: { width: 0, height: 6 }, elevation: 6, zIndex: 4 }, journeyNodeLargeComplete: { backgroundColor: C.periwinkle, borderColor: '#DDD9FF' }, journeyNodeLargeCurrent: { backgroundColor: C.coral, borderColor: '#FFE0D4', shadowColor: C.coral, shadowOpacity: 0.24, shadowRadius: 15 }, journeyNodeLargeFuture: { backgroundColor: '#F7F7FB', borderColor: '#E1E0EA', shadowOpacity: 0.1 }, journeyNodeLargeLocked: { backgroundColor: '#E8E7EF', borderColor: '#D2D1DD', shadowOpacity: 0.03 }, journeyMilestoneHit: { position: 'absolute', width: 96, height: 96, alignItems: 'center', justifyContent: 'center', zIndex: 4 }, journeyMilestoneLabel: { position: 'absolute', top: 0, width: 140, minHeight: 58, padding: 10, borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.94)', borderWidth: 1, borderColor: 'rgba(239,238,246,0.98)', shadowColor: '#343B55', shadowOpacity: 0.11, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 3, zIndex: 2 }, journeyMilestoneLabelLeft: { left: 6 }, journeyMilestoneLabelRight: { right: 6 }, journeyMilestoneLabelSelected: { borderColor: C.periwinkle, backgroundColor: '#F9F8FF' }, journeyMilestoneLabelTitle: { color: C.ink, fontSize: 10, lineHeight: 14, fontWeight: '800' }, journeyMilestoneLabelState: { fontSize: 6, letterSpacing: 0.7, fontWeight: '800', marginTop: 4 }, journeyMilestoneLabelMeta: { color: C.muted, fontSize: 7, marginTop: 3 }, journeyStateLocked: { color: '#8D8D9F' }, journeyDetailSheet: { maxHeight: '78%', padding: 20, paddingBottom: 28, borderTopLeftRadius: 29, borderTopRightRadius: 29, backgroundColor: '#FBFAFF', shadowColor: '#39365B', shadowOpacity: 0.2, shadowRadius: 20, shadowOffset: { width: 0, height: -5 }, elevation: 10 }, journeyDetailHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', marginTop: 10 }, journeyDetailHeaderCopy: { flex: 1, paddingRight: 12 }, journeyDetailPercent: { color: C.periwinkle, fontSize: 27, fontWeight: '700' }, journeyDetailDescription: { color: C.muted, fontSize: 10, lineHeight: 15, marginTop: 11 }, journeyDetailStatGrid: { marginTop: 13, flexDirection: 'row', flexWrap: 'wrap', gap: 8 }, journeyDetailStat: { flexGrow: 1, minWidth: '30%', padding: 9, borderRadius: 13, backgroundColor: '#F5F3FF' }, journeyDetailRequirement: { color: C.muted, fontSize: 9, lineHeight: 14, marginTop: 13, padding: 10, borderRadius: 12, backgroundColor: '#F8F7FC' }, journeyDetailAction: { minHeight: 47, marginTop: 14, paddingHorizontal: 14, borderRadius: 14, backgroundColor: C.periwinkle, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, journeyDetailActionText: { color: '#FFF', fontSize: 10, fontWeight: '700' }, journeyDetailActionArrow: { color: '#FFF', fontSize: 19 },
 }), mediaStyles, paginationStyles, citationStyles, StyleSheet.create({
   planStepCardAesthetic: { marginTop: 16, padding: 17, borderRadius: 23, backgroundColor: 'rgba(255,255,255,0.88)', borderWidth: 1, borderColor: '#EAE7F4', shadowColor: '#5D5881', shadowOpacity: 0.035, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 1 },
   planSectionKickerAesthetic: { color: C.periwinkle, fontSize: 8, letterSpacing: 1.1, fontWeight: '800' }, planSectionTitleAesthetic: { color: C.ink, fontSize: 24, lineHeight: 29, fontWeight: '800', marginTop: 6, letterSpacing: -0.5 }, planSectionCopyAesthetic: { color: C.muted, fontSize: 10, lineHeight: 15, marginTop: 7 },
@@ -5407,3 +6166,29 @@ const s: any = Object.assign(StyleSheet.create({
   coverSetupHeader: { flexDirection: 'row', alignItems: 'flex-start' }, coverSetupIcon: { width: 36, height: 36, borderRadius: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFF1D0' }, coverSetupIconText: { color: '#A97819', fontSize: 17 }, coverSetupCopy: { flex: 1, marginLeft: 10 }, coverSetupTitle: { color: C.ink, fontSize: 15, fontWeight: '700', marginTop: 3 }, coverSetupHint: { color: C.muted, fontSize: 9, lineHeight: 13, marginTop: 4 }, coverSetupEmpty: { marginTop: 12, minHeight: 62, paddingHorizontal: 10, borderRadius: 15, backgroundColor: '#FFF8EA', flexDirection: 'row', alignItems: 'center' }, coverSetupEmptyIcon: { width: 31, height: 31, borderRadius: 11, backgroundColor: '#FFF', color: '#A97819', fontSize: 21, lineHeight: 29, textAlign: 'center', marginRight: 9 }, coverSetupEmptyTitle: { color: C.ink, fontSize: 10, fontWeight: '700' }, coverSetupEmptyHint: { color: C.muted, fontSize: 8, marginTop: 3 }, coverSetupEmptyArrow: { color: '#A97819', fontSize: 20, marginLeft: 'auto' }, coverSetupPreviewRow: { marginTop: 12, padding: 9, borderRadius: 15, backgroundColor: '#FFF8EA', flexDirection: 'row', alignItems: 'center' }, coverSetupPreview: { width: 62, height: 81, borderRadius: 9, backgroundColor: '#E8E6F4' }, coverSetupPreviewCopy: { flex: 1, marginLeft: 10 }, coverSetupImageTitle: { color: C.ink, fontSize: 10, fontWeight: '700' }, coverSetupImageMeta: { color: C.muted, fontSize: 8, lineHeight: 12, marginTop: 4 }, coverSetupActions: { flexDirection: 'row', gap: 6, marginTop: 8 }, coverSetupSecondary: { minHeight: 27, paddingHorizontal: 9, borderRadius: 9, backgroundColor: '#F0EDFF', alignItems: 'center', justifyContent: 'center' }, coverSetupSecondaryText: { color: C.periwinkle, fontSize: 8, fontWeight: '700' }, coverSetupRemove: { minHeight: 27, paddingHorizontal: 9, borderRadius: 9, backgroundColor: '#FFF0EC', alignItems: 'center', justifyContent: 'center' }, coverSetupRemoveText: { color: '#C96567', fontSize: 8, fontWeight: '700' },
   coverImage: { width: '100%', height: '100%', borderRadius: 11 },
 }));
+
+const exportS = StyleSheet.create({
+  panel: { marginTop: 13, padding: 13, borderRadius: 19, backgroundColor: 'rgba(255,255,255,0.86)', borderWidth: 1, borderColor: '#E7E5F1' },
+  panelLabel: { color: C.muted, fontSize: 8, letterSpacing: 0.9, fontWeight: '800' },
+  formatGrid: { marginTop: 9, flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
+  formatCard: { width: '31.8%', minHeight: 60, padding: 8, borderRadius: 12, backgroundColor: '#F5F4FA', borderWidth: 1, borderColor: '#ECEAF3' },
+  formatCardSelected: { backgroundColor: '#F0EDFF', borderColor: C.periwinkle },
+  formatLabel: { color: C.ink, fontSize: 10, fontWeight: '800' },
+  formatLabelSelected: { color: C.periwinkle },
+  formatDescription: { color: C.muted, fontSize: 7, lineHeight: 10, marginTop: 4 },
+  includeRow: { marginTop: 13, paddingTop: 11, borderTopWidth: 1, borderTopColor: '#ECEAF2', flexDirection: 'row', alignItems: 'center' },
+  includeCopy: { flex: 1, marginRight: 10 },
+  includeTitle: { color: C.ink, fontSize: 10, fontWeight: '800' },
+  includeHint: { color: C.muted, fontSize: 8, lineHeight: 12, marginTop: 3 },
+  selectedSummary: { color: C.periwinkle, fontSize: 8, fontWeight: '700', marginTop: 10 },
+  actionGrid: { marginTop: 11, flexDirection: 'row', gap: 7 },
+  actionButton: { flex: 1, minHeight: 110, padding: 10, borderRadius: 16, backgroundColor: '#FFF', borderWidth: 1, borderColor: '#E6E4EF' },
+  actionDisabled: { opacity: 0.55 },
+  actionIcon: { color: C.periwinkle, fontSize: 21, fontWeight: '700' },
+  actionTitle: { color: C.ink, fontSize: 10, fontWeight: '800', marginTop: 8 },
+  actionHint: { color: C.muted, fontSize: 8, lineHeight: 12, marginTop: 4 },
+  savedNotice: { marginTop: 11, padding: 10, borderRadius: 12, color: '#5C8964', backgroundColor: '#EEF9EF', fontSize: 8, lineHeight: 12, textAlign: 'center' },
+  profileAvatarImage: { width: '100%', height: '100%', borderRadius: 32 },
+  profileAvatarEditBadge: { position: 'absolute', right: 4, bottom: 4, width: 19, height: 19, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: C.periwinkle, borderWidth: 1.5, borderColor: '#FFF' },
+  profileAvatarEditBadgeText: { color: '#FFF', fontSize: 10, fontWeight: '700' },
+});

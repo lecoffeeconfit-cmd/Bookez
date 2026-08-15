@@ -48,6 +48,8 @@ type CommunityItem = {
   finishedLabel?: string | null;
   updatedAt?: string;
   avatarInitials?: string | null;
+  avatarImagePath?: string | null;
+  avatarImageUri?: string;
   avatarColor: string;
   coverColor: string;
   coverImagePath?: string | null;
@@ -110,7 +112,7 @@ const normalizeItem = (row: Record<string, unknown>): CommunityItem => ({
   projectTitle: typeof row.project_title === 'string' ? row.project_title : null, genre: typeof row.genre === 'string' ? row.genre : null, projectType: typeof row.project_type === 'string' ? row.project_type : null,
   completionPercent: safeNumber(row.completion_percent), stage: typeof row.stage === 'string' ? row.stage : null, publicStatus: typeof row.public_status === 'string' ? row.public_status : null,
   writingNow: row.writing_now === true, completed: row.completed === true, finishedLabel: typeof row.finished_label === 'string' ? row.finished_label : null, updatedAt: typeof row.updated_at === 'string' ? row.updated_at : undefined,
-  avatarInitials: typeof row.avatar_initials === 'string' ? row.avatar_initials : null, avatarColor: typeof row.avatar_color === 'string' ? row.avatar_color : '#C9BCF5', coverColor: typeof row.cover_color === 'string' ? row.cover_color : '#5B638E',
+  avatarInitials: typeof row.avatar_initials === 'string' ? row.avatar_initials : null, avatarImagePath: typeof row.avatar_path === 'string' ? row.avatar_path : null, avatarColor: typeof row.avatar_color === 'string' ? row.avatar_color : '#C9BCF5', coverColor: typeof row.cover_color === 'string' ? row.cover_color : '#5B638E',
   coverImagePath: typeof row.cover_image_path === 'string' ? row.cover_image_path : null, reactions: { keep_going: 0, great_progress: 0, congrats: 0 },
 });
 
@@ -119,11 +121,15 @@ function EmptyState({ icon, title, copy }: { icon: string; title: string; copy: 
 }
 
 function Cover({ item, large = false }: { item: CommunityItem; large?: boolean }) {
-  return <View style={[s.cover, large && s.coverLarge, { backgroundColor: item.coverColor }]}>{item.coverImageUri ? <Image source={{ uri: item.coverImageUri }} style={s.coverImage} resizeMode="cover" /> : <><Text style={s.coverMark}>{item.projectTitle?.slice(0, 1).toUpperCase() ?? '✦'}</Text><Text style={s.coverLabel}>{item.genre ?? 'BOOK'}</Text></>}<LinearGradient pointerEvents="none" colors={['rgba(255,210,52,0.99)', 'rgba(255,226,94,0.58)', 'rgba(255,255,255,0)']} locations={[0, 0.16, 0.52]} style={s.coverLight} /></View>;
+  const title = item.projectTitle?.trim() || 'Untitled project';
+  return <View style={[s.cover, large && s.coverLarge, { backgroundColor: item.coverColor }]}>
+    {item.coverImageUri ? <Image source={{ uri: item.coverImageUri }} style={s.coverImage} resizeMode="cover" /> : <><Text style={s.coverMark}>{title.slice(0, 1).toUpperCase() || '✦'}</Text><Text style={s.coverLabel}>{item.genre ?? 'BOOK'}</Text></>}
+    <LinearGradient pointerEvents="none" colors={['rgba(255,210,52,0.99)', 'rgba(255,226,94,0.58)', 'rgba(255,255,255,0)']} locations={[0, 0.16, 0.52]} style={s.coverLight} />
+  </View>;
 }
 
 function Avatar({ item }: { item: CommunityItem }) {
-  return <View style={[s.avatar, { backgroundColor: item.avatarColor }]}><Text style={s.avatarText}>{item.avatarInitials ?? item.displayName.split(' ').map((part) => part[0]).join('').slice(0, 2).toUpperCase()}</Text></View>;
+  return <View style={[s.avatar, { backgroundColor: item.avatarColor }]}>{item.avatarImageUri ? <Image source={{ uri: item.avatarImageUri }} style={s.avatarImage} resizeMode="cover" /> : <Text style={s.avatarText}>{item.avatarInitials ?? item.displayName.split(' ').map((part) => part[0]).join('').slice(0, 2).toUpperCase()}</Text>}</View>;
 }
 
 function ReactionTotals({ item }: { item: CommunityItem }) {
@@ -219,7 +225,17 @@ export default function Community({ userId, activeProject, projects = [], onSele
         const mine = own.find((entry) => entry.item_id === item.id)?.reaction_type as ReactionType | undefined;
         return { ...item, reactions, myReaction: mine ?? null };
       });
-      next = await Promise.all(next.map(async (item) => { if (!item.coverImagePath) return item; const signed = await supabase.storage.from('bookez-files').createSignedUrl(item.coverImagePath, 60 * 60); return signed.data?.signedUrl ? { ...item, coverImageUri: signed.data.signedUrl } : item; }));
+      next = await Promise.all(next.map(async (item) => {
+        const [cover, avatar] = await Promise.all([
+          item.coverImagePath ? supabase.storage.from('bookez-files').createSignedUrl(item.coverImagePath, 60 * 60) : null,
+          item.avatarImagePath ? supabase.storage.from('bookez-files').createSignedUrl(item.avatarImagePath, 60 * 60) : null,
+        ]);
+        return {
+          ...item,
+          ...(cover?.data?.signedUrl ? { coverImageUri: cover.data.signedUrl } : {}),
+          ...(avatar?.data?.signedUrl ? { avatarImageUri: avatar.data.signedUrl } : {}),
+        };
+      }));
       setItems(next); setUsingDemo(false);
     } catch { setOffline(true); setItems(demoItems); setUsingDemo(true); } finally { setLoading(false); setRefreshing(false); }
   };
@@ -228,10 +244,15 @@ export default function Community({ userId, activeProject, projects = [], onSele
     if (!userId) { setFeedbackRequestFeed([]); return; }
     const { data, error } = await supabase.from('community_feedback_requests').select('id,user_id,project_title,author_display_name,author_visibility,genre,completion_percent,stage,cover_image_path,selected_item_count,content_scope,focuses,custom_question').eq('status', 'open').order('created_at', { ascending: false }).limit(30);
     if (error) { setFeedbackRequestFeed([]); return; }
-    setFeedbackRequestFeed((data ?? []).map((row) => {
+    const next = (data ?? []).map((row) => {
       const request = row as unknown as FeedbackRequestFeedRow;
       return { id: `feedback-request-${request.id}`, userId: request.user_id, displayName: request.author_visibility === 'anonymous' ? 'Anonymous Writer' : request.author_display_name, projectTitle: request.project_title, genre: request.genre, projectType: request.genre, completionPercent: request.completion_percent, stage: request.stage, publicStatus: `${feedbackRequestLabel(request)}${request.custom_question ? ` · ${request.custom_question}` : ''}`, writingNow: false, completed: false, avatarInitials: request.author_visibility === 'anonymous' ? 'AW' : request.author_display_name.split(' ').map((part) => part[0]).join('').slice(0, 2).toUpperCase(), avatarColor: '#D6C8F4', coverColor: '#5B638E', coverImagePath: request.cover_image_path, reactions: { keep_going: 0, great_progress: 0, congrats: 0 }, feedbackMode: true, hubMode: true, feedbackRequestId: request.id, feedbackRequestSummary: feedbackRequestLabel(request) };
-    }));
+    });
+    setFeedbackRequestFeed(await Promise.all(next.map(async (item) => {
+      if (!item.coverImagePath) return item;
+      const cover = await supabase.storage.from('bookez-files').createSignedUrl(item.coverImagePath, 60 * 60);
+      return cover.data?.signedUrl ? { ...item, coverImageUri: cover.data.signedUrl } : item;
+    })));
   };
   useEffect(() => { void loadPreferences(); void loadFeed(); void loadFeedbackRequestFeed(); }, [userId]);
   const upsertCurrentProject = async (nextPreferences: Preferences) => {
@@ -332,8 +353,8 @@ const s: Record<string, any> = StyleSheet.create({
   toolbar: { marginTop: 17, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, toolbarText: { color: C.muted, fontSize: 8, fontWeight: '700' }, filterButton: { minHeight: 28, paddingHorizontal: 9, borderRadius: 9, backgroundColor: '#F2F1F7', justifyContent: 'center' }, filterButtonText: { color: C.periwinkle, fontSize: 8, fontWeight: '800' },
   offline: { marginTop: 10, padding: 10, borderRadius: 13, backgroundColor: '#FFF8EA', borderWidth: 1, borderColor: '#F2E1BA', flexDirection: 'row', alignItems: 'center' }, offlineText: { flex: 1, color: '#8A6B2D', fontSize: 8, lineHeight: 12 }, retry: { color: '#A97819', fontSize: 8, fontWeight: '800', marginLeft: 8 }, loading: { minHeight: 260, alignItems: 'center', justifyContent: 'center' }, loadingText: { color: C.muted, fontSize: 9, marginTop: 10 },
   section: { marginTop: 23 }, sectionHeader: { minHeight: 39, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, sectionTitle: { color: C.ink, fontSize: 16, fontWeight: '800' }, sectionHint: { color: C.muted, fontSize: 8, lineHeight: 12, marginTop: 3 }, seeAll: { color: C.periwinkle, fontSize: 8, fontWeight: '800' }, cardRail: { paddingTop: 8, paddingBottom: 2, paddingRight: 6, gap: 9 },
-  card: { width: 270, padding: 10, borderRadius: 17, backgroundColor: 'rgba(255,255,255,0.94)', borderWidth: 1, borderColor: '#E5E2F0', shadowColor: '#6E6A94', shadowOpacity: 0.06, shadowRadius: 9, shadowOffset: { width: 0, height: 3 }, elevation: 2 }, cardTop: { flexDirection: 'row', minHeight: 108 }, cardCopy: { flex: 1, minWidth: 0, marginLeft: 9 }, cover: { width: 64, height: 86, borderRadius: 13, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }, coverLarge: { width: 82, height: 112, borderRadius: 17 }, coverImage: { width: '100%', height: '100%' }, coverLight: { ...StyleSheet.absoluteFill }, coverMark: { color: 'rgba(255,255,255,0.9)', fontSize: 20, fontWeight: '800' }, coverLabel: { color: 'rgba(255,255,255,0.8)', fontSize: 5, letterSpacing: 0.7, fontWeight: '800', marginTop: 3 },
-  writerRow: { flexDirection: 'row', alignItems: 'center', minWidth: 0 }, avatar: { width: 22, height: 22, borderRadius: 8, alignItems: 'center', justifyContent: 'center' }, avatarText: { color: C.ink, fontSize: 7, fontWeight: '800' }, writerName: { color: C.muted, fontSize: 8, fontWeight: '800', marginLeft: 6, flexShrink: 1 }, writingPill: { flexDirection: 'row', alignItems: 'center', marginLeft: 'auto', paddingLeft: 5 }, liveDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: C.green, marginRight: 4 }, writingPillText: { color: C.green, fontSize: 7, fontWeight: '800' }, projectTitle: { color: C.ink, fontSize: 13, lineHeight: 17, fontWeight: '800', marginTop: 9 }, projectMeta: { color: C.muted, fontSize: 8, marginTop: 4 }, publicStatus: { color: C.periwinkle, fontSize: 8, marginTop: 4 }, progressTrack: { height: 5, marginTop: 9, borderRadius: 3, backgroundColor: '#ECEAF6', overflow: 'hidden' }, progressFill: { height: '100%', borderRadius: 3 }, progressText: { color: '#9294AE', fontSize: 7, marginTop: 4 }, cardArrow: { color: C.lavender, fontSize: 21, marginLeft: 6 },
+  card: { width: 270, padding: 10, borderRadius: 17, backgroundColor: 'rgba(255,255,255,0.94)', borderWidth: 1, borderColor: '#E5E2F0', shadowColor: '#6E6A94', shadowOpacity: 0.06, shadowRadius: 9, shadowOffset: { width: 0, height: 3 }, elevation: 2 }, cardTop: { flexDirection: 'row', minHeight: 108 }, cardCopy: { flex: 1, minWidth: 0, marginLeft: 9 }, cover: { width: 64, height: 86, borderRadius: 13, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }, coverLarge: { width: 82, height: 112, borderRadius: 17 }, coverImage: { ...StyleSheet.absoluteFill, width: undefined, height: undefined, zIndex: 0 }, coverLight: { ...StyleSheet.absoluteFill, zIndex: 1, elevation: 1 }, coverMark: { color: 'rgba(255,255,255,0.9)', fontSize: 20, fontWeight: '800', zIndex: 2 }, coverLabel: { color: 'rgba(255,255,255,0.8)', fontSize: 5, letterSpacing: 0.7, fontWeight: '800', marginTop: 3, zIndex: 2 },
+  writerRow: { flexDirection: 'row', alignItems: 'center', minWidth: 0 }, avatar: { width: 22, height: 22, borderRadius: 8, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }, avatarImage: { width: '100%', height: '100%' }, avatarText: { color: C.ink, fontSize: 7, fontWeight: '800' }, writerName: { color: C.muted, fontSize: 8, fontWeight: '800', marginLeft: 6, flexShrink: 1 }, writingPill: { flexDirection: 'row', alignItems: 'center', marginLeft: 'auto', paddingLeft: 5 }, liveDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: C.green, marginRight: 4 }, writingPillText: { color: C.green, fontSize: 7, fontWeight: '800' }, projectTitle: { color: C.ink, fontSize: 13, lineHeight: 17, fontWeight: '800', marginTop: 9 }, projectMeta: { color: C.muted, fontSize: 8, marginTop: 4 }, publicStatus: { color: C.periwinkle, fontSize: 8, marginTop: 4 }, progressTrack: { height: 5, marginTop: 9, borderRadius: 3, backgroundColor: '#ECEAF6', overflow: 'hidden' }, progressFill: { height: '100%', borderRadius: 3 }, progressText: { color: '#9294AE', fontSize: 7, marginTop: 4 }, cardArrow: { color: C.lavender, fontSize: 21, marginLeft: 6 },
   cardFooter: { marginTop: 8, paddingTop: 9, borderTopWidth: 1, borderTopColor: '#F0EEF5', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, reactionTotals: { flex: 1, color: '#9194AC', fontSize: 7 }, feedbackCardAction: { color: C.periwinkle, fontSize: 8, fontWeight: '800' }, reactionActions: { flexDirection: 'row', gap: 5 }, reactionButton: { width: 25, height: 25, borderRadius: 8, backgroundColor: '#F3F1FA', alignItems: 'center', justifyContent: 'center' }, reactionButtonActive: { backgroundColor: '#E8E3FF' }, reactionIcon: { color: C.muted, fontSize: 12 }, reactionIconActive: { color: C.periwinkle },
   empty: { marginTop: 8, padding: 20, borderRadius: 18, backgroundColor: 'rgba(255,255,255,0.54)', alignItems: 'center', borderWidth: 1, borderColor: '#ECEAF4' }, emptyIcon: { color: C.lavender, fontSize: 24 }, emptyTitle: { color: C.ink, fontSize: 11, fontWeight: '800', marginTop: 6, textAlign: 'center' }, emptyCopy: { color: C.muted, fontSize: 8, lineHeight: 13, textAlign: 'center', marginTop: 4, maxWidth: 280 },
   signInNote: { marginTop: 22, padding: 13, borderRadius: 16, backgroundColor: '#EEF8FF', borderWidth: 1, borderColor: '#D8EDF8' }, signInTitle: { color: '#365D78', fontSize: 10, fontWeight: '800' }, signInCopy: { color: '#4B7B9D', fontSize: 8, lineHeight: 12, marginTop: 4 },

@@ -14,7 +14,17 @@ profiles. Before the first cloud build, complete these one-time account steps:
 4. Add the App Store privacy policy URL, support URL, app description, screenshots,
    age rating, and privacy answers in App Store Connect. The in-app legal copy is
    already available from Profile, but Apple still requires a public policy URL.
-5. Start the build and let EAS prompt for Apple Developer credentials and signing:
+5. In the Supabase Auth dashboard, set a **10-character minimum password** and
+   require lowercase, uppercase, and numeric characters. The same policy is in
+   `supabase/config.toml`, but do not use a broad config push without reviewing
+   any existing hosted Auth settings first.
+6. Before each release, run the ephemeral RLS check with a Supabase
+   `SUPABASE_SECRET_KEY` supplied through your CI secret store:
+   `npm run verify:bookez-rls:ephemeral`. It creates two auto-confirmed test
+   users, verifies owner isolation and Community block protection, then deletes
+   both users and their temporary data. Never place that secret key in
+   `.env.local` or commit it.
+7. Start the build and let EAS prompt for Apple Developer credentials and signing:
 
 ```sh
 npx eas-cli@latest login

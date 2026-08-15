@@ -11,7 +11,9 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.lecoffeeconfit.bookme",
-      "buildNumber": "1",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "Bookez uses your microphone to turn your spoken words into written text when you use dictation."
+      },
       "config": {
         "usesNonExemptEncryption": false
       }
@@ -26,15 +28,41 @@
         }
       ],
       [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Allow Bookez to use your microphone for dictation.",
+          "speechRecognitionPermission": "Allow Bookez to turn your speech into writing."
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "color": "#8B8AE8",
+          "defaultChannel": "bookez-writing"
+        }
+      ],
+      [
         "@sentry/react-native/expo",
         {
           "url": "https://sentry.io/",
           "project": "bookez",
           "organization": "lecoffeeconfit"
         }
-      ]
+      ],
+      [
+        "expo-file-system",
+        {
+          "enableFileSharing": true,
+          "supportsOpeningDocumentsInPlace": true
+        }
+      ],
+      "expo-secure-store",
+      "expo-sharing",
+      "expo-mail-composer"
     ],
     "android": {
+      "package": "com.lecoffeeconfit.bookme",
+      "permissions": ["SCHEDULE_EXACT_ALARM"],
       "versionCode": 1,
       "predictiveBackGestureEnabled": false
     },

@@ -1,6 +1,6 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from './supabase';
 import type { BookezInsert, Database } from './database.types';
+import { bookezSecureStorage } from './secure-storage';
 
 const syncQueueKey = 'bookez.sync.queue.v2';
 const syncConflictKey = 'bookez.sync.conflicts.v1';
@@ -52,7 +52,7 @@ export type FlushResult = {
 };
 
 export async function clearBookezLocalSyncData() {
-  await AsyncStorage.multiRemove([syncQueueKey, syncConflictKey, syncCursorKey]);
+  await bookezSecureStorage.multiRemove([syncQueueKey, syncConflictKey, syncCursorKey]);
 }
 
 const operationKey = (operation: Pick<SyncOperation, 'userId' | 'table' | 'recordId'>) => `${operation.userId}:${operation.table}:${operation.recordId}`;
@@ -255,7 +255,7 @@ export async function commitBookezProjectCursor(userId: string, cursor?: SyncCur
   if (!cursor) return;
   const cursorMap = await readCursorMap();
   cursorMap[userId] = cursor;
-  await AsyncStorage.setItem(syncCursorKey, JSON.stringify(cursorMap));
+  await bookezSecureStorage.setItem(syncCursorKey, JSON.stringify(cursorMap));
 }
 
 export async function loadBookezProjectChapters(userId: string, projectId: string) {
@@ -301,7 +301,7 @@ export async function getBookezSyncSnapshot() {
 
 export async function resolveBookezConflict(conflictId: string) {
   const conflicts = await readConflicts();
-  await AsyncStorage.setItem(syncConflictKey, JSON.stringify(conflicts.map((conflict) => conflict.id === conflictId ? { ...conflict, resolvedAt: Date.now() } : conflict)));
+  await bookezSecureStorage.setItem(syncConflictKey, JSON.stringify(conflicts.map((conflict) => conflict.id === conflictId ? { ...conflict, resolvedAt: Date.now() } : conflict)));
 }
 
 export async function keepBookezLocalConflict(conflictId: string) {
@@ -320,7 +320,7 @@ export async function keepBookezLocalConflict(conflictId: string) {
 }
 
 async function readQueue(): Promise<SyncOperation[]> {
-  const raw = await AsyncStorage.getItem(syncQueueKey);
+  const raw = await bookezSecureStorage.getItem(syncQueueKey);
   if (!raw) return [];
   try {
     const parsed = JSON.parse(raw) as SyncOperation[];
@@ -331,11 +331,11 @@ async function readQueue(): Promise<SyncOperation[]> {
 }
 
 async function writeQueue(queue: SyncOperation[]) {
-  await AsyncStorage.setItem(syncQueueKey, JSON.stringify(queue));
+  await bookezSecureStorage.setItem(syncQueueKey, JSON.stringify(queue));
 }
 
 async function readConflicts(): Promise<BookezConflict[]> {
-  const raw = await AsyncStorage.getItem(syncConflictKey);
+  const raw = await bookezSecureStorage.getItem(syncConflictKey);
   if (!raw) return [];
   try {
     const parsed = JSON.parse(raw) as BookezConflict[];
@@ -349,7 +349,7 @@ async function addConflict(conflict: BookezConflict) {
   const conflicts = await readConflicts();
   const next = conflicts.filter((candidate) => operationKey(candidate) !== operationKey(conflict));
   next.push(conflict);
-  await AsyncStorage.setItem(syncConflictKey, JSON.stringify(next));
+  await bookezSecureStorage.setItem(syncConflictKey, JSON.stringify(next));
 }
 
 async function unresolvedConflictCount() {
@@ -357,7 +357,7 @@ async function unresolvedConflictCount() {
 }
 
 async function readCursorMap(): Promise<SyncCursorMap> {
-  const raw = await AsyncStorage.getItem(syncCursorKey);
+  const raw = await bookezSecureStorage.getItem(syncCursorKey);
   if (!raw) return {};
   try { return JSON.parse(raw) as SyncCursorMap; } catch { return {}; }
 }

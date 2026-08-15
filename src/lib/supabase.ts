@@ -1,7 +1,7 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { AppState } from 'react-native';
 import { createClient } from '@supabase/supabase-js';
 import type { Database } from './database.types';
+import { bookezSecureStorage } from './secure-storage';
 
 const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
 const supabasePublishableKey = process.env.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
@@ -16,7 +16,7 @@ export const bookezEmailConfirmationRedirectUrl = 'https://bookez-email-confirma
 export const supabase = createClient<Database>(supabaseUrl, supabasePublishableKey, {
   db: { schema: 'bookez' },
   auth: {
-    storage: AsyncStorage,
+    storage: bookezSecureStorage,
     persistSession: true,
     autoRefreshToken: true,
     detectSessionInUrl: false,

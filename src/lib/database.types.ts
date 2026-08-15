@@ -16,9 +16,9 @@ export type Database = {
         Relationships: [];
       };
       community_profiles: {
-        Row: { user_id: string; display_name: string; bio: string | null; avatar_initials: string | null; updated_at: string };
-        Insert: { user_id: string; display_name?: string; bio?: string | null; avatar_initials?: string | null; updated_at?: string };
-        Update: { user_id?: string; display_name?: string; bio?: string | null; avatar_initials?: string | null; updated_at?: string };
+        Row: { user_id: string; display_name: string; bio: string | null; avatar_initials: string | null; avatar_path: string | null; updated_at: string };
+        Insert: { user_id: string; display_name?: string; bio?: string | null; avatar_initials?: string | null; avatar_path?: string | null; updated_at?: string };
+        Update: { user_id?: string; display_name?: string; bio?: string | null; avatar_initials?: string | null; avatar_path?: string | null; updated_at?: string };
         Relationships: [];
       };
       community_projects: {

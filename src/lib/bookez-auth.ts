@@ -3,7 +3,31 @@ import { supabase, bookezEmailConfirmationRedirectUrl, bookezRedirectUrl } from 
 
 export const getBookezAuthRedirect = () => bookezRedirectUrl;
 
+const minimumPasswordLength = 10;
+
+export function isBookezPasswordValid(password: string) {
+  return password.length >= minimumPasswordLength
+    && /[a-z]/.test(password)
+    && /[A-Z]/.test(password)
+    && /\d/.test(password);
+}
+
+export function isTrustedBookezAuthCallback(url: string) {
+  try {
+    const expected = new URL(bookezRedirectUrl);
+    const received = new URL(url);
+    return received.protocol === expected.protocol
+      && received.hostname === expected.hostname
+      && received.pathname === expected.pathname;
+  } catch {
+    return false;
+  }
+}
+
 export async function signUpWithEmail(email: string, password: string, displayName?: string) {
+  if (!isBookezPasswordValid(password)) {
+    throw new Error('Use at least 10 characters with uppercase, lowercase, and a number.');
+  }
   const result = await supabase.auth.signUp({
     email: email.trim(),
     password,
@@ -89,24 +113,35 @@ export async function sendPasswordReset(email: string) {
   if (error) throw error;
 }
 
-export async function handleBookezAuthUrl(url: string) {
+export async function updateBookezPassword(password: string) {
+  if (!isBookezPasswordValid(password)) {
+    throw new Error('Use at least 10 characters with uppercase, lowercase, and a number.');
+  }
+  const { error } = await supabase.auth.updateUser({ password });
+  if (error) throw error;
+}
+
+export async function handleBookezAuthUrl(url: string): Promise<{ type?: 'recovery' } | undefined> {
+  if (!isTrustedBookezAuthCallback(url)) return;
   const parsed = Linking.parse(url);
   const query = parsed.queryParams ?? {};
   const code = typeof query.code === 'string' ? query.code : undefined;
+  const hash = new URL(url).hash.replace(/^#/, '');
+  const hashParams = hash ? new URLSearchParams(hash) : null;
+  const hashType = hashParams?.get('type') ?? null;
+  const callbackType = typeof query.type === 'string' ? query.type : hashType;
   if (code) {
     const { error } = await supabase.auth.exchangeCodeForSession(code);
     if (error) throw error;
-    return;
+  } else if (hashParams) {
+    const accessToken = hashParams.get('access_token');
+    const refreshToken = hashParams.get('refresh_token');
+    if (accessToken && refreshToken) {
+      const { error } = await supabase.auth.setSession({ access_token: accessToken, refresh_token: refreshToken });
+      if (error) throw error;
+    }
   }
-  const hash = url.split('#')[1];
-  if (!hash) return;
-  const params = new URLSearchParams(hash);
-  const accessToken = params.get('access_token');
-  const refreshToken = params.get('refresh_token');
-  if (accessToken && refreshToken) {
-    const { error } = await supabase.auth.setSession({ access_token: accessToken, refresh_token: refreshToken });
-    if (error) throw error;
-  }
+  return callbackType === 'recovery' ? { type: 'recovery' } : {};
 }
 
 export async function ensureBookezProfile(userId: string, displayName?: string) {
