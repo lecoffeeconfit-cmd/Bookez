@@ -23,7 +23,7 @@ export type WriteToolBeltConfig = {
 
 export const WRITE_TOOL_DEFAULTS: WriteToolBeltConfig = {
   top: ['help-me-write', 'private-notes', 'writing-compass'],
-  bottom: ['writing-stats', 'add-visual', 'writing-rhythm'],
+  bottom: ['writing-stats', 'writing-rhythm', 'focus-mode', 'goal-meter', 'session-log', 'add-visual'],
 };
 
 export const WRITE_TOOL_BELT_STORAGE_KEY = 'bookez.write.tool-belts.v1';
@@ -58,29 +58,20 @@ const topTools: WriteToolDefinition[] = [
 ];
 
 const bottomTools: WriteToolDefinition[] = [
-  { id: 'sprint-timer', name: 'Sprint Timer', shortName: 'Sprint', belt: 'bottom', availableIn: ['bottom'], icon: '⌛', color: '#837ED2', description: 'Write in a focused timed session.', howToUse: 'Start a sprint when you want to draft without overthinking.', example: 'Try a 20-minute session and aim to finish one part.' },
-  { id: 'focus-session', name: 'Focus Session', shortName: 'Focus', belt: 'bottom', availableIn: ['bottom'], icon: '◒', color: '#6F7FC4', description: 'Choose a calm writing rhythm that fits your energy.', howToUse: 'Open Focus Session to choose Gentle, Deep, Pomodoro, Flow, or Custom.', example: 'Choose Gentle Focus when you want a low-pressure start.' },
-  { id: 'writing-stats', name: 'Writing Stats', shortName: 'Stats', belt: 'bottom', availableIn: ['bottom'], icon: '◷', color: '#827BE0', description: 'See words, letters, sentences, paragraphs, and time writing.', howToUse: 'Open Writing Stats when you want a quick progress snapshot without leaving the page.', example: 'Check your words after a short drafting block.' },
+  { id: 'writing-stats', name: 'Writing Stats', shortName: 'Stats', belt: 'bottom', availableIn: ['bottom'], icon: '◷', color: '#827BE0', description: 'Keep words, sentences, paragraphs, letters, and writing time together.', howToUse: 'Open Writing Stats for one compact view of the current section and session.', example: 'Check your words and active time after a drafting block.' },
+  { id: 'writing-rhythm', name: 'Writing Rhythm', shortName: 'Rhythm', belt: 'bottom', availableIn: ['bottom'], icon: '◌', color: '#A69DCA', description: 'Shape a focused block with sprint, Pomodoro, custom, or flow sessions.', howToUse: 'Open Writing Rhythm to choose a session style and start, pause, or finish the timer.', example: 'Choose Pomodoro when a clear 25-minute container will help.' },
+  { id: 'focus-mode', name: 'Focus Mode', shortName: 'Focus mode', belt: 'bottom', availableIn: ['bottom'], icon: '☾', color: '#626EAE', description: 'Hide writing distractions and let the manuscript take the lead.', howToUse: 'Turn Focus Mode on for a quieter writing surface, then turn it off when you need the full cockpit again.', example: 'Use it during a first-draft sprint.' },
+  { id: 'goal-meter', name: 'Goal Meter', shortName: 'Goal', belt: 'bottom', availableIn: ['bottom'], icon: '▰', color: '#599BC3', description: 'Keep session, day, section, and manuscript progress in view.', howToUse: 'Open Goal Meter to choose a useful target and see your progress toward it.', example: 'Set a 300-word session goal before drafting.' },
+  { id: 'version-history', name: 'Version History', shortName: 'Versions', belt: 'bottom', availableIn: ['bottom'], icon: '◇', color: '#6D9AAB', description: 'Save checkpoints and compare earlier drafts before a major change.', howToUse: 'Save a version before rewriting, then open Version History to review or compare checkpoints.', example: 'Capture the original ending before trying a new one.' },
+  { id: 'session-log', name: 'Session Log', shortName: 'Log', belt: 'bottom', availableIn: ['bottom'], icon: '▤', color: '#7DAA9D', description: 'Record what you finished, what you learned, and where to resume.', howToUse: 'Finish a session with one next step so returning to the manuscript feels easy.', example: 'Next: “Have Maya open the envelope.”' },
   { id: 'add-visual', name: 'Add Visual', shortName: 'Visual', belt: 'bottom', availableIn: ['bottom'], icon: '＋', color: '#8B9CBF', description: 'Keep a photo or visual reference beside this part.', howToUse: 'Use Add Visual when an image will help you remember, plan, or shape the section.', example: 'Add a reference image for a setting you are describing.' },
-  { id: 'writing-rhythm', name: 'Writing Rhythm', shortName: 'Rhythm', belt: 'bottom', availableIn: ['bottom'], icon: '◌', color: '#A69DCA', description: 'Open your timer, session modes, and today’s writing method.', howToUse: 'Use Writing Rhythm to start, pause, or shape a focused writing block.', example: 'Start Pomodoro when you want a clear 25-minute container.' },
-  { id: 'word-count', name: 'Word Count', shortName: 'Words', belt: 'bottom', availableIn: ['bottom'], icon: 'W', color: '#5E9FD3', description: 'See how many words are in this part right now.', howToUse: 'Use Word Count as a quiet progress signal while you draft.', example: 'Aim for one more paragraph instead of a perfect page.' },
-  { id: 'letter-count', name: 'Letter Count', shortName: 'Letters', belt: 'bottom', availableIn: ['bottom'], icon: 'Aa', color: '#6F9FC4', description: 'See the number of letters in this part.', howToUse: 'Use Letter Count when you need a precise size check for a submission or exercise.', example: 'Check that a short response stays under a character limit.' },
-  { id: 'sentence-count', name: 'Sentence Count', shortName: 'Sentences', belt: 'bottom', availableIn: ['bottom'], icon: '≡', color: '#6A9EB4', description: 'See how many sentences you have drafted.', howToUse: 'Use Sentence Count to notice rhythm and density without editing yet.', example: 'Check whether a paragraph is carrying too many ideas.' },
-  { id: 'paragraph-count', name: 'Paragraph Count', shortName: 'Paragraphs', belt: 'bottom', availableIn: ['bottom'], icon: '☰', color: '#7894B8', description: 'See how many paragraphs make up this part.', howToUse: 'Use Paragraph Count when you are shaping sections and pauses.', example: 'Add a new paragraph when the idea or speaker changes.' },
-  { id: 'writing-time', name: 'Writing Time', shortName: 'Time', belt: 'bottom', availableIn: ['bottom'], icon: '◴', color: '#7886C8', description: 'See how long you have been writing in this session.', howToUse: 'Use Writing Time to notice your real pace without turning it into a test.', example: 'Notice how much you can draft in fifteen quiet minutes.' },
-  { id: 'goal-meter', name: 'Goal Meter', shortName: 'Goal', belt: 'bottom', availableIn: ['bottom'], icon: '▰', color: '#599BC3', description: 'Keep your section and manuscript progress in view.', howToUse: 'Use Goal Meter when a small visible target would help you keep going.', example: 'Watch a chapter move from 40% to 60% complete.' },
-  { id: 'session-pace', name: 'Session Pace', shortName: 'Pace', belt: 'bottom', availableIn: ['bottom'], icon: '≈', color: '#6D8FC0', description: 'Compare your current writing pace with recent sessions.', howToUse: 'Use Session Pace as a gentle reflection on what duration works for you.', example: 'Notice that 20-minute sessions are your most consistent.' },
-  { id: 'reading-time', name: 'Reading Time', shortName: 'Read time', belt: 'bottom', availableIn: ['bottom'], icon: '◫', color: '#7A96A7', description: 'Estimate how long this part may take to read.', howToUse: 'Use Reading Time when you are checking the shape of a draft for a reader.', example: 'A two-minute section may be enough for this beat.' },
-  { id: 'streak', name: 'Streak', shortName: 'Streak', belt: 'bottom', availableIn: ['bottom'], icon: '✺', color: '#D09B48', description: 'Keep your recent writing rhythm visible.', howToUse: 'Use Streak for encouragement, not pressure; returning counts more than perfection.', example: 'Celebrate three small sessions this week.' },
-  { id: 'progress', name: 'Progress', shortName: 'Progress', belt: 'bottom', availableIn: ['bottom'], icon: '↗', color: '#5E9BD1', description: 'See how this part contributes to the larger manuscript.', howToUse: 'Use Progress when you want the wider path without opening Journey.', example: 'Check which part is next after this one.' },
-  { id: 'daily-target', name: 'Daily Target', shortName: 'Daily', belt: 'bottom', availableIn: ['bottom'], icon: '◉', color: '#A586C8', description: 'Keep today’s suggested writing target close.', howToUse: 'Use Daily Target to remember the plan you chose in Plan.', example: 'Treat the target as an invitation, not a deadline.' },
-  { id: 'snapshot', name: 'Snapshot / Version', shortName: 'Snapshot', belt: 'bottom', availableIn: ['bottom'], icon: '◇', color: '#6D9AAB', description: 'Save a calm checkpoint before a major change.', howToUse: 'Use Snapshot before a large rewrite so you can compare your direction later.', example: 'Save a version before trying a new ending.' },
-  { id: 'compare-draft', name: 'Compare Draft', shortName: 'Compare', belt: 'bottom', availableIn: ['bottom'], icon: '⇄', color: '#7289B6', description: 'Reflect on how a passage has changed over time.', howToUse: 'Use Compare Draft after a substantial revision to notice what improved.', example: 'Compare the opening before and after a clarity pass.' },
-  { id: 'focus-mode', name: 'Focus Mode', shortName: 'Focus mode', belt: 'bottom', availableIn: ['bottom'], icon: '☾', color: '#626EAE', description: 'Keep attention on the manuscript with fewer visible distractions.', howToUse: 'Use Focus Mode when the page feels busy and you want the writing area to lead.', example: 'Turn it on for a first-draft sprint.' },
-  { id: 'pomodoro', name: 'Pomodoro', shortName: 'Pomodoro', belt: 'bottom', availableIn: ['bottom'], icon: '25', color: '#B084C0', description: 'Use a 25-minute writing block followed by a short rest.', howToUse: 'Choose Pomodoro inside Writing Rhythm when a simple repeatable structure helps.', example: 'Write for 25 minutes, then take five minutes away.' },
-  { id: 'custom-timer', name: 'Custom Timer', shortName: 'Custom', belt: 'bottom', availableIn: ['bottom'], icon: '⌚', color: '#7B8FC4', description: 'Choose your own writing and break durations.', howToUse: 'Open Custom Timer through Writing Rhythm and set the minutes that fit today.', example: 'Try 12 minutes when you only have a small window.' },
-  { id: 'session-notes', name: 'Session Notes', shortName: 'Session notes', belt: 'bottom', availableIn: ['bottom', 'top'], icon: '▤', color: '#7DAA9D', description: 'Record what you finished and where to resume.', howToUse: 'Use Session Notes at the end of a block to leave yourself a kind next step.', example: 'Write: “Next, let her answer the letter.”' },
-  { id: 'resume-point', name: 'Resume Point', shortName: 'Resume', belt: 'bottom', availableIn: ['bottom'], icon: '→', color: '#6D91BF', description: 'Keep the next writing move easy to find.', howToUse: 'Use Resume Point when you want to return to the exact next action.', example: 'Leave one sentence that tells tomorrow-you where to begin.' },
+  { id: 'read-aloud', name: 'Read Aloud', shortName: 'Read aloud', belt: 'bottom', availableIn: ['bottom'], icon: '♫', color: '#8A82D6', description: 'Hear the current section back to catch rhythm, missing words, and awkward dialogue.', howToUse: 'Tap Read Aloud to listen to the current section with the device voice.', example: 'Listen once after a dialogue pass.' },
+  { id: 'repetition-scan', name: 'Repetition Scan', shortName: 'Repetition', belt: 'bottom', availableIn: ['bottom'], icon: '↻', color: '#C8878B', description: 'Spot repeated words, phrases, sentence starts, filler words, and long sentences.', howToUse: 'Run Repetition Scan after drafting to decide what deserves a closer look.', example: 'Notice “actually” appearing eleven times before revising.' },
+  { id: 'reference-shelf', name: 'Reference Shelf', shortName: 'References', belt: 'bottom', availableIn: ['bottom'], icon: '⌕', color: '#6E9F9B', description: 'Pin research, characters, places, links, images, quotes, and earlier sections nearby.', howToUse: 'Add small reference cards to keep useful material beside the current part.', example: 'Pin a character detail and a source link before drafting.' },
+  { id: 'find-across-book', name: 'Find Across Book', shortName: 'Find', belt: 'bottom', availableIn: ['bottom'], icon: '🔎', color: '#688FA5', description: 'Find a word or phrase across every drafted part and optionally replace it after confirmation.', howToUse: 'Search the whole book, review the part counts, then use Replace only after checking the results.', example: 'Find every mention of “blue sedan” before changing a detail.' },
+  { id: 'section-brief', name: 'Section / Scene Brief', shortName: 'Brief', belt: 'bottom', availableIn: ['bottom'], icon: '📌', color: '#D09B48', description: 'Keep the purpose, context, conflict, and must-happen beats visible.', howToUse: 'Fill in the brief before or during a section so the draft has a clear job.', example: 'Set the scene purpose and three beats before writing.' },
+  { id: 'outline-navigator', name: 'Outline Navigator', shortName: 'Outline', belt: 'bottom', availableIn: ['bottom'], icon: '☷', color: '#6FAF9E', description: 'Jump instantly between the parts, chapters, scenes, and sections of the book.', howToUse: 'Open Outline Navigator and tap any part to move there without leaving Write.', example: 'Jump from the opening to Chapter 8 to check a detail.' },
+  { id: 'continuity-tracker', name: 'Continuity Tracker', shortName: 'Continuity', belt: 'bottom', availableIn: ['bottom'], icon: '✓', color: '#6A9D83', description: 'Keep a living list of details, promises, and unresolved threads to verify.', howToUse: 'Add a continuity item when the manuscript introduces a fact or leaves a promise to resolve.', example: 'Track a character detail or an unanswered voicemail.' },
 ];
 
 export const WRITE_TOOL_LIBRARY = [...topTools, ...bottomTools];
@@ -89,10 +80,21 @@ function findTool(id: string) {
   return WRITE_TOOL_LIBRARY.find((tool) => tool.id === id);
 }
 
+const toolAliases: Record<string, string> = {
+  'sprint-timer': 'writing-rhythm', 'focus-session': 'writing-rhythm', pomodoro: 'writing-rhythm', 'custom-timer': 'writing-rhythm',
+  'word-count': 'writing-stats', 'letter-count': 'writing-stats', 'sentence-count': 'writing-stats', 'paragraph-count': 'writing-stats', 'writing-time': 'writing-stats', 'reading-time': 'writing-stats',
+  'session-pace': 'goal-meter', streak: 'goal-meter', progress: 'goal-meter', 'daily-target': 'goal-meter',
+  snapshot: 'version-history', 'compare-draft': 'version-history', 'session-notes': 'session-log', 'resume-point': 'session-log',
+  'outline-peek': 'outline-navigator', 'continuity-check': 'continuity-tracker', sources: 'reference-shelf',
+};
+
 export function sanitizeWriteToolBeltConfig(value: unknown): WriteToolBeltConfig {
   const candidate = value && typeof value === 'object' ? value as Partial<WriteToolBeltConfig> : {};
   const sanitize = (ids: unknown, belt: WriteToolBeltId) => {
-    const source: string[] = Array.isArray(ids) ? ids.filter((id): id is string => typeof id === 'string') : [...WRITE_TOOL_DEFAULTS[belt]];
+    const source: string[] = Array.isArray(ids) ? ids.filter((id): id is string => typeof id === 'string').map((id) => {
+      const alias = toolAliases[id];
+      return alias && findTool(alias)?.availableIn.includes(belt) ? alias : id;
+    }) : [...WRITE_TOOL_DEFAULTS[belt]];
     return Array.from(new Set(source.filter((id) => Boolean(findTool(id)) && Boolean(findTool(id)?.availableIn.includes(belt))))).slice(0, maxPinnedTools);
   };
   const top = sanitize(candidate.top, 'top');
@@ -111,7 +113,7 @@ function ToolTile({ tool, active, onPress, onLongPress }: { tool: WriteToolDefin
   const animate = (toValue: number) => Animated.spring(scale, { toValue, useNativeDriver: true, speed: 22, bounciness: 3 }).start();
   return <Pressable onPress={onPress} onLongPress={onLongPress} delayLongPress={480} onPressIn={() => animate(0.95)} onPressOut={() => animate(1)} style={[styles.toolTile, active && styles.toolTileActive]} accessibilityRole="button" accessibilityLabel={tool.name} accessibilityHint={`${tool.description} Long press to customize tool order.`}>
     <Animated.View style={{ transform: [{ scale }] }}><ToolIcon tool={tool} /></Animated.View>
-    <Text numberOfLines={1} style={[styles.toolTileText, active && styles.toolTileTextActive]}>{tool.shortName}</Text>
+    <Text numberOfLines={2} style={[styles.toolTileText, active && styles.toolTileTextActive]}>{tool.shortName}</Text>
   </Pressable>;
 }
 
@@ -250,9 +252,9 @@ const styles = StyleSheet.create({
   beltManageLink: { minHeight: 26, paddingHorizontal: 8, borderRadius: 9, backgroundColor: '#F0EEFF', alignItems: 'center', justifyContent: 'center' },
   beltManageLinkText: { color: '#6D68B8', fontSize: 8, fontWeight: '800' },
   beltRail: { gap: 8, paddingTop: 9, paddingRight: 4 },
-  toolTile: { width: 68, minHeight: 63, paddingVertical: 7, borderRadius: 13, borderWidth: 1, borderColor: '#E8E4F0', backgroundColor: '#FCFBFE', alignItems: 'center', justifyContent: 'center' },
+  toolTile: { width: 78, minHeight: 68, paddingVertical: 7, borderRadius: 13, borderWidth: 1, borderColor: '#E8E4F0', backgroundColor: '#FCFBFE', alignItems: 'center', justifyContent: 'center' },
   toolTileActive: { backgroundColor: '#F1EEFF', borderColor: '#C9C2F4' },
-  toolTileText: { maxWidth: 61, color: '#555B77', fontSize: 8, fontWeight: '800', marginTop: 5 },
+  toolTileText: { width: 68, color: '#555B77', fontSize: 8, lineHeight: 10, fontWeight: '800', marginTop: 5, textAlign: 'center' },
   toolTileTextActive: { color: '#625EAB' },
   toolIconLarge: { width: 29, height: 29, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   toolIconSmall: { width: 32, height: 32, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },

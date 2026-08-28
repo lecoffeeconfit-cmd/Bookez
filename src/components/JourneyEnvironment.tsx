@@ -91,54 +91,64 @@ const BIOMES: BiomeConfig[] = [
 function ScenicLayer({ width, height }: { width: number; height: number }) {
   const sectionHeight = height / BIOME_ARTWORK.length;
   const transitionOverlap = Math.min(140, Math.max(80, sectionHeight * 0.1));
+  const sceneMetrics = BIOME_ARTWORK.map((_, index) => {
+    const frameTop = index * sectionHeight - (index === 0 ? 0 : transitionOverlap);
+    const frameHeight = sectionHeight + (index === 0 ? 0 : transitionOverlap) + (index === BIOME_ARTWORK.length - 1 ? 0 : transitionOverlap);
+    const artworkAspect = ARTWORK_ASPECTS[index];
+    const artworkWidth = Math.min(width, frameHeight * artworkAspect);
+    const artworkHeight = artworkWidth / artworkAspect;
+    const artworkTop = Math.max(0, (frameHeight - artworkHeight) / 2);
+    const continuationHeight = width / artworkAspect;
+    const artworkBottom = artworkTop + artworkHeight;
+    const seamBlendHeight = Math.min(132, Math.max(92, artworkHeight * 0.12));
+    const lowerContinuationHeight = frameHeight - artworkBottom;
+    return {
+      frameTop,
+      frameHeight,
+      artworkWidth,
+      artworkHeight,
+      artworkLeft: (width - artworkWidth) / 2,
+      artworkTop,
+      continuationHeight,
+      seamBlendHeight,
+      lowerContinuationTop: artworkBottom,
+      lowerContinuationHeight,
+      hasUpperContinuation: artworkTop > 0,
+      hasLowerContinuation: lowerContinuationHeight > 0,
+    };
+  });
+
   return <View pointerEvents="none" style={[styles.scenicLayer, { width, height }]}>
     {BIOME_ARTWORK.map((source, index) => {
       const biome = BIOMES[index];
       const aboveContinuation = BIOME_ABOVE_CONTINUATIONS[index];
       const belowContinuation = BIOME_BELOW_CONTINUATIONS[index];
-      const frameTop = index * sectionHeight - (index === 0 ? 0 : transitionOverlap);
-      const frameHeight = sectionHeight + (index === 0 ? 0 : transitionOverlap) + (index === BIOME_ARTWORK.length - 1 ? 0 : transitionOverlap);
-      // The artwork, rather than the route section, determines its displayed
-      // dimensions. If a section is short, we reduce both dimensions by the
-      // same scale so the complete original remains visible.
-      const artworkAspect = ARTWORK_ASPECTS[index];
-      const artworkWidth = Math.min(width, frameHeight * artworkAspect);
-      const artworkHeight = artworkWidth / artworkAspect;
-      const artworkLeft = (width - artworkWidth) / 2;
-      const artworkTop = Math.max(0, (frameHeight - artworkHeight) / 2);
-      const continuationHeight = width / artworkAspect;
-      const seamBlendHeight = Math.min(132, Math.max(92, artworkHeight * 0.12));
-      const lowerContinuationTop = artworkTop + artworkHeight;
-      const lowerContinuationHeight = frameHeight - lowerContinuationTop;
-      const hasUpperContinuation = artworkTop > 0;
-      const hasLowerContinuation = lowerContinuationHeight > 0;
-      const topMaskStop = hasUpperContinuation ? seamBlendHeight / artworkHeight : 0;
-      const bottomMaskStop = hasLowerContinuation ? 1 - seamBlendHeight / artworkHeight : 1;
-      return <View key={biome.id} collapsable={false} style={[styles.biomeArtworkFrame, { width, height: frameHeight, top: frameTop, backgroundColor: biome.base }]}>
-        {hasUpperContinuation && <View style={[styles.biomeContinuation, { top: 0, width, height: artworkTop + seamBlendHeight }]}>
-          <Image source={aboveContinuation} resizeMode="cover" fadeDuration={0} accessible={false} style={styles.continuationCover} />
+      const scene = sceneMetrics[index];
+      const topMaskStop = scene.hasUpperContinuation ? scene.seamBlendHeight / scene.artworkHeight : 0;
+      const bottomMaskStop = scene.hasLowerContinuation ? 1 - scene.seamBlendHeight / scene.artworkHeight : 1;
+      return <View key={biome.id} collapsable={false} style={[styles.biomeArtworkFrame, { width, height: scene.frameHeight, top: scene.frameTop, backgroundColor: biome.base }]}>
+        {scene.hasUpperContinuation && <View style={[styles.biomeContinuation, { top: 0, width, height: scene.artworkTop + scene.seamBlendHeight }]}>
           <Image
             source={aboveContinuation}
             resizeMode="contain"
             fadeDuration={0}
             accessible={false}
-            style={[styles.continuationArtwork, { width, height: continuationHeight, bottom: 0 }]}
+            style={[styles.continuationArtwork, { width, height: scene.continuationHeight, bottom: 0 }]}
           />
         </View>}
-        {hasLowerContinuation && <View style={[styles.biomeContinuation, { top: lowerContinuationTop - seamBlendHeight, width, height: lowerContinuationHeight + seamBlendHeight }]}>
-          <Image source={belowContinuation} resizeMode="cover" fadeDuration={0} accessible={false} style={styles.continuationCover} />
+        {scene.hasLowerContinuation && <View style={[styles.biomeContinuation, { top: scene.lowerContinuationTop - scene.seamBlendHeight, width, height: scene.lowerContinuationHeight + scene.seamBlendHeight }]}>
           <Image
             source={belowContinuation}
             resizeMode="contain"
             fadeDuration={0}
             accessible={false}
-            style={[styles.continuationArtwork, { width, height: continuationHeight, top: 0 }]}
+            style={[styles.continuationArtwork, { width, height: scene.continuationHeight, top: 0 }]}
           />
         </View>}
         <MaskedView
-          style={[styles.biomeArtwork, { width: artworkWidth, height: artworkHeight, left: artworkLeft, top: artworkTop }]}
+          style={[styles.biomeArtwork, { width: scene.artworkWidth, height: scene.artworkHeight, left: scene.artworkLeft, top: scene.artworkTop }]}
           maskElement={<LinearGradient
-            colors={[hasUpperContinuation ? 'transparent' : '#000000', '#000000', '#000000', hasLowerContinuation ? 'transparent' : '#000000'] as const}
+            colors={[scene.hasUpperContinuation ? 'transparent' : '#000000', '#000000', '#000000', scene.hasLowerContinuation ? 'transparent' : '#000000'] as const}
             locations={[0, topMaskStop, bottomMaskStop, 1] as const}
             style={styles.artworkMask}
           />}
@@ -174,27 +184,69 @@ function ScenicLayer({ width, height }: { width: number; height: number }) {
       </View>;
     })}
     {BIOMES.slice(1).map((biome, index) => {
-      const boundaryTop = (index + 1) * sectionHeight - transitionOverlap;
+      const boundaryTop = (index + 1) * sectionHeight;
       const previousBiome = BIOMES[index];
-      return <LinearGradient
+      const previousScene = sceneMetrics[index];
+      const nextScene = sceneMetrics[index + 1];
+      const transitionTop = boundaryTop - transitionOverlap;
+      const transitionHeight = transitionOverlap * 2;
+      const previousContinuationTop = previousScene.frameTop + previousScene.lowerContinuationTop - previousScene.seamBlendHeight;
+      const nextContinuationTop = nextScene.frameTop + nextScene.artworkTop + nextScene.seamBlendHeight - nextScene.continuationHeight;
+      return <View
         key={`${previousBiome.id}-${biome.id}-transition`}
-        colors={[withAlpha(previousBiome.base, 0.28), 'rgba(240,248,249,0.36)', withAlpha(biome.base, 0.28)] as const}
-        locations={[0, 0.5, 1] as const}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 0, y: 1 }}
-        style={[styles.biomeTransition, { top: boundaryTop, height: transitionOverlap * 2 }]}
-      />;
-    })}
-    {BIOMES.slice(1).map((biome, index) => {
-      const boundaryTop = (index + 1) * sectionHeight - transitionOverlap;
-      return <LinearGradient
-        key={`${biome.id}-river-glow`}
-        colors={['rgba(180,225,234,0)', 'rgba(220,246,249,0.4)', 'rgba(180,225,234,0)'] as const}
-        locations={[0, 0.5, 1] as const}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 0, y: 1 }}
-        style={[styles.transitionRiverGlow, { top: boundaryTop, height: transitionOverlap * 2 }]}
-      />;
+        style={[styles.biomeTransition, { top: transitionTop, height: transitionHeight }]}
+      >
+        <MaskedView
+          style={styles.transitionLayer}
+          maskElement={<LinearGradient
+            colors={['#000000', '#000000', 'transparent'] as const}
+            locations={[0, 0.48, 1] as const}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 0, y: 1 }}
+            style={styles.transitionMask}
+          />}
+        >
+          <Image
+            source={BIOME_BELOW_CONTINUATIONS[index]}
+            resizeMode="contain"
+            fadeDuration={0}
+            accessible={false}
+            style={[styles.transitionArtwork, { width, height: previousScene.continuationHeight, top: previousContinuationTop - transitionTop }]}
+          />
+        </MaskedView>
+        <MaskedView
+          style={styles.transitionLayer}
+          maskElement={<LinearGradient
+            colors={['transparent', '#000000', '#000000'] as const}
+            locations={[0, 0.52, 1] as const}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 0, y: 1 }}
+            style={styles.transitionMask}
+          />}
+        >
+          <Image
+            source={BIOME_ABOVE_CONTINUATIONS[index + 1]}
+            resizeMode="contain"
+            fadeDuration={0}
+            accessible={false}
+            style={[styles.transitionArtwork, { width, height: nextScene.continuationHeight, top: nextContinuationTop - transitionTop }]}
+          />
+        </MaskedView>
+        <LinearGradient
+          colors={[withAlpha(previousBiome.base, 0.1), 'rgba(244,249,248,0.05)', withAlpha(biome.base, 0.1)] as const}
+          locations={[0, 0.5, 1] as const}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 0, y: 1 }}
+          style={styles.transitionAtmosphere}
+        />
+        <LinearGradient
+          colors={['rgba(180,225,234,0)', 'rgba(220,246,249,0.24)', 'rgba(180,225,234,0)'] as const}
+          locations={[0, 0.5, 1] as const}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 0, y: 1 }}
+          style={[styles.transitionRiverGlow, { top: transitionOverlap * 0.22, height: transitionOverlap * 1.56 }]}
+        />
+      </View>;
     })}
   </View>;
 }
@@ -230,20 +282,20 @@ function BiomeMotion({ biome, index, sectionHeight, width, phase, shimmer }: { b
   const particleStyle = useAnimatedStyle(() => ({ opacity: interpolate(shimmer.value, [0, 0.5, 1], [0.2, 0.72, 0.2]), transform: [{ translateX: interpolate(phase.value, [0, 1], [-8, 14]) }, { translateY: interpolate(phase.value, [0, 1], [8, -10]) }] }));
   const glowStyle = useAnimatedStyle(() => ({ opacity: interpolate(shimmer.value, [0, 0.5, 1], [0.18, 0.36, 0.18]), transform: [{ scale: interpolate(shimmer.value, [0, 0.5, 1], [0.98, 1.03, 0.98]) }] }));
 
-  if (biome.id === 'meadow') return <View style={[styles.motionSection, { top, height: sectionHeight, width }]}> 
+  if (biome.id === 'meadow') return <View style={[styles.motionSection, { top, height: sectionHeight, width }]}>
     <Animated.View style={[styles.cloudFar, cloudFarStyle]}><Cloud /></Animated.View>
     <Animated.View style={[styles.cloudNear, cloudNearStyle]}><Cloud compact /></Animated.View>
     <Animated.View style={[styles.pollenField, particleStyle]}><Sparkle size={7} color="#FFF0A0" style={styles.pollenSparkle} /><LightDot size={4} color="#F6EAA4" style={styles.pollenDot} /><Sparkle size={5} color="#FFF0A0" style={styles.pollenSparkleSecond} /></Animated.View>
   </View>;
 
-  if (biome.id === 'moonriver') return <View style={[styles.motionSection, { top, height: sectionHeight, width }]}> 
+  if (biome.id === 'moonriver') return <View style={[styles.motionSection, { top, height: sectionHeight, width }]}>
     <Animated.View style={[styles.moonGlow, glowStyle]} />
     <Animated.View style={[styles.cloudFar, styles.moonCloud, cloudFarStyle]}><Cloud compact /></Animated.View>
     <Animated.View style={[styles.riverGlint, waterStyle]}><LightDot size={4} color="#E2F6D6" style={styles.riverGlintOne} /><Sparkle size={6} color="#E2F6D6" style={styles.riverGlintTwo} /><LightDot size={3} color="#E2F6D6" style={styles.riverGlintThree} /></Animated.View>
     <Animated.View style={[styles.fireflyField, particleStyle]}><Sparkle size={6} color="#F8E5A5" style={styles.fireflySparkle} /><LightDot size={5} color="#E8F4BF" style={styles.fireflySecond} /></Animated.View>
   </View>;
 
-  if (biome.id === 'lake') return <View style={[styles.motionSection, { top, height: sectionHeight, width }]}> 
+  if (biome.id === 'lake') return <View style={[styles.motionSection, { top, height: sectionHeight, width }]}>
     <Animated.View style={[styles.cloudFar, cloudFarStyle]}><Cloud /></Animated.View>
     <Animated.View style={[styles.cloudNear, cloudNearStyle]}><Cloud compact /></Animated.View>
     <Animated.View style={[styles.waterHighlights, waterStyle]}><LightDot size={4} color="#E7FBFF" style={styles.waterHighlightOne} /><Sparkle size={6} color="#FFFFFF" style={styles.waterHighlightTwo} /><LightDot size={3} color="#E7FBFF" style={styles.waterHighlightThree} /></Animated.View>
@@ -253,7 +305,7 @@ function BiomeMotion({ biome, index, sectionHeight, width, phase, shimmer }: { b
     <Animated.View style={[styles.dustField, particleStyle]}><View style={styles.dustLarge} /><View style={styles.dustSmall} /><View style={styles.dustTiny} /></Animated.View>
   </View>;
 
-  return <View style={[styles.motionSection, { top, height: sectionHeight, width }]}> 
+  return <View style={[styles.motionSection, { top, height: sectionHeight, width }]}>
     <Animated.View style={[styles.sunsetFireflies, particleStyle]}><Sparkle size={6} color="#FFE39A" style={styles.sunsetSparkleOne} /><LightDot size={5} color="#FFE39A" style={styles.sunsetSparkleSecond} /><Sparkle size={4} color="#FFE39A" style={styles.sunsetSparkleThird} /></Animated.View>
   </View>;
 }
@@ -317,7 +369,7 @@ export default function JourneyEnvironment({ width, height, progress, reduceMoti
   const celebrationStyle = useAnimatedStyle(() => ({ opacity: interpolate(celebration.value, [0, 1], [0, 0.54], Extrapolation.CLAMP), transform: [{ scale: interpolate(celebration.value, [0, 1], [0.96, 1.06], Extrapolation.CLAMP) }] }));
   const nearbyBiomes = BIOMES.map((biome, index) => ({ biome, index })).filter(({ index }) => Math.abs(index - activeBiome) <= 1);
 
-  return <View pointerEvents="none" accessible={false} style={[styles.environment, { width, height }]}> 
+  return <View pointerEvents="none" accessible={false} style={[styles.environment, { width, height }]}>
     <ScenicLayer width={width} height={height} />
     {!reduceMotion && <Animated.View style={[styles.atmosphereLayer, { width, height }, atmosphereStyle]}>{nearbyBiomes.map(({ biome, index }) => <BiomeMotion key={biome.id} biome={biome} index={index} sectionHeight={sectionHeight} width={width} phase={phase} shimmer={shimmer} />)}</Animated.View>}
     <Animated.View style={[styles.celebrationGlow, { top: height * Math.max(0.05, Math.min(0.92, progress / 100)) - 36 }, celebrationStyle]} />
@@ -329,17 +381,18 @@ const styles = StyleSheet.create({
   scenicLayer: { position: 'absolute', top: 0, left: 0, overflow: 'hidden' },
   biomeArtworkFrame: { position: 'absolute', left: 0, overflow: 'hidden' },
   biomeContinuation: { position: 'absolute', left: 0, overflow: 'hidden' },
-  continuationCover: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 },
   continuationArtwork: { position: 'absolute', left: 0 },
   biomeArtwork: { position: 'absolute' },
   artworkMask: { flex: 1 },
   maskedArtworkImage: { width: '100%', height: '100%' },
   scenicSideVignette: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 },
   pathReadabilityVeil: { position: 'absolute', top: 0, right: '28%', bottom: 0, left: '28%' },
-  biomeTopFeather: { position: 'absolute', top: 0, right: 0, left: 0 },
-  biomeBottomFeather: { position: 'absolute', right: 0, bottom: 0, left: 0 },
-  biomeTransition: { position: 'absolute', right: 0, left: 0 },
-  transitionRiverGlow: { position: 'absolute', left: '26%', right: '26%', borderRadius: 80 },
+  biomeTransition: { position: 'absolute', right: 0, left: 0, overflow: 'hidden' },
+  transitionLayer: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 },
+  transitionMask: { flex: 1 },
+  transitionArtwork: { position: 'absolute', left: 0 },
+  transitionAtmosphere: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 },
+  transitionRiverGlow: { position: 'absolute', left: '39%', right: '39%', borderRadius: 80 },
   atmosphereLayer: { position: 'absolute', top: 0, left: 0 },
   motionSection: { position: 'absolute', left: 0, overflow: 'hidden' },
   cloudFar: { position: 'absolute', top: '9%', left: '5%' },
