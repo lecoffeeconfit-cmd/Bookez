@@ -1,4 +1,5 @@
 import { requireOptionalNativeModule } from 'expo';
+import { supabase } from './supabase';
 
 export type AIWritingOperation =
   | 'continue'
@@ -45,7 +46,7 @@ type NativeAIWritingModule = {
 };
 
 // This module is intentionally optional: Expo Go and phones without an on-device
-// model continue to have a fully functional editor and dictation experience.
+// model use the authenticated cloud fallback for writing tools.
 const nativeModule = requireOptionalNativeModule('BookezAIWriting') as NativeAIWritingModule | null;
 
 export class AIWritingCanceledError extends Error {
@@ -60,6 +61,40 @@ const nativeIsAvailable = async () => {
   try { return await nativeModule.isAvailable(); } catch { return false; }
 };
 
+const cloudErrorMessage = async (error: unknown) => {
+  const response = (error as { context?: unknown } | null)?.context;
+  if (response instanceof Response) {
+    try {
+      const payload = await response.clone().json() as { error?: unknown };
+      if (typeof payload.error === 'string' && payload.error.trim()) return payload.error;
+    } catch { /* Fall through to the SDK error. */ }
+  }
+  return error instanceof Error && error.message.trim()
+    ? error.message
+    : 'Bookez could not generate that right now.';
+};
+
+const cloudGenerate = async (request: AIWritingRequest): Promise<AIWritingResponse> => {
+  const { data, error } = await supabase.functions.invoke<unknown>('bookez-ai-writing', { body: request });
+  if (error) throw new Error(await cloudErrorMessage(error));
+  if (!data || typeof data !== 'object') throw new Error('Bookez received an invalid AI response.');
+
+  const result = data as Record<string, unknown>;
+  return {
+    options: Array.isArray(result.options) ? result.options.filter((value): value is string => typeof value === 'string') : [],
+    ideas: Array.isArray(result.ideas)
+      ? result.ideas.flatMap((value) => {
+        if (!value || typeof value !== 'object') return [];
+        const idea = value as Record<string, unknown>;
+        return typeof idea.title === 'string' && typeof idea.detail === 'string'
+          ? [{ title: idea.title, detail: idea.detail }]
+          : [];
+      })
+      : [],
+    feedback: typeof result.feedback === 'string' ? result.feedback : '',
+  };
+};
+
 export const AIWritingService = {
   async isAvailable() {
     return nativeIsAvailable();
@@ -71,7 +106,7 @@ export const AIWritingService = {
   },
   async generate(request: AIWritingRequest) {
     if (await nativeIsAvailable() && nativeModule?.generate) return nativeModule.generate(request);
-    throw new Error(await this.getAvailabilityReason());
+    return cloudGenerate(request);
   },
   async cancel() {
     try { await nativeModule?.cancel?.(); } catch { /* A cancellation should never disrupt writing. */ }

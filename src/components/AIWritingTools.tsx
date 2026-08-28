@@ -97,7 +97,7 @@ export default function AIWritingTools({ text, selectedText, hasSelection, curso
   const promptText = sourceText.trim();
   const canUseTextTool = promptText.length > 0;
   const displayOptions = useMemo(() => response?.options ?? [], [response]);
-  const deviceDoesNotSupportOnDeviceAI = availabilityReason.includes('can’t run Apple Intelligence');
+  const deviceDoesNotSupportOnDeviceAI = !error && availabilityReason.includes('can’t run Apple Intelligence');
 
   useEffect(() => {
     let live = true;

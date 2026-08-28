@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Alert, Image, Modal, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { supabase } from '../lib/supabase';
-import { FeedbackHub, FeedbackRequestBuilder } from './CommunityFeedback';
+import { FeedbackHub, FeedbackRequestBuilder, FeedbackRequestDetail, type FeedbackRequest } from './CommunityFeedback';
 
 type ReactionType = 'keep_going' | 'great_progress' | 'congrats';
 
@@ -63,6 +63,7 @@ type CommunityItem = {
   feedbackManage?: boolean;
   feedbackRequestId?: string;
   feedbackRequestSummary?: string;
+  feedbackRequest?: FeedbackRequest;
 };
 
 export type CommunityProps = { userId: string | null; activeProject?: CommunityProject; projects?: CommunityProject[]; onSelectProject?: (title: string) => void; initialFeedbackProjectTitle?: string | null; onFeedbackOpened?: () => void };
@@ -75,21 +76,7 @@ const reactionOptions: Array<{ key: ReactionType; label: string; icon: string }>
 ];
 const defaultPreferences: Preferences = { show_profile: false, show_current_project: false, show_project_title: false, show_genre: false, show_completion_percent: false, show_current_stage: false, show_current_section: false, show_writing_now: false, show_streak: false, show_completed_projects: false };
 
-type FeedbackRequestFeedRow = {
-  id: string;
-  user_id: string;
-  project_title: string;
-  author_display_name: string;
-  author_visibility: string;
-  genre: string | null;
-  completion_percent: number | null;
-  stage: string | null;
-  cover_image_path: string | null;
-  selected_item_count: number;
-  content_scope: string;
-  focuses: unknown;
-  custom_question: string | null;
-};
+type FeedbackRequestFeedRow = Pick<FeedbackRequest, 'id' | 'user_id' | 'project_id' | 'project_title' | 'author_display_name' | 'author_visibility' | 'genre' | 'completion_percent' | 'stage' | 'cover_image_path' | 'selected_item_count' | 'content_scope' | 'focuses' | 'custom_question'>;
 
 const feedbackRequestLabel = (row: FeedbackRequestFeedRow) => {
   const focus = Array.isArray(row.focuses) && typeof row.focuses[0] === 'string' ? row.focuses[0] : null;
@@ -140,7 +127,7 @@ function ReactionTotals({ item }: { item: CommunityItem }) {
 }
 
 function ProjectCard({ item, onPress, onReact }: { item: CommunityItem; onPress: () => void; onReact: (item: CommunityItem, reaction: ReactionType) => void }) {
-  return <Pressable onPress={onPress} style={s.card} accessibilityRole="button" accessibilityLabel={`Open ${item.projectTitle ?? 'writer project'}`}><View style={s.cardTop}><Cover item={item} /><View style={s.cardCopy}><View style={s.writerRow}><Avatar item={item} /><Text numberOfLines={1} style={s.writerName}>{item.displayName}</Text>{item.writingNow && <View style={s.writingPill}><View style={s.liveDot} /><Text style={s.writingPillText}>Writing now</Text></View>}</View><Text numberOfLines={2} style={s.projectTitle}>{item.projectTitle ?? 'Untitled project'}</Text><Text numberOfLines={1} style={s.projectMeta}>{item.genre ?? item.projectType ?? 'Writing project'} · {item.stage ?? 'In progress'}</Text>{item.publicStatus && <Text numberOfLines={1} style={s.publicStatus}>{item.publicStatus}</Text>}<View style={s.progressTrack}><View style={[s.progressFill, { width: `${Math.max(2, Math.min(100, item.completionPercent ?? 0))}%`, backgroundColor: item.completed ? C.gold : C.periwinkle }]} /></View><Text style={s.progressText}>{item.completionPercent ?? 0}% complete</Text></View><Text style={s.cardArrow}>›</Text></View><View style={s.cardFooter}><ReactionTotals item={item} />{item.feedbackRequestId ? <Text style={s.feedbackCardAction}>Open</Text> : <View style={s.reactionActions}>{reactionOptions.map((reaction) => <Pressable key={reaction.key} onPress={(event) => { event.stopPropagation(); onReact(item, reaction.key); }} style={[s.reactionButton, item.myReaction === reaction.key && s.reactionButtonActive]} accessibilityLabel={reaction.label}><Text style={[s.reactionIcon, item.myReaction === reaction.key && s.reactionIconActive]}>{reaction.icon}</Text></Pressable>)}</View>}</View></Pressable>;
+  return <Pressable onPress={onPress} style={s.card} accessibilityRole="button" accessibilityLabel={`Open ${item.projectTitle ?? 'writer project'} details`}><View style={s.cardTop}><Cover item={item} /><View style={s.cardCopy}><View style={s.writerRow}><Avatar item={item} /><Text numberOfLines={1} style={s.writerName}>{item.displayName}</Text>{item.writingNow && <View style={s.writingPill}><View style={s.liveDot} /><Text style={s.writingPillText}>Writing now</Text></View>}</View><Text numberOfLines={2} style={s.projectTitle}>{item.projectTitle ?? 'Untitled project'}</Text><Text numberOfLines={1} style={s.projectMeta}>{item.genre ?? item.projectType ?? 'Writing project'} · {item.stage ?? 'In progress'}</Text>{item.feedbackRequest && <Text numberOfLines={1} style={s.feedbackBadge}>Open for feedback · Read or listen</Text>}{item.publicStatus && <Text numberOfLines={1} style={s.publicStatus}>{item.publicStatus}</Text>}<View style={s.progressTrack}><View style={[s.progressFill, { width: `${Math.max(2, Math.min(100, item.completionPercent ?? 0))}%`, backgroundColor: item.completed ? C.gold : C.periwinkle }]} /></View><Text style={s.progressText}>{item.completionPercent ?? 0}% complete</Text></View><Text style={s.cardArrow}>›</Text></View><View style={s.cardFooter}><ReactionTotals item={item} />{item.feedbackRequestId ? <Text style={s.feedbackCardAction}>Open</Text> : <View style={s.reactionActions}>{reactionOptions.map((reaction) => <Pressable key={reaction.key} onPress={(event) => { event.stopPropagation(); onReact(item, reaction.key); }} style={[s.reactionButton, item.myReaction === reaction.key && s.reactionButtonActive]} accessibilityLabel={reaction.label}><Text style={[s.reactionIcon, item.myReaction === reaction.key && s.reactionIconActive]}>{reaction.icon}</Text></Pressable>)}</View>}</View></Pressable>;
 }
 
 const feedbackFocuses = ['Title or cover', 'Opening', 'Pacing', 'Characters', 'Overall direction'];
@@ -167,6 +154,7 @@ function ProjectDetail({ item, userId, onClose, onReact, onBlock, onReport, onFe
   if (!item) return null;
   if (item.feedbackMode && item.feedbackProject && item.feedbackManage && item.feedbackRequestId) return <FeedbackHub userId={userId} initialRequestId={item.feedbackRequestId} onChanged={onFeedbackChanged} onClose={onClose} />;
   if (item.feedbackMode && item.feedbackProject) return <FeedbackRequestBuilder project={item.feedbackProject} userId={userId} onPublished={onFeedbackChanged} onClose={onClose} />;
+  if (item.feedbackRequest) return <FeedbackRequestDetail request={item.feedbackRequest} userId={userId} responseCount={0} standalone onChanged={() => { onFeedbackChanged?.(); onClose(); }} onClose={onClose} />;
   if (item.hubMode) return <FeedbackHub userId={userId} initialRequestId={item.feedbackRequestId} onClose={onClose} />;
   return <Modal visible={Boolean(item)} transparent animationType="slide" onRequestClose={onClose}><View style={s.modalShade}><Pressable style={s.modalDismiss} onPress={onClose} /><View style={s.detailSheet}><View style={s.sheetHandle} /><View style={s.detailHeader}><Cover item={item} large /><View style={s.detailHeaderCopy}><View style={s.writerRow}><Avatar item={item} /><Text style={s.writerName}>{item.displayName}</Text></View><Text style={s.detailTitle}>{item.projectTitle ?? 'Untitled project'}</Text><Text style={s.projectMeta}>{item.genre ?? item.projectType ?? 'Writing project'} · {item.stage ?? 'In progress'}</Text></View></View><Text style={s.detailBio}>{item.bio ?? `${item.displayName} is making steady progress on this writing project.`}</Text><View style={s.detailProgress}><View style={s.detailProgressTop}><Text style={s.detailProgressLabel}>CURRENT PROGRESS</Text><Text style={s.detailProgressValue}>{item.completionPercent ?? 0}%</Text></View><View style={s.progressTrack}><View style={[s.progressFill, { width: `${Math.max(2, Math.min(100, item.completionPercent ?? 0))}%`, backgroundColor: item.completed ? C.gold : C.periwinkle }]} /></View><Text style={s.detailStage}>{item.completed ? item.finishedLabel ?? 'Completed project' : item.publicStatus ?? item.stage ?? 'In progress'}</Text></View><Text style={s.detailSectionTitle}>Encourage this writer</Text><View style={s.detailReactions}>{reactionOptions.map((reaction) => <Pressable key={reaction.key} onPress={() => onReact(item, reaction.key)} style={[s.detailReaction, item.myReaction === reaction.key && s.detailReactionActive]}><Text style={[s.detailReactionIcon, item.myReaction === reaction.key && s.detailReactionTextActive]}>{reaction.icon}</Text><Text style={[s.detailReactionText, item.myReaction === reaction.key && s.detailReactionTextActive]}>{reaction.label}</Text></Pressable>)}</View>{!userId && <Text style={s.detailSignIn}>Sign in to send an encouragement.</Text>}<View style={s.detailActions}><Pressable onPress={() => onReport(item)} style={s.detailAction}><Text style={s.detailActionText}>Report</Text></Pressable>{item.userId !== userId && !item.demo && <Pressable onPress={() => onBlock(item)} style={s.detailAction}><Text style={s.detailActionText}>Block writer</Text></Pressable>}</View><Pressable onPress={onClose} style={s.closeButton}><Text style={s.closeButtonText}>Done</Text></Pressable></View></View></Modal>;
 }
@@ -179,6 +167,7 @@ export default function Community({ userId, activeProject, projects = [], onSele
   const [refreshing, setRefreshing] = useState(false);
   const [offline, setOffline] = useState(false);
   const [feedbackRequestFeed, setFeedbackRequestFeed] = useState<CommunityItem[]>([]);
+  const [feedbackRequestsByProject, setFeedbackRequestsByProject] = useState<Record<string, FeedbackRequest>>({});
   const [selected, setSelected] = useState<CommunityItem | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -241,18 +230,21 @@ export default function Community({ userId, activeProject, projects = [], onSele
   };
 
   const loadFeedbackRequestFeed = async () => {
-    if (!userId) { setFeedbackRequestFeed([]); return; }
-    const { data, error } = await supabase.from('community_feedback_requests').select('id,user_id,project_title,author_display_name,author_visibility,genre,completion_percent,stage,cover_image_path,selected_item_count,content_scope,focuses,custom_question').eq('status', 'open').order('created_at', { ascending: false }).limit(30);
-    if (error) { setFeedbackRequestFeed([]); return; }
+    if (!userId) { setFeedbackRequestFeed([]); setFeedbackRequestsByProject({}); return; }
+    const { data, error } = await supabase.from('community_feedback_requests').select('*').eq('status', 'open').order('created_at', { ascending: false }).limit(30);
+    if (error) { setFeedbackRequestFeed([]); setFeedbackRequestsByProject({}); return; }
+    const requestsByProject: Record<string, FeedbackRequest> = {};
     const next = (data ?? []).map((row) => {
-      const request = row as unknown as FeedbackRequestFeedRow;
-      return { id: `feedback-request-${request.id}`, userId: request.user_id, displayName: request.author_visibility === 'anonymous' ? 'Anonymous Writer' : request.author_display_name, projectTitle: request.project_title, genre: request.genre, projectType: request.genre, completionPercent: request.completion_percent, stage: request.stage, publicStatus: `${feedbackRequestLabel(request)}${request.custom_question ? ` · ${request.custom_question}` : ''}`, writingNow: false, completed: false, avatarInitials: request.author_visibility === 'anonymous' ? 'AW' : request.author_display_name.split(' ').map((part) => part[0]).join('').slice(0, 2).toUpperCase(), avatarColor: '#D6C8F4', coverColor: '#5B638E', coverImagePath: request.cover_image_path, reactions: { keep_going: 0, great_progress: 0, congrats: 0 }, feedbackMode: true, hubMode: true, feedbackRequestId: request.id, feedbackRequestSummary: feedbackRequestLabel(request) };
+      const request = row as unknown as FeedbackRequest;
+      requestsByProject[request.project_id] ??= request;
+      return { id: `feedback-request-${request.id}`, userId: request.user_id, displayName: request.author_visibility === 'anonymous' ? 'Anonymous Writer' : request.author_display_name, projectTitle: request.project_title, genre: request.genre, projectType: request.genre, completionPercent: request.completion_percent, stage: request.stage, publicStatus: `${feedbackRequestLabel(request)}${request.custom_question ? ` · ${request.custom_question}` : ''}`, writingNow: false, completed: false, avatarInitials: request.author_visibility === 'anonymous' ? 'AW' : request.author_display_name.split(' ').map((part) => part[0]).join('').slice(0, 2).toUpperCase(), avatarColor: '#D6C8F4', coverColor: '#5B638E', coverImagePath: request.cover_image_path, reactions: { keep_going: 0, great_progress: 0, congrats: 0 }, feedbackMode: true, feedbackRequestId: request.id, feedbackRequestSummary: feedbackRequestLabel(request), feedbackRequest: request };
     });
     setFeedbackRequestFeed(await Promise.all(next.map(async (item) => {
       if (!item.coverImagePath) return item;
       const cover = await supabase.storage.from('bookez-files').createSignedUrl(item.coverImagePath, 60 * 60);
       return cover.data?.signedUrl ? { ...item, coverImageUri: cover.data.signedUrl } : item;
     })));
+    setFeedbackRequestsByProject(requestsByProject);
   };
   useEffect(() => { void loadPreferences(); void loadFeed(); void loadFeedbackRequestFeed(); }, [userId]);
   const upsertCurrentProject = async (nextPreferences: Preferences) => {
@@ -292,8 +284,8 @@ export default function Community({ userId, activeProject, projects = [], onSele
 
   const visibleItems = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
-    return items.filter((item) => { const matchesQuery = !normalizedQuery || [item.displayName, item.projectTitle, item.genre, item.projectType].filter(Boolean).some((value) => String(value).toLowerCase().includes(normalizedQuery)); const matchesStage = stageFilter === 'All stages' || item.stage === stageFilter; return matchesQuery && matchesStage && (!writingOnly || item.writingNow); });
-  }, [items, query, stageFilter, writingOnly]);
+    return items.map((item) => ({ ...item, feedbackRequest: feedbackRequestsByProject[item.id] })).filter((item) => { const matchesQuery = !normalizedQuery || [item.displayName, item.projectTitle, item.genre, item.projectType].filter(Boolean).some((value) => String(value).toLowerCase().includes(normalizedQuery)); const matchesStage = stageFilter === 'All stages' || item.stage === stageFilter; return matchesQuery && matchesStage && (!writingOnly || item.writingNow); });
+  }, [feedbackRequestsByProject, items, query, stageFilter, writingOnly]);
   const activeGenre = activeProject?.genre?.toLowerCase();
   const sections = useMemo(() => {
     const recent = [...visibleItems].sort((a, b) => Date.parse(b.updatedAt ?? '') - Date.parse(a.updatedAt ?? ''));
@@ -354,7 +346,7 @@ const s: Record<string, any> = StyleSheet.create({
   offline: { marginTop: 10, padding: 10, borderRadius: 13, backgroundColor: '#FFF8EA', borderWidth: 1, borderColor: '#F2E1BA', flexDirection: 'row', alignItems: 'center' }, offlineText: { flex: 1, color: '#8A6B2D', fontSize: 8, lineHeight: 12 }, retry: { color: '#A97819', fontSize: 8, fontWeight: '800', marginLeft: 8 }, loading: { minHeight: 260, alignItems: 'center', justifyContent: 'center' }, loadingText: { color: C.muted, fontSize: 9, marginTop: 10 },
   section: { marginTop: 23 }, sectionHeader: { minHeight: 39, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, sectionTitle: { color: C.ink, fontSize: 16, fontWeight: '800' }, sectionHint: { color: C.muted, fontSize: 8, lineHeight: 12, marginTop: 3 }, seeAll: { color: C.periwinkle, fontSize: 8, fontWeight: '800' }, cardRail: { paddingTop: 8, paddingBottom: 2, paddingRight: 6, gap: 9 },
   card: { width: 270, padding: 10, borderRadius: 17, backgroundColor: 'rgba(255,255,255,0.94)', borderWidth: 1, borderColor: '#E5E2F0', shadowColor: '#6E6A94', shadowOpacity: 0.06, shadowRadius: 9, shadowOffset: { width: 0, height: 3 }, elevation: 2 }, cardTop: { flexDirection: 'row', minHeight: 108 }, cardCopy: { flex: 1, minWidth: 0, marginLeft: 9 }, cover: { width: 64, height: 86, borderRadius: 13, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }, coverLarge: { width: 82, height: 112, borderRadius: 17 }, coverImage: { ...StyleSheet.absoluteFill, width: undefined, height: undefined, zIndex: 0 }, coverLight: { ...StyleSheet.absoluteFill, zIndex: 1, elevation: 1 }, coverMark: { color: 'rgba(255,255,255,0.9)', fontSize: 20, fontWeight: '800', zIndex: 2 }, coverLabel: { color: 'rgba(255,255,255,0.8)', fontSize: 5, letterSpacing: 0.7, fontWeight: '800', marginTop: 3, zIndex: 2 },
-  writerRow: { flexDirection: 'row', alignItems: 'center', minWidth: 0 }, avatar: { width: 22, height: 22, borderRadius: 8, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }, avatarImage: { width: '100%', height: '100%' }, avatarText: { color: C.ink, fontSize: 7, fontWeight: '800' }, writerName: { color: C.muted, fontSize: 8, fontWeight: '800', marginLeft: 6, flexShrink: 1 }, writingPill: { flexDirection: 'row', alignItems: 'center', marginLeft: 'auto', paddingLeft: 5 }, liveDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: C.green, marginRight: 4 }, writingPillText: { color: C.green, fontSize: 7, fontWeight: '800' }, projectTitle: { color: C.ink, fontSize: 13, lineHeight: 17, fontWeight: '800', marginTop: 9 }, projectMeta: { color: C.muted, fontSize: 8, marginTop: 4 }, publicStatus: { color: C.periwinkle, fontSize: 8, marginTop: 4 }, progressTrack: { height: 5, marginTop: 9, borderRadius: 3, backgroundColor: '#ECEAF6', overflow: 'hidden' }, progressFill: { height: '100%', borderRadius: 3 }, progressText: { color: '#9294AE', fontSize: 7, marginTop: 4 }, cardArrow: { color: C.lavender, fontSize: 21, marginLeft: 6 },
+  writerRow: { flexDirection: 'row', alignItems: 'center', minWidth: 0 }, avatar: { width: 22, height: 22, borderRadius: 8, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }, avatarImage: { width: '100%', height: '100%' }, avatarText: { color: C.ink, fontSize: 7, fontWeight: '800' }, writerName: { color: C.muted, fontSize: 8, fontWeight: '800', marginLeft: 6, flexShrink: 1 }, writingPill: { flexDirection: 'row', alignItems: 'center', marginLeft: 'auto', paddingLeft: 5 }, liveDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: C.green, marginRight: 4 }, writingPillText: { color: C.green, fontSize: 7, fontWeight: '800' }, projectTitle: { color: C.ink, fontSize: 13, lineHeight: 17, fontWeight: '800', marginTop: 9 }, projectMeta: { color: C.muted, fontSize: 8, marginTop: 4 }, feedbackBadge: { color: C.green, fontSize: 7, fontWeight: '800', marginTop: 4 }, publicStatus: { color: C.periwinkle, fontSize: 8, marginTop: 4 }, progressTrack: { height: 5, marginTop: 9, borderRadius: 3, backgroundColor: '#ECEAF6', overflow: 'hidden' }, progressFill: { height: '100%', borderRadius: 3 }, progressText: { color: '#9294AE', fontSize: 7, marginTop: 4 }, cardArrow: { color: C.lavender, fontSize: 21, marginLeft: 6 },
   cardFooter: { marginTop: 8, paddingTop: 9, borderTopWidth: 1, borderTopColor: '#F0EEF5', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, reactionTotals: { flex: 1, color: '#9194AC', fontSize: 7 }, feedbackCardAction: { color: C.periwinkle, fontSize: 8, fontWeight: '800' }, reactionActions: { flexDirection: 'row', gap: 5 }, reactionButton: { width: 25, height: 25, borderRadius: 8, backgroundColor: '#F3F1FA', alignItems: 'center', justifyContent: 'center' }, reactionButtonActive: { backgroundColor: '#E8E3FF' }, reactionIcon: { color: C.muted, fontSize: 12 }, reactionIconActive: { color: C.periwinkle },
   empty: { marginTop: 8, padding: 20, borderRadius: 18, backgroundColor: 'rgba(255,255,255,0.54)', alignItems: 'center', borderWidth: 1, borderColor: '#ECEAF4' }, emptyIcon: { color: C.lavender, fontSize: 24 }, emptyTitle: { color: C.ink, fontSize: 11, fontWeight: '800', marginTop: 6, textAlign: 'center' }, emptyCopy: { color: C.muted, fontSize: 8, lineHeight: 13, textAlign: 'center', marginTop: 4, maxWidth: 280 },
   signInNote: { marginTop: 22, padding: 13, borderRadius: 16, backgroundColor: '#EEF8FF', borderWidth: 1, borderColor: '#D8EDF8' }, signInTitle: { color: '#365D78', fontSize: 10, fontWeight: '800' }, signInCopy: { color: '#4B7B9D', fontSize: 8, lineHeight: 12, marginTop: 4 },

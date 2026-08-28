@@ -28,6 +28,7 @@ import { uploadBookezFile, uploadBookezProfileAvatar } from './src/lib/bookez-st
 import { BOOK_EXPORT_FORMATS, buildBookHtml, buildBookMarkdown, buildBookText, buildDocx, buildEpub, bytesToBase64, type BookExportFormat } from './src/lib/bookez-export';
 import { clearBookezLocalSyncData, commitBookezProjectCursor, flushBookezQueue, getBookezStorageSummary, getBookezSyncSnapshot, keepBookezLocalConflict, loadBookezProjectChapters, pullBookezProjectSummaries, saveBookezChapter, saveBookezPlanSettings, saveBookezProject } from './src/lib/bookez-sync';
 import { requestBookezNotificationPermissions, syncBookezWritingNotifications, type BookezWritingReminder } from './src/lib/bookez-notifications';
+import { loadBookezSpeechVoice, saveBookezSpeechVoice, type BookezSpeechVoice } from './src/lib/speech-preferences';
 
 const sentryEnvironment = __DEV__ ? 'development' : 'production';
 const sentryDsn = process.env.EXPO_PUBLIC_SENTRY_DSN ?? 'https://497d40f44bc1b5561701ddc89e23fa99@o4511657628008448.ingest.us.sentry.io/4511850507075584';
@@ -4259,6 +4260,7 @@ function BookStudio({ projects, project, userId, initialSection, onBack, onPage,
   const [previewImageId, setPreviewImageId] = useState<string | null>(null);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [speakingLabel, setSpeakingLabel] = useState('');
+  const [speechVoice, setSpeechVoice] = useState<string | undefined>();
   const [selectedExportFormat, setSelectedExportFormat] = useState<BookExportFormat>('pdf');
   const [includeUnfinished, setIncludeUnfinished] = useState(true);
   const [exportBusy, setExportBusy] = useState(false);
@@ -4271,6 +4273,13 @@ function BookStudio({ projects, project, userId, initialSection, onBack, onPage,
     setSection(initialSection || getBookStudioState(project).lastSection);
     setReaderIndex(0);
   }, [project?.title, initialSection]);
+  useEffect(() => {
+    let mounted = true;
+    void loadBookezSpeechVoice().then((voice) => {
+      if (mounted) setSpeechVoice(voice?.identifier);
+    });
+    return () => { mounted = false; };
+  }, []);
   useEffect(() => () => { speechRun.current += 1; Speech.stop(); }, []);
 
   if (!project) return <View style={s.studioError}><Text style={s.studioErrorIcon}>⌁</Text><Text style={s.studioErrorTitle}>Book not found</Text><Text style={s.studioErrorCopy}>This book is no longer available in your library.</Text><Pressable onPress={onBack} style={s.studioPrimaryButton}><Text style={s.studioPrimaryButtonText}>Back to Library</Text></Pressable></View>;
@@ -4396,7 +4405,7 @@ function BookStudio({ projects, project, userId, initialSection, onBack, onPage,
       if (speechRun.current !== run || segmentIndex >= segments.length) { if (speechRun.current === run) { setIsSpeaking(false); setSpeakingLabel(''); } return; }
       const chunks = splitSpeechText(segments[segmentIndex].text);
       if (chunkIndex === 0) setSpeakingLabel(segments[segmentIndex].label);
-      Speech.speak(chunks[chunkIndex], { rate: 0.95, onStart: () => setIsSpeaking(true), onDone: () => chunkIndex + 1 < chunks.length ? speakAt(segmentIndex, chunkIndex + 1) : speakAt(segmentIndex + 1), onError: () => { setIsSpeaking(false); setSpeakingLabel(''); } });
+      Speech.speak(chunks[chunkIndex], { rate: 0.95, voice: speechVoice, onStart: () => setIsSpeaking(true), onDone: () => chunkIndex + 1 < chunks.length ? speakAt(segmentIndex, chunkIndex + 1) : speakAt(segmentIndex + 1), onError: () => { setIsSpeaking(false); setSpeakingLabel(''); } });
     };
     if (!segments.length) { Alert.alert('Nothing to listen to yet', 'Write at least one part before starting read-aloud.'); return; }
     speakAt(Math.min(startIndex, segments.length - 1));
@@ -4411,7 +4420,7 @@ function BookStudio({ projects, project, userId, initialSection, onBack, onPage,
     {accordion('appearance', 'Appearance', 'Formatting used by the read preview.', <><View style={s.studioControlRow}><Text style={s.studioControlLabel}>Font size</Text><View style={s.studioControlOptions}><Pressable onPress={() => updateStudio({ appearance: { ...studio.appearance, fontSize: 15 } })} style={[s.studioOption, studio.appearance.fontSize === 15 && s.studioOptionSelected]}><Text style={s.studioOptionText}>Small</Text></Pressable><Pressable onPress={() => updateStudio({ appearance: { ...studio.appearance, fontSize: 18 } })} style={[s.studioOption, studio.appearance.fontSize === 18 && s.studioOptionSelected]}><Text style={s.studioOptionText}>Large</Text></Pressable></View></View><View style={s.studioControlRow}><Text style={s.studioControlLabel}>Heading style</Text><View style={s.studioControlOptions}><Pressable onPress={() => updateStudio({ appearance: { ...studio.appearance, headingStyle: 'classic' } })} style={[s.studioOption, studio.appearance.headingStyle === 'classic' && s.studioOptionSelected]}><Text style={s.studioOptionText}>Classic</Text></Pressable><Pressable onPress={() => updateStudio({ appearance: { ...studio.appearance, headingStyle: 'modern' } })} style={[s.studioOption, studio.appearance.headingStyle === 'modern' && s.studioOptionSelected]}><Text style={s.studioOptionText}>Modern</Text></Pressable></View></View><View style={s.studioControlRow}><Text style={s.studioControlLabel}>Alignment</Text><View style={s.studioControlOptions}><Pressable onPress={() => updateStudio({ appearance: { ...studio.appearance, alignment: 'left' } })} style={[s.studioOption, studio.appearance.alignment === 'left' && s.studioOptionSelected]}><Text style={s.studioOptionText}>Left</Text></Pressable><Pressable onPress={() => updateStudio({ appearance: { ...studio.appearance, alignment: 'center' } })} style={[s.studioOption, studio.appearance.alignment === 'center' && s.studioOptionSelected]}><Text style={s.studioOptionText}>Center</Text></Pressable></View></View></>)}
     <Pressable onPress={refreshPreview} style={s.studioPrimaryButton}><Text style={s.studioPrimaryButtonText}>Refresh book preview</Text><Text style={s.studioPrimaryButtonArrow}>↗</Text></Pressable></>;
   const renderRead = () => <><View style={s.readerToolbar}><View><Text style={s.studioKicker}>READ PREVIEW</Text><Text style={s.readerToolbarTitle}>{book.totalWords ? `${formatCount(book.totalWords)} words` : 'No drafted content yet'}</Text></View><Pressable onPress={() => changeSection('listen')} style={s.readerListenButton}><Text style={s.readerListenText}>◷ Listen</Text></Pressable></View><View style={s.readerToc}><Text style={s.readerTocTitle}>In this book</Text>{book.chapters.map((chapter, index) => <Pressable key={chapter.key} onPress={() => setReaderIndex(index)} style={[s.readerTocRow, readerIndex === index && s.readerTocRowSelected]}><Text style={s.readerTocNumber}>{String(index + 1).padStart(2, '0')}</Text><Text numberOfLines={1} style={s.readerTocLabel}>{chapter.title}</Text><Text style={s.readerTocState}>{chapter.complete ? '✓' : '—'}</Text></Pressable>)}</View><View style={s.readerBook}><View style={s.readerTitlePage}><Text style={s.readerTitleKicker}>BOOKEZ STUDIO</Text>{book.images.find((image) => image.placement === 'cover') && <ImagePreview image={book.images.find((image) => image.placement === 'cover')} config={imageConfig} onPress={() => { setPreviewImageId(book.images.find((image) => image.placement === 'cover')?.id ?? null); setSection('assemble'); }} />}<Text style={[s.readerBookTitle, studio.appearance.headingStyle === 'modern' && s.readerBookTitleModern]}>{book.title}</Text><Text style={s.readerBookStatus}>{book.status === 'finished' ? 'Finished manuscript' : 'Work in progress'}</Text></View>{book.frontMatter.filter((item) => item.included && item.id !== 'titlePage' && item.id !== 'tableOfContents').map((item) => <View key={item.id} style={s.readerMatter}><Text style={s.readerMatterTitle}>{item.label}</Text><Text style={[s.readerBody, { textAlign: studio.appearance.alignment }]}>{item.content}</Text></View>)}{book.chapters.map((chapter, index) => <View key={chapter.key} style={s.readerChapter}><Text style={[s.readerChapterTitle, studio.appearance.headingStyle === 'modern' && s.readerChapterTitleModern]}>{chapter.title}</Text>{renderChapterVisuals(chapter)}{chapter.content ? chapter.content.split(/\n\s*\n/).map((paragraph, paragraphIndex) => <Text key={`${chapter.key}-${paragraphIndex}`} style={[s.readerBody, { fontSize: studio.appearance.fontSize, lineHeight: studio.appearance.fontSize * studio.appearance.lineSpacing, marginBottom: studio.appearance.paragraphSpacing, textAlign: studio.appearance.alignment }]}>{paragraph}</Text>) : <View style={s.readerMissing}><Text style={s.readerMissingIcon}>⌁</Text><Text style={s.readerMissingTitle}>This part is not drafted yet.</Text><Text style={s.readerMissingCopy}>It is intentionally left out of the reading flow until you write it.</Text><Pressable onPress={() => openWritingPart(chapter.key)} style={s.readerWriteButton}><Text style={s.readerWriteButtonText}>Open in Write</Text></Pressable></View>}</View>)}{book.backMatter.filter((item) => item.included).map((item) => <View key={item.id} style={s.readerMatter}><Text style={s.readerMatterTitle}>{item.label}</Text><Text style={[s.readerBody, { textAlign: studio.appearance.alignment }]}>{item.content}</Text></View>)}</View></>;
-  const renderListen = () => <><View style={s.listenHero}><View style={s.listenOrb}><Text style={s.listenOrbText}>{isSpeaking ? '◷' : '♫'}</Text></View><View style={s.listenHeroCopy}><Text style={s.studioKicker}>READ ALOUD</Text><Text style={s.listenTitle}>{isSpeaking ? `Listening to ${speakingLabel}` : 'Hear the book take shape.'}</Text><Text style={s.listenCopy}>Uses your device’s built-in voice and the same drafted manuscript shown in Read.</Text></View></View><View style={s.listenControls}><Pressable onPress={isSpeaking ? stopSpeaking : () => speakSegments(speechSegments)} style={[s.studioPrimaryButton, isSpeaking && s.studioStopButton]}><Text style={s.studioPrimaryButtonText}>{isSpeaking ? 'Stop listening' : 'Listen to book'}</Text><Text style={s.studioPrimaryButtonArrow}>{isSpeaking ? '×' : '▶'}</Text></Pressable><Text style={s.listenNote}>On iPhone, turn off silent mode to hear speech.</Text></View><Text style={s.studioSectionTitle}>Drafted parts</Text>{book.chapters.map((chapter) => <View key={chapter.key} style={s.listenRow}><View style={s.listenRowIcon}><Text style={s.listenRowIconText}>{chapter.complete ? '♫' : '—'}</Text></View><View style={s.studioOrderCopy}><Text style={s.studioOrderTitle}>{chapter.title}</Text><Text style={s.studioOrderMeta}>{chapter.complete ? `${formatCount(chapter.words)} words` : 'Not available until drafted'}</Text></View>{chapter.complete && <Pressable onPress={() => speakSegments([{ label: chapter.title, text: chapter.content }])} style={s.listenRowButton}><Text style={s.listenRowButtonText}>Listen</Text></Pressable>}</View>)}</>;
+  const renderListen = () => <><View style={s.listenHero}><View style={s.listenOrb}><Text style={s.listenOrbText}>{isSpeaking ? '◷' : '♫'}</Text></View><View style={s.listenHeroCopy}><Text style={s.studioKicker}>READ ALOUD</Text><Text style={s.listenTitle}>{isSpeaking ? `Listening to ${speakingLabel}` : 'Hear the book take shape.'}</Text><Text style={s.listenCopy}>Uses your selected device voice and the same drafted manuscript shown in Read.</Text></View></View><View style={s.listenControls}><Pressable onPress={isSpeaking ? stopSpeaking : () => speakSegments(speechSegments)} style={[s.studioPrimaryButton, isSpeaking && s.studioStopButton]}><Text style={s.studioPrimaryButtonText}>{isSpeaking ? 'Stop listening' : 'Listen to book'}</Text><Text style={s.studioPrimaryButtonArrow}>{isSpeaking ? '×' : '▶'}</Text></Pressable><Text style={s.listenNote}>On iPhone, turn off silent mode to hear speech.</Text></View><Text style={s.studioSectionTitle}>Drafted parts</Text>{book.chapters.map((chapter) => <View key={chapter.key} style={s.listenRow}><View style={s.listenRowIcon}><Text style={s.listenRowIconText}>{chapter.complete ? '♫' : '—'}</Text></View><View style={s.studioOrderCopy}><Text style={s.studioOrderTitle}>{chapter.title}</Text><Text style={s.studioOrderMeta}>{chapter.complete ? `${formatCount(chapter.words)} words` : 'Not available until drafted'}</Text></View>{chapter.complete && <Pressable onPress={() => speakSegments([{ label: chapter.title, text: chapter.content }])} style={s.listenRowButton}><Text style={s.listenRowButtonText}>Listen</Text></Pressable>}</View>)}</>;
   const renderExport = () => <><View style={s.exportHero}><Text style={s.studioKicker}>EXPORT</Text><Text style={s.exportTitle}>Take the book with you.</Text><Text style={s.exportCopy}>Create a real file in the format your readers, editors, or publishing tools need. Every export includes the current saved draft and can include planned parts that are not finished yet.</Text></View><View style={s.exportStats}><View><Text style={s.exportStatValue}>{formatCount(book.totalWords)}</Text><Text style={s.exportStatLabel}>WORDS</Text></View><View style={s.exportStatDivider} /><View><Text style={s.exportStatValue}>{book.chapters.filter((chapter) => chapter.complete).length}/{book.chapters.length}</Text><Text style={s.exportStatLabel}>PARTS DRAFTED</Text></View></View><View style={exportS.panel}><Text style={exportS.panelLabel}>FILE FORMAT</Text><View style={exportS.formatGrid}>{BOOK_EXPORT_FORMATS.map((item) => <Pressable key={item.format} onPress={() => setSelectedExportFormat(item.format)} style={[exportS.formatCard, selectedExportFormat === item.format && exportS.formatCardSelected]} accessibilityRole="button" accessibilityState={{ selected: selectedExportFormat === item.format }}><Text style={[exportS.formatLabel, selectedExportFormat === item.format && exportS.formatLabelSelected]}>{item.label}</Text><Text style={exportS.formatDescription}>{item.description}</Text></Pressable>)}</View><View style={exportS.includeRow}><View style={exportS.includeCopy}><Text style={exportS.includeTitle}>Include unfinished parts</Text><Text style={exportS.includeHint}>Keeps every planned section in the export with a clear “not drafted yet” marker.</Text></View><Switch value={includeUnfinished} onValueChange={setIncludeUnfinished} accessibilityLabel="Include unfinished parts" trackColor={{ false: '#D7D9E6', true: '#BAB6F1' }} thumbColor={includeUnfinished ? C.periwinkle : '#FFF'} /></View><Text style={exportS.selectedSummary}>{exportDescriptor.label} · {exportDescriptor.description}</Text></View><View style={exportS.actionGrid}><Pressable onPress={shareExport} disabled={exportBusy} style={[exportS.actionButton, exportBusy && exportS.actionDisabled]}><Text style={exportS.actionIcon}>↗</Text><Text style={exportS.actionTitle}>{exportBusy ? 'Preparing…' : 'Share file'}</Text><Text style={exportS.actionHint}>Open the device share sheet</Text></Pressable><Pressable onPress={saveExportToPhone} disabled={exportBusy} style={[exportS.actionButton, exportBusy && exportS.actionDisabled]}><Text style={exportS.actionIcon}>⇩</Text><Text style={exportS.actionTitle}>Save to phone</Text><Text style={exportS.actionHint}>{Platform.OS === 'android' ? 'Choose a device folder' : 'Save through Files'}</Text></Pressable><Pressable onPress={emailExport} disabled={exportBusy} style={[exportS.actionButton, exportBusy && exportS.actionDisabled]}><Text style={exportS.actionIcon}>✉</Text><Text style={exportS.actionTitle}>Email export</Text><Text style={exportS.actionHint}>Attach the file to a new email</Text></Pressable></View>{lastExportUri && <Text style={exportS.savedNotice}>Saved in Bookez Documents. You can export again at any time as your draft changes.</Text>}<Text style={s.exportFootnote}>PDF, DOCX, EPUB, plain text, Markdown, and HTML are generated locally on your device. Nothing is uploaded to create an export.</Text></>;
 
   return <View style={s.studioPage}><View style={s.studioHeader}><Pressable onPress={onBack} style={s.studioBackButton} accessibilityLabel="Back to Library"><Text style={s.studioBackIcon}>‹</Text></Pressable><Pressable onPress={() => setPickerOpen(true)} style={s.studioHeaderCopy}><Text style={s.studioOverline}>BOOKEZ / BOOK STUDIO</Text><Text numberOfLines={1} style={s.studioHeaderTitle}>{project.title}</Text><Text style={s.studioHeaderMeta}>{snapshot.stage} · {snapshot.progressPercent}% · {project.updatedAt ? `Saved ${formatLastEdited(project.updatedAt)}` : 'Local draft'}</Text></Pressable><Pressable onPress={() => setMenuOpen(true)} style={s.studioOverflowButton} accessibilityLabel="Open Book Studio menu"><Text style={s.studioOverflowText}>•••</Text></Pressable></View><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.studioTabs}>{(['assemble', 'read', 'listen', 'export'] as StudioSection[]).map((item) => <Pressable key={item} onPress={() => changeSection(item)} style={[s.studioTab, section === item && s.studioTabSelected]}><Text style={[s.studioTabText, section === item && s.studioTabTextSelected]}>{item[0].toUpperCase() + item.slice(1)}</Text></Pressable>)}</ScrollView>{section === 'assemble' ? renderAssemble() : section === 'read' ? renderRead() : section === 'listen' ? renderListen() : renderExport()}
@@ -4423,10 +4432,21 @@ function BookStudio({ projects, project, userId, initialSection, onBack, onPage,
 type LegalDocument = 'privacy' | 'terms';
 type AccountAction = 'logout' | 'delete';
 type ProfileReminder = { id: string; label: string; time: string; days: number[]; enabled: boolean };
+type DeviceSpeechVoice = Awaited<ReturnType<typeof Speech.getAvailableVoicesAsync>>[number];
 const profileReminderStorageKey = (ownerId: string) => `bookez.notification-preferences.${ownerId}`;
 const defaultProfileReminders: ProfileReminder[] = [{ id: 'weekday-writing', label: 'Writing session', time: '7:00 PM', days: [1, 2, 3, 4, 5], enabled: true }];
 type ProfileFeedbackType = 'recommendation' | 'suggestion';
 type ProfileSupportType = 'help' | 'feedback' | 'problem';
+
+const toBookezSpeechVoice = (voice: DeviceSpeechVoice): BookezSpeechVoice => ({
+  identifier: voice.identifier,
+  name: voice.name || voice.identifier,
+  language: voice.language || 'Unknown language',
+  quality: voice.quality === undefined ? undefined : String(voice.quality),
+});
+
+const speechVoiceQualityLabel = (quality?: string) => quality?.toLowerCase().includes('enhanced') ? 'Enhanced voice' : 'Standard voice';
+const speechVoicePickerDefaultId = 'device-default';
 
 const supportHelpTopics = [
   { id: 'plan', icon: '⌁', title: 'Plan your book', copy: 'Turn one idea into a clear, manageable writing path.', body: 'Start with Plan → Set the Scope, then choose the structure that feels right. You can change the plan later without losing your writing.' },
@@ -4560,6 +4580,13 @@ function ProfileSupportSheet({ visible, type, onClose, onSwitchToFeedback }: { v
 function Profile({ projects, reminders, onRemindersChange, profileReminders, onProfileRemindersChange, onLogout, onDeleteAccount, cloudSyncState, cloudConflictCount, cloudBackupEnabled, onCloudBackupChange, onSyncNow, onReviewConflicts, onPage, onOpenBookStudio, onOpenOnboarding }: { projects: Project[]; reminders: boolean; onRemindersChange: (enabled: boolean) => void; profileReminders: ProfileReminder[]; onProfileRemindersChange: Dispatch<SetStateAction<ProfileReminder[]>>; onLogout: () => void; onDeleteAccount: () => void; cloudSyncState: 'saved' | 'saving' | 'offline' | 'paused' | 'error' | 'conflict'; cloudConflictCount: number; cloudBackupEnabled: boolean; onCloudBackupChange: (enabled: boolean) => void; onSyncNow: () => void; onReviewConflicts: () => void; onPage: (page: Page) => void; onOpenBookStudio: (title: string, section: StudioSection) => void; onOpenOnboarding: () => void }) {
   const [notificationPanelOpen, setNotificationPanelOpen] = useState(false);
   const [expandedReminderId, setExpandedReminderId] = useState('weekday-writing');
+  const [voicePanelOpen, setVoicePanelOpen] = useState(false);
+  const [voicePickerOpen, setVoicePickerOpen] = useState(false);
+  const [availableVoices, setAvailableVoices] = useState<BookezSpeechVoice[]>([]);
+  const [selectedVoice, setSelectedVoice] = useState<BookezSpeechVoice | null>(null);
+  const [voiceLoading, setVoiceLoading] = useState(false);
+  const [voicePreviewingId, setVoicePreviewingId] = useState<string | null>(null);
+  const [voiceError, setVoiceError] = useState('');
   const [legalDocument, setLegalDocument] = useState<LegalDocument | null>(null);
   const [accountAction, setAccountAction] = useState<AccountAction | null>(null);
   const [authOpen, setAuthOpen] = useState(false);
@@ -4621,6 +4648,14 @@ function Profile({ projects, reminders, onRemindersChange, profileReminders, onP
     })();
     return () => { active = false; };
   }, [cloudProfile?.id]);
+
+  useEffect(() => {
+    let mounted = true;
+    void loadBookezSpeechVoice().then((voice) => {
+      if (mounted) setSelectedVoice(voice);
+    });
+    return () => { mounted = false; void Speech.stop(); };
+  }, []);
 
   const openProfileEditor = () => {
     if (!cloudProfile) { setAuthOpen(true); return; }
@@ -4713,6 +4748,64 @@ function Profile({ projects, reminders, onRemindersChange, profileReminders, onP
       setStorageDetailsBusy(false);
     }
   };
+  const refreshSpeechVoices = async () => {
+    setVoiceLoading(true);
+    setVoiceError('');
+    try {
+      const savedVoice = await loadBookezSpeechVoice();
+      const installedVoices = await Speech.getAvailableVoicesAsync();
+      const nextVoices = installedVoices
+        .map(toBookezSpeechVoice)
+        .sort((first, second) => `${first.language}-${first.name}`.localeCompare(`${second.language}-${second.name}`));
+      const matchingVoice = savedVoice ? nextVoices.find((voice) => voice.identifier === savedVoice.identifier) ?? null : null;
+      setAvailableVoices(nextVoices);
+      setSelectedVoice(matchingVoice ?? (nextVoices.length ? null : savedVoice));
+      if (savedVoice && nextVoices.length && !matchingVoice) void saveBookezSpeechVoice(null);
+    } catch {
+      setVoiceError('Bookez could not read the voices installed on this device.');
+    } finally {
+      setVoiceLoading(false);
+    }
+  };
+  const openSpeechVoicePicker = () => {
+    setVoicePickerOpen(true);
+    void refreshSpeechVoices();
+  };
+  const closeSpeechVoicePicker = () => {
+    setVoicePickerOpen(false);
+    void Speech.stop();
+    setVoicePreviewingId(null);
+  };
+  const chooseSpeechVoice = (voice: BookezSpeechVoice | null) => {
+    setSelectedVoice(voice);
+    setVoicePickerOpen(false);
+    setVoiceError('');
+    void Speech.stop();
+    setVoicePreviewingId(null);
+    void saveBookezSpeechVoice(voice).catch(() => setVoiceError('Voice choice could not be saved on this device.'));
+  };
+  const previewSpeechVoice = (voice: BookezSpeechVoice | null) => {
+    const previewId = voice?.identifier ?? speechVoicePickerDefaultId;
+    if (voicePreviewingId === previewId) {
+      void Speech.stop();
+      setVoicePreviewingId(null);
+      return;
+    }
+    void Speech.stop();
+    setVoicePreviewingId(previewId);
+    try {
+      Speech.speak('This is your Bookez reading voice.', {
+        voice: voice?.identifier,
+        rate: 0.95,
+        onDone: () => setVoicePreviewingId(null),
+        onStopped: () => setVoicePreviewingId(null),
+        onError: () => { setVoicePreviewingId(null); setVoiceError('This voice could not start a preview.'); },
+      });
+    } catch {
+      setVoicePreviewingId(null);
+      setVoiceError('This voice could not start a preview.');
+    }
+  };
   const cloudSyncSummary = !cloudEmail
     ? 'Not connected'
     : cloudSyncState === 'saving'
@@ -4751,6 +4844,29 @@ function Profile({ projects, reminders, onRemindersChange, profileReminders, onP
       <Pressable onPress={() => setNotificationPanelOpen(!notificationPanelOpen)} style={s.notificationPanelHeader} accessibilityRole="button" accessibilityLabel={notificationPanelOpen ? 'Close notification controls' : 'Open notification controls'}><View style={s.notificationBell}><Text style={s.notificationBellText}>◷</Text></View><View style={s.notificationHeaderCopy}><Text style={s.notificationTitle}>Writing reminders</Text><Text style={s.notificationSub}>{reminders ? `${profileReminders.length} reminder${profileReminders.length === 1 ? '' : 's'} · choose your days and times` : 'Turn them on for gentle, book-specific nudges'}</Text></View><Switch value={reminders} onValueChange={(value) => { onRemindersChange(value); if (value) setNotificationPanelOpen(true); }} trackColor={{ false: '#D7D9E6', true: '#BAB6F1' }} thumbColor={reminders ? C.periwinkle : '#FFF'} /></Pressable>
       {notificationPanelOpen && <View style={s.notificationPanelBody}><Text style={s.notificationPanelHint}>Make the rhythm fit your week. Add as many reminders as you need. Times use your device’s local time.</Text>{reminders ? profileReminders.map((reminder) => { const expanded = expandedReminderId === reminder.id; return <View key={reminder.id} style={[s.notificationReminder, expanded && s.notificationReminderExpanded]}><Pressable onPress={() => setExpandedReminderId(expanded ? '' : reminder.id)} style={s.notificationReminderSummary} accessibilityRole="button" accessibilityLabel={`${reminder.label}, ${reminder.time}`}><View style={[s.notificationReminderIcon, reminder.enabled && s.notificationReminderIconActive]}><Text style={s.notificationReminderIconText}>◷</Text></View><View style={s.notificationReminderCopy}><Text numberOfLines={1} style={s.notificationReminderLabel}>{reminder.label || 'Untitled reminder'}</Text><Text style={s.notificationReminderMeta}>{reminder.time} · {reminder.days.length === 7 ? 'Every day' : reminder.days.map((day) => dayLabels[day]).join('')}</Text></View><Switch value={reminder.enabled} onValueChange={(value) => updateProfileReminder(reminder.id, { enabled: value })} trackColor={{ false: '#D7D9E6', true: '#BAB6F1' }} thumbColor={reminder.enabled ? C.periwinkle : '#FFF'} /><Text style={s.notificationReminderChevron}>{expanded ? '⌃' : '⌄'}</Text></Pressable>{expanded && <View style={s.notificationReminderEditor}><Text style={s.notificationFieldLabel}>REMINDER NAME</Text><TextInput value={reminder.label} onChangeText={(value) => updateProfileReminder(reminder.id, { label: value })} placeholder="Writing session" placeholderTextColor="#A0A3BB" style={s.notificationInput} accessibilityLabel="Reminder name" /><Text style={s.notificationFieldLabel}>TIME</Text><TextInput value={reminder.time} onChangeText={(value) => updateProfileReminder(reminder.id, { time: value })} onEndEditing={({ nativeEvent }) => { const normalized = normalizeReminderTime(nativeEvent.text); if (normalized) updateProfileReminder(reminder.id, { time: normalized }); else Alert.alert('Check the reminder time', 'Use a time such as 7:00 PM or 19:00.'); }} placeholder="e.g. 7:00 PM" placeholderTextColor="#A0A3BB" style={s.notificationInput} accessibilityLabel="Reminder time" /><Text style={s.notificationFieldLabel}>DAYS OF THE WEEK</Text><View style={s.notificationDaysRow}>{dayLabels.map((label, day) => <Pressable key={`${reminder.id}-${day}`} onPress={() => toggleProfileReminderDay(reminder.id, day)} style={[s.notificationDay, reminder.days.includes(day) && s.notificationDayActive]} accessibilityLabel={`${reminder.days.includes(day) ? 'Remove' : 'Add'} ${dayNames[day]}`}><Text style={[s.notificationDayText, reminder.days.includes(day) && s.notificationDayTextActive]}>{label}</Text></Pressable>)}</View><View style={s.notificationReminderActions}><Text style={s.notificationReminderDaysHint}>{reminder.days.length ? reminder.days.length === 7 ? 'Every day' : `${reminder.days.length} days selected` : 'Choose at least one day'}</Text><Pressable onPress={() => removeProfileReminder(reminder.id)} style={s.notificationRemoveButton}><Text style={s.notificationRemoveText}>Remove</Text></Pressable></View></View>}</View>; }) : <Text style={s.notificationDisabledCopy}>Reminders are paused. Turn them on whenever you want a gentle nudge.</Text>}<Pressable onPress={addProfileReminder} style={s.notificationAddButton} accessibilityRole="button"><Text style={s.notificationAddIcon}>＋</Text><Text style={s.notificationAddText}>Add another reminder</Text></Pressable></View>}
     </View>
+    <Text style={s.preferenceTitle}>Reading & listening</Text>
+    <View style={s.voicePanel}>
+      <Pressable onPress={() => setVoicePanelOpen((current) => !current)} style={s.voicePanelHeader} accessibilityRole="button" accessibilityState={{ expanded: voicePanelOpen }} accessibilityLabel={voicePanelOpen ? 'Collapse reading voice settings' : 'Expand reading voice settings'}>
+        <View style={s.voicePanelIcon}><Text style={s.voicePanelIconText}>◖</Text></View>
+        <View style={s.voicePanelCopy}><Text style={s.voicePanelKicker}>AUDIOBOOK VOICE</Text><Text style={s.voicePanelTitle}>Reading voice</Text><Text numberOfLines={1} style={s.voicePanelStatus}>{selectedVoice ? `${selectedVoice.name} · ${selectedVoice.language}` : 'Device default voice'}</Text></View>
+        <Text style={s.voicePanelChevron}>{voicePanelOpen ? '⌃' : '⌄'}</Text>
+      </Pressable>
+      {voicePanelOpen && <View style={s.voicePanelBody}>
+        <Text style={s.voicePanelHint}>Choose the voice Bookez uses when it reads your books and shared writing aloud. The list comes from voices installed on your phone.</Text>
+        <Pressable onPress={openSpeechVoicePicker} style={s.voicePickerTrigger} accessibilityRole="button" accessibilityLabel="Choose a reading voice"><View style={s.voicePickerTriggerIcon}><Text style={s.voicePickerTriggerIconText}>♫</Text></View><View style={s.voicePickerTriggerCopy}><Text style={s.voicePickerTriggerLabel}>Voice selection</Text><Text numberOfLines={1} style={s.voicePickerTriggerValue}>{selectedVoice?.name ?? 'Device default'}</Text></View><Text style={s.voicePickerTriggerArrow}>›</Text></Pressable>
+        <Pressable onPress={() => previewSpeechVoice(selectedVoice)} style={s.voicePreviewButton} accessibilityRole="button"><Text style={s.voicePreviewButtonIcon}>{voicePreviewingId ? 'Ⅱ' : '▶'}</Text><Text style={s.voicePreviewButtonText}>{voicePreviewingId ? 'Stop preview' : 'Preview this voice'}</Text></Pressable>
+        {voiceError ? <Text style={s.voiceError}>{voiceError}</Text> : null}
+      </View>}
+    </View>
+    <Modal animationType="slide" visible={voicePickerOpen} transparent onRequestClose={closeSpeechVoicePicker}>
+      <View style={s.profileModalShade}><Pressable style={s.profileModalDismiss} onPress={closeSpeechVoicePicker} /><View style={s.voicePickerSheet}><View style={s.sheetHandle} /><View style={s.voicePickerHeader}><View style={s.voicePickerHeaderCopy}><Text style={s.legalOverline}>BOOKEZ / AUDIOBOOK</Text><Text style={s.voicePickerTitle}>Choose a reading voice</Text></View><Pressable onPress={closeSpeechVoicePicker} style={s.closeButton} accessibilityLabel="Close reading voice picker"><Text style={s.closeButtonText}>×</Text></Pressable></View><Text style={s.voicePickerDescription}>Every voice below is supplied by your phone. Enhanced voices may sound more natural and can require a device download.</Text>
+        <Pressable onPress={() => chooseSpeechVoice(null)} style={[s.voiceOption, !selectedVoice && s.voiceOptionSelected]} accessibilityRole="button" accessibilityState={{ selected: !selectedVoice }}><View style={s.voiceOptionIcon}><Text style={s.voiceOptionIconText}>◌</Text></View><View style={s.voiceOptionCopy}><Text style={s.voiceOptionName}>Device default</Text><Text style={s.voiceOptionMeta}>Let your phone choose the system voice</Text></View>{!selectedVoice && <Text style={s.voiceOptionCheck}>✓</Text>}</Pressable>
+        <ScrollView style={s.voiceOptionList} contentContainerStyle={s.voiceOptionListContent} showsVerticalScrollIndicator nestedScrollEnabled>
+          {voiceLoading ? <View style={s.voiceLoading}><ActivityIndicator color={C.periwinkle} /><Text style={s.voiceLoadingText}>Looking for voices on this phone…</Text></View> : availableVoices.length ? availableVoices.map((voice) => <View key={voice.identifier} style={[s.voiceOption, selectedVoice?.identifier === voice.identifier && s.voiceOptionSelected]}><Pressable onPress={() => chooseSpeechVoice(voice)} style={s.voiceOptionSelect} accessibilityRole="button" accessibilityState={{ selected: selectedVoice?.identifier === voice.identifier }}><View style={s.voiceOptionIcon}><Text style={s.voiceOptionIconText}>◖</Text></View><View style={s.voiceOptionCopy}><Text numberOfLines={1} style={s.voiceOptionName}>{voice.name}</Text><Text style={s.voiceOptionMeta}>{voice.language} · {speechVoiceQualityLabel(voice.quality)}</Text></View>{selectedVoice?.identifier === voice.identifier && <Text style={s.voiceOptionCheck}>✓</Text>}</Pressable><Pressable onPress={() => previewSpeechVoice(voice)} style={s.voiceOptionPreview} accessibilityRole="button" accessibilityLabel={`Preview ${voice.name}`}><Text style={s.voiceOptionPreviewText}>{voicePreviewingId === voice.identifier ? 'Stop' : 'Preview'}</Text></Pressable></View>) : <View style={s.voiceEmpty}><Text style={s.voiceEmptyIcon}>◌</Text><Text style={s.voiceEmptyTitle}>No installed voices found</Text><Text style={s.voiceEmptyCopy}>{voiceError || 'Your device will use its default reading voice.'}</Text><Pressable onPress={() => void refreshSpeechVoices()} style={s.voiceRetryButton}><Text style={s.voiceRetryText}>Try again</Text></Pressable></View>}
+        </ScrollView>
+        <Pressable onPress={closeSpeechVoicePicker} style={s.voiceDoneButton}><Text style={s.voiceDoneButtonText}>Done</Text></Pressable>
+      </View></View>
+    </Modal>
     <Text style={s.preferenceTitle}>Getting started</Text>
     <View style={s.settingsCard}>
       <Pressable onPress={onOpenOnboarding} style={s.settingsRow} accessibilityRole="button" accessibilityLabel="Review the Bookez quick tour"><View style={s.settingsRowCopy}><View style={[s.settingsIcon, s.settingsIconBlue]}><Text style={s.settingsIconText}>✦</Text></View><View><Text style={s.settingsText}>Review the Bookez tour</Text><Text style={s.settingsSub}>See how Library, Plan, Write, Journey, Stats, and Community fit together</Text></View></View><Text style={s.chevron}>›</Text></Pressable>
@@ -6166,6 +6282,59 @@ const s: any = Object.assign(StyleSheet.create({
   coverSetupHeader: { flexDirection: 'row', alignItems: 'flex-start' }, coverSetupIcon: { width: 36, height: 36, borderRadius: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFF1D0' }, coverSetupIconText: { color: '#A97819', fontSize: 17 }, coverSetupCopy: { flex: 1, marginLeft: 10 }, coverSetupTitle: { color: C.ink, fontSize: 15, fontWeight: '700', marginTop: 3 }, coverSetupHint: { color: C.muted, fontSize: 9, lineHeight: 13, marginTop: 4 }, coverSetupEmpty: { marginTop: 12, minHeight: 62, paddingHorizontal: 10, borderRadius: 15, backgroundColor: '#FFF8EA', flexDirection: 'row', alignItems: 'center' }, coverSetupEmptyIcon: { width: 31, height: 31, borderRadius: 11, backgroundColor: '#FFF', color: '#A97819', fontSize: 21, lineHeight: 29, textAlign: 'center', marginRight: 9 }, coverSetupEmptyTitle: { color: C.ink, fontSize: 10, fontWeight: '700' }, coverSetupEmptyHint: { color: C.muted, fontSize: 8, marginTop: 3 }, coverSetupEmptyArrow: { color: '#A97819', fontSize: 20, marginLeft: 'auto' }, coverSetupPreviewRow: { marginTop: 12, padding: 9, borderRadius: 15, backgroundColor: '#FFF8EA', flexDirection: 'row', alignItems: 'center' }, coverSetupPreview: { width: 62, height: 81, borderRadius: 9, backgroundColor: '#E8E6F4' }, coverSetupPreviewCopy: { flex: 1, marginLeft: 10 }, coverSetupImageTitle: { color: C.ink, fontSize: 10, fontWeight: '700' }, coverSetupImageMeta: { color: C.muted, fontSize: 8, lineHeight: 12, marginTop: 4 }, coverSetupActions: { flexDirection: 'row', gap: 6, marginTop: 8 }, coverSetupSecondary: { minHeight: 27, paddingHorizontal: 9, borderRadius: 9, backgroundColor: '#F0EDFF', alignItems: 'center', justifyContent: 'center' }, coverSetupSecondaryText: { color: C.periwinkle, fontSize: 8, fontWeight: '700' }, coverSetupRemove: { minHeight: 27, paddingHorizontal: 9, borderRadius: 9, backgroundColor: '#FFF0EC', alignItems: 'center', justifyContent: 'center' }, coverSetupRemoveText: { color: '#C96567', fontSize: 8, fontWeight: '700' },
   coverImage: { width: '100%', height: '100%', borderRadius: 11 },
 }));
+
+Object.assign(s, {
+  voicePanel: { borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.8)', borderWidth: 1, borderColor: '#E9E7F1', overflow: 'hidden' },
+  voicePanelHeader: { minHeight: 76, paddingHorizontal: 13, flexDirection: 'row', alignItems: 'center' },
+  voicePanelIcon: { width: 37, height: 37, borderRadius: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F0EEFF' },
+  voicePanelIconText: { color: C.periwinkle, fontSize: 18 },
+  voicePanelCopy: { flex: 1, minWidth: 0, marginLeft: 10, marginRight: 7 },
+  voicePanelKicker: { color: C.periwinkle, fontSize: 7, letterSpacing: 0.85, fontWeight: '800' },
+  voicePanelTitle: { color: C.ink, fontSize: 13, fontWeight: '700', marginTop: 3 },
+  voicePanelStatus: { color: C.muted, fontSize: 9, marginTop: 4 },
+  voicePanelChevron: { color: C.periwinkle, fontSize: 19 },
+  voicePanelBody: { paddingHorizontal: 13, paddingBottom: 13, borderTopWidth: 1, borderTopColor: '#EEEAF4' },
+  voicePanelHint: { color: C.muted, fontSize: 9, lineHeight: 14, marginTop: 11 },
+  voicePickerTrigger: { minHeight: 55, marginTop: 11, paddingHorizontal: 9, borderRadius: 14, backgroundColor: '#FFF', borderWidth: 1, borderColor: '#E9E7F1', flexDirection: 'row', alignItems: 'center' },
+  voicePickerTriggerIcon: { width: 31, height: 31, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: '#EEECFF' },
+  voicePickerTriggerIconText: { color: C.periwinkle, fontSize: 15 },
+  voicePickerTriggerCopy: { flex: 1, minWidth: 0, marginLeft: 8 },
+  voicePickerTriggerLabel: { color: C.muted, fontSize: 7, letterSpacing: 0.55, fontWeight: '800' },
+  voicePickerTriggerValue: { color: C.ink, fontSize: 10, fontWeight: '700', marginTop: 3 },
+  voicePickerTriggerArrow: { color: C.periwinkle, fontSize: 20, marginLeft: 8 },
+  voicePreviewButton: { minHeight: 35, marginTop: 8, paddingHorizontal: 10, borderRadius: 11, backgroundColor: '#F3F1FF', flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
+  voicePreviewButtonIcon: { color: C.periwinkle, fontSize: 11, marginRight: 6 },
+  voicePreviewButtonText: { color: C.periwinkle, fontSize: 9, fontWeight: '800' },
+  voiceError: { color: '#C96567', fontSize: 8, lineHeight: 12, marginTop: 8 },
+  voicePickerSheet: { maxHeight: '90%', padding: 20, paddingBottom: 24, borderTopLeftRadius: 29, borderTopRightRadius: 29, backgroundColor: '#FBFAFF', shadowColor: '#39365B', shadowOpacity: 0.2, shadowRadius: 20, shadowOffset: { width: 0, height: -5 }, elevation: 10 },
+  voicePickerHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' },
+  voicePickerHeaderCopy: { flex: 1, minWidth: 0, paddingRight: 12 },
+  voicePickerTitle: { color: C.ink, fontSize: 23, lineHeight: 28, letterSpacing: -0.4, fontWeight: '700', marginTop: 5 },
+  voicePickerDescription: { color: C.muted, fontSize: 10, lineHeight: 15, marginTop: 9 },
+  voiceOption: { minHeight: 58, marginTop: 8, padding: 8, borderRadius: 15, backgroundColor: '#FFF', borderWidth: 1, borderColor: '#E9E7F1', flexDirection: 'row', alignItems: 'center' },
+  voiceOptionSelected: { backgroundColor: '#F3F1FF', borderColor: '#D9D2FA' },
+  voiceOptionSelect: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center' },
+  voiceOptionIcon: { width: 34, height: 34, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: '#EEECFF' },
+  voiceOptionIconText: { color: C.periwinkle, fontSize: 16 },
+  voiceOptionCopy: { flex: 1, minWidth: 0, marginLeft: 9 },
+  voiceOptionName: { color: C.ink, fontSize: 10, fontWeight: '800' },
+  voiceOptionMeta: { color: C.muted, fontSize: 8, marginTop: 3 },
+  voiceOptionCheck: { color: C.periwinkle, fontSize: 17, fontWeight: '800', marginLeft: 7 },
+  voiceOptionPreview: { minHeight: 29, marginLeft: 7, paddingHorizontal: 8, borderRadius: 9, backgroundColor: '#F2F1F7', alignItems: 'center', justifyContent: 'center' },
+  voiceOptionPreviewText: { color: C.periwinkle, fontSize: 7, fontWeight: '800' },
+  voiceOptionList: { maxHeight: 330, marginTop: 3 },
+  voiceOptionListContent: { paddingBottom: 2 },
+  voiceLoading: { minHeight: 120, alignItems: 'center', justifyContent: 'center' },
+  voiceLoadingText: { color: C.muted, fontSize: 9, marginTop: 8 },
+  voiceEmpty: { minHeight: 145, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 20 },
+  voiceEmptyIcon: { color: C.periwinkle, fontSize: 25 },
+  voiceEmptyTitle: { color: C.ink, fontSize: 12, fontWeight: '800', marginTop: 7 },
+  voiceEmptyCopy: { color: C.muted, fontSize: 9, lineHeight: 14, textAlign: 'center', marginTop: 4 },
+  voiceRetryButton: { minHeight: 31, marginTop: 10, paddingHorizontal: 11, borderRadius: 10, backgroundColor: '#F0EDFF', alignItems: 'center', justifyContent: 'center' },
+  voiceRetryText: { color: C.periwinkle, fontSize: 8, fontWeight: '800' },
+  voiceDoneButton: { minHeight: 46, marginTop: 12, borderRadius: 14, backgroundColor: C.periwinkle, alignItems: 'center', justifyContent: 'center' },
+  voiceDoneButtonText: { color: '#FFF', fontSize: 10, fontWeight: '800' },
+});
 
 const exportS = StyleSheet.create({
   panel: { marginTop: 13, padding: 13, borderRadius: 19, backgroundColor: 'rgba(255,255,255,0.86)', borderWidth: 1, borderColor: '#E7E5F1' },

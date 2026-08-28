@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { LinearGradient } from 'expo-linear-gradient';
+import MaskedView from '@react-native-masked-view/masked-view';
 import { Image, StyleSheet, View, useWindowDimensions, type StyleProp, type ViewStyle } from 'react-native';
 import Animated, {
   Easing,
@@ -25,16 +26,34 @@ type BiomeConfig = {
 };
 
 const BIOME_ARTWORK = [
-  require('../../assets/journey-environment-meadow-river-v3.jpg'),
-  require('../../assets/journey-environment-moonriver-river-v3.jpg'),
-  require('../../assets/journey-environment-lake-river-v3.jpg'),
-  require('../../assets/journey-environment-desert-river-v3.jpg'),
-  require('../../assets/journey-environment-sunset-river-v3.jpg'),
+  require('../../assets/journey/journey-meadow.png'),
+  require('../../assets/journey/journey-alpine.png'),
+  require('../../assets/journey/journey-night-forest.png'),
+  require('../../assets/journey/journey-canyon.png'),
+  require('../../assets/journey/journey-sunset.png'),
 ] as const;
 
-// All current Journey artwork is 1024x1536 (2:3). Keep that full portrait
-// composition visible in each biome; the biome color fills any extra map space
-// without stretching or cropping the river scene.
+// Each supplied scene has its own directional continuations. They render only
+// above and below the untouched source artwork, never as a replacement layer.
+const BIOME_ABOVE_CONTINUATIONS = [
+  require('../../assets/journey/journey-meadow-above.png'),
+  require('../../assets/journey/journey-alpine-above.png'),
+  require('../../assets/journey/journey-night-forest-above.png'),
+  require('../../assets/journey/journey-canyon-above.png'),
+  require('../../assets/journey/journey-sunset-above.png'),
+] as const;
+
+const BIOME_BELOW_CONTINUATIONS = [
+  require('../../assets/journey/journey-meadow-below.png'),
+  require('../../assets/journey/journey-alpine-below.png'),
+  require('../../assets/journey/journey-night-forest-below.png'),
+  require('../../assets/journey/journey-canyon-below.png'),
+  require('../../assets/journey/journey-sunset-below.png'),
+] as const;
+
+// Every source uses its own measured aspect ratio. This keeps all five
+// illustrations—including the 1023 × 1537 moonlit forest—pixel-faithful.
+const ARTWORK_ASPECTS = [1024 / 1536, 1024 / 1536, 1023 / 1537, 1024 / 1536, 1024 / 1536] as const;
 const withAlpha = (hex: string, alpha: number) => {
   const normalized = hex.replace('#', '');
   const value = normalized.length === 3 ? normalized.split('').map((part) => part + part).join('') : normalized;
@@ -48,14 +67,14 @@ const BIOMES: BiomeConfig[] = [
     accent: '#5F9F54',
   },
   {
-    id: 'moonriver',
-    base: '#445487',
-    accent: '#8290C7',
-  },
-  {
     id: 'lake',
     base: '#BFE8EE',
     accent: '#4C8798',
+  },
+  {
+    id: 'moonriver',
+    base: '#445487',
+    accent: '#8290C7',
   },
   {
     id: 'desert',
@@ -71,35 +90,75 @@ const BIOMES: BiomeConfig[] = [
 
 function ScenicLayer({ width, height }: { width: number; height: number }) {
   const sectionHeight = height / BIOME_ARTWORK.length;
-  const transitionOverlap = Math.min(96, Math.max(56, sectionHeight * 0.08));
+  const transitionOverlap = Math.min(140, Math.max(80, sectionHeight * 0.1));
   return <View pointerEvents="none" style={[styles.scenicLayer, { width, height }]}>
     {BIOME_ARTWORK.map((source, index) => {
       const biome = BIOMES[index];
+      const aboveContinuation = BIOME_ABOVE_CONTINUATIONS[index];
+      const belowContinuation = BIOME_BELOW_CONTINUATIONS[index];
       const frameTop = index * sectionHeight - (index === 0 ? 0 : transitionOverlap);
       const frameHeight = sectionHeight + (index === 0 ? 0 : transitionOverlap) + (index === BIOME_ARTWORK.length - 1 ? 0 : transitionOverlap);
+      // The artwork, rather than the route section, determines its displayed
+      // dimensions. If a section is short, we reduce both dimensions by the
+      // same scale so the complete original remains visible.
+      const artworkAspect = ARTWORK_ASPECTS[index];
+      const artworkWidth = Math.min(width, frameHeight * artworkAspect);
+      const artworkHeight = artworkWidth / artworkAspect;
+      const artworkLeft = (width - artworkWidth) / 2;
+      const artworkTop = Math.max(0, (frameHeight - artworkHeight) / 2);
+      const continuationHeight = width / artworkAspect;
+      const seamBlendHeight = Math.min(132, Math.max(92, artworkHeight * 0.12));
+      const lowerContinuationTop = artworkTop + artworkHeight;
+      const lowerContinuationHeight = frameHeight - lowerContinuationTop;
+      const hasUpperContinuation = artworkTop > 0;
+      const hasLowerContinuation = lowerContinuationHeight > 0;
+      const topMaskStop = hasUpperContinuation ? seamBlendHeight / artworkHeight : 0;
+      const bottomMaskStop = hasLowerContinuation ? 1 - seamBlendHeight / artworkHeight : 1;
       return <View key={biome.id} collapsable={false} style={[styles.biomeArtworkFrame, { width, height: frameHeight, top: frameTop, backgroundColor: biome.base }]}>
-        <Image
-          source={source}
-          resizeMode="contain"
-          fadeDuration={0}
-          accessibilityIgnoresInvertColors
-          style={styles.biomeFill}
-        />
+        {hasUpperContinuation && <View style={[styles.biomeContinuation, { top: 0, width, height: artworkTop + seamBlendHeight }]}>
+          <Image source={aboveContinuation} resizeMode="cover" fadeDuration={0} accessible={false} style={styles.continuationCover} />
+          <Image
+            source={aboveContinuation}
+            resizeMode="contain"
+            fadeDuration={0}
+            accessible={false}
+            style={[styles.continuationArtwork, { width, height: continuationHeight, bottom: 0 }]}
+          />
+        </View>}
+        {hasLowerContinuation && <View style={[styles.biomeContinuation, { top: lowerContinuationTop - seamBlendHeight, width, height: lowerContinuationHeight + seamBlendHeight }]}>
+          <Image source={belowContinuation} resizeMode="cover" fadeDuration={0} accessible={false} style={styles.continuationCover} />
+          <Image
+            source={belowContinuation}
+            resizeMode="contain"
+            fadeDuration={0}
+            accessible={false}
+            style={[styles.continuationArtwork, { width, height: continuationHeight, top: 0 }]}
+          />
+        </View>}
+        <MaskedView
+          style={[styles.biomeArtwork, { width: artworkWidth, height: artworkHeight, left: artworkLeft, top: artworkTop }]}
+          maskElement={<LinearGradient
+            colors={[hasUpperContinuation ? 'transparent' : '#000000', '#000000', '#000000', hasLowerContinuation ? 'transparent' : '#000000'] as const}
+            locations={[0, topMaskStop, bottomMaskStop, 1] as const}
+            style={styles.artworkMask}
+          />}
+        >
+          <Image
+            source={source}
+            resizeMode="contain"
+            fadeDuration={0}
+            accessibilityIgnoresInvertColors
+            style={styles.maskedArtworkImage}
+          />
+        </MaskedView>
         <LinearGradient
-          colors={['rgba(102,171,193,0)', 'rgba(126,190,207,0.16)', 'rgba(212,244,247,0.38)', 'rgba(126,190,207,0.16)', 'rgba(102,171,193,0)'] as const}
-          locations={[0, 0.2, 0.5, 0.8, 1] as const}
-          start={{ x: 0, y: 0.5 }}
-          end={{ x: 1, y: 0.5 }}
-          style={styles.riverChannel}
-        />
-        <LinearGradient
-          colors={[withAlpha(biome.base, 0.22), 'rgba(255,255,255,0.02)', withAlpha(biome.base, 0.22)] as const}
+          colors={[withAlpha(biome.base, 0.08), 'rgba(255,255,255,0.01)', withAlpha(biome.base, 0.08)] as const}
           start={{ x: 0, y: 0.5 }}
           end={{ x: 1, y: 0.5 }}
           style={styles.scenicSideVignette}
         />
         <LinearGradient
-          colors={['rgba(255,255,255,0.01)', 'rgba(222,242,247,0.13)', 'rgba(255,255,255,0.01)'] as const}
+          colors={['rgba(255,255,255,0.005)', 'rgba(222,242,247,0.04)', 'rgba(255,255,255,0.005)'] as const}
           start={{ x: 0, y: 0.5 }}
           end={{ x: 1, y: 0.5 }}
           style={styles.pathReadabilityVeil}
@@ -269,8 +328,12 @@ const styles = StyleSheet.create({
   environment: { position: 'absolute', top: 0, left: 0, backgroundColor: '#DDEEC7' },
   scenicLayer: { position: 'absolute', top: 0, left: 0, overflow: 'hidden' },
   biomeArtworkFrame: { position: 'absolute', left: 0, overflow: 'hidden' },
-  biomeFill: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 },
-  riverChannel: { position: 'absolute', top: 0, right: '27%', bottom: 0, left: '37%' },
+  biomeContinuation: { position: 'absolute', left: 0, overflow: 'hidden' },
+  continuationCover: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 },
+  continuationArtwork: { position: 'absolute', left: 0 },
+  biomeArtwork: { position: 'absolute' },
+  artworkMask: { flex: 1 },
+  maskedArtworkImage: { width: '100%', height: '100%' },
   scenicSideVignette: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 },
   pathReadabilityVeil: { position: 'absolute', top: 0, right: '28%', bottom: 0, left: '28%' },
   biomeTopFeather: { position: 'absolute', top: 0, right: 0, left: 0 },
