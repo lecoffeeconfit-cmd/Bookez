@@ -8,6 +8,7 @@ import * as MailComposer from 'expo-mail-composer';
 import * as Print from 'expo-print';
 import * as Speech from 'expo-speech';
 import * as Sharing from 'expo-sharing';
+import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
 import * as Linking from 'expo-linking';
 import * as Notifications from 'expo-notifications';
@@ -25,7 +26,7 @@ import JourneyEnvironment from './src/components/JourneyEnvironment';
 import type { AIWritingOperation } from './src/lib/ai-writing';
 import { deleteBookezData, ensureBookezProfile, handleBookezAuthUrl, isBookezPasswordValid, resendSignupConfirmation, sendPasswordReset, signInWithEmail, signOutBookez, signUpWithEmail, updateBookezPassword } from './src/lib/bookez-auth';
 import { uploadBookezFile, uploadBookezProfileAvatar } from './src/lib/bookez-storage';
-import { BOOK_EXPORT_FORMATS, buildBookHtml, buildBookMarkdown, buildBookText, buildDocx, buildEpub, bytesToBase64, type BookExportFormat } from './src/lib/bookez-export';
+import { BOOK_EXPORT_FORMATS, buildBookHtml, buildBookMarkdown, buildBookText, buildBookezBackup, buildDocx, buildEpub, bytesToBase64, type BookExportFormat, type BookExportLayout, type BookExportOptions } from './src/lib/bookez-export';
 import { clearBookezLocalSyncData, commitBookezProjectCursor, flushBookezQueue, getBookezStorageSummary, getBookezSyncSnapshot, keepBookezLocalConflict, loadBookezProjectChapters, pullBookezProjectSummaries, saveBookezChapter, saveBookezPlanSettings, saveBookezProject } from './src/lib/bookez-sync';
 import { requestBookezNotificationPermissions, syncBookezWritingNotifications, type BookezWritingReminder } from './src/lib/bookez-notifications';
 import { loadBookezSpeechVoice, saveBookezSpeechVoice, type BookezSpeechVoice } from './src/lib/speech-preferences';
@@ -415,9 +416,10 @@ type BookStudioState = {
   backMatterText: Record<string, string>;
   chapterOrder: string[];
   appearance: BookStudioAppearance;
+  authorName?: string;
   exportedAt?: number;
 };
-type Project = { title: string; color: string; mark: string; type: string; pageGoal: string; unitGoal: string; plan: ProjectPlan; cloudId?: string; cloudRevision?: number; updatedAt?: number; archived?: boolean; deletedAt?: number; studio?: BookStudioState; images?: BookezImage[]; imageEnabled?: boolean };
+type Project = { title: string; color: string; mark: string; type: string; pageGoal: string; unitGoal: string; plan: ProjectPlan; cloudId?: string; cloudRevision?: number; updatedAt?: number; archived?: boolean; deletedAt?: number; studio?: BookStudioState; images?: BookezImage[]; imageEnabled?: boolean; communityPublic?: boolean; communityPreviewPublic?: boolean };
 const projectKey = (project: Project, index: number) => project.cloudId ?? `${project.title}-${project.archived ? 'archived' : 'active'}-${index}`;
 
 function getReferenceCitations(plan: ProjectPlan, images: BookezImage[] = []) {
@@ -1253,7 +1255,7 @@ function Pill({ label, selected, onPress }: { label: string; selected?: boolean;
   return <Pressable onPress={onPress} style={[s.pill, selected && s.pillSelected]}><Text style={[s.pillText, selected && s.pillTextSelected]}>{label}</Text></Pressable>;
 }
 
-function Library({ projects, activeProject, userId, onPage, onSelectProject, onProjectsChange, onOpenBookStudio }: { projects: Project[]; activeProject: string; userId: string | null; onPage: (page: Page) => void; onSelectProject: (title: string) => void; onProjectsChange: (projects: Project[]) => void; onOpenBookStudio: (title: string, section: StudioSection) => void }) {
+function Library({ projects, activeProject, userId, onPage, onSelectProject, onProjectsChange, onOpenBookStudio, onOpenWritingBook }: { projects: Project[]; activeProject: string; userId: string | null; onPage: (page: Page) => void; onSelectProject: (title: string) => void; onProjectsChange: (projects: Project[]) => void; onOpenBookStudio: (title: string, section: StudioSection) => void; onOpenWritingBook: (title: string) => void }) {
   const [composerOpen, setComposerOpen] = useState(false);
   const [selectedType, setSelectedType] = useState(projectTypes[0]);
   const [projectName, setProjectName] = useState('');
@@ -1264,6 +1266,10 @@ function Library({ projects, activeProject, userId, onPage, onSelectProject, onP
   const [focusPickerOpen, setFocusPickerOpen] = useState(false);
   const [sourcesProject, setSourcesProject] = useState<Project | null>(null);
   const [feedbackProject, setFeedbackProject] = useState<Project | null>(null);
+  const [communityShareProject, setCommunityShareProject] = useState<Project | null>(null);
+  const [communityShareEnabled, setCommunityShareEnabled] = useState(false);
+  const [communityPreviewEnabled, setCommunityPreviewEnabled] = useState(false);
+  const [communityShareBusy, setCommunityShareBusy] = useState(false);
 
   const activeBooks = projects.filter((project) => !project.archived && !project.deletedAt);
   const closestProject = [...activeBooks].sort((a, b) => {
@@ -1276,8 +1282,11 @@ function Library({ projects, activeProject, userId, onPage, onSelectProject, onP
 
   const openFocusBook = (nextPage: Page) => {
     if (!focusProject) return;
-    onSelectProject(focusProject.title);
-    onPage(nextPage);
+    if (nextPage === 'Write') onOpenWritingBook(focusProject.title);
+    else {
+      onSelectProject(focusProject.title);
+      onPage(nextPage);
+    }
   };
 
   const toFeedbackProject = (project: Project): CommunityProject => {
@@ -1296,15 +1305,52 @@ function Library({ projects, activeProject, userId, onPage, onSelectProject, onP
     setComposerOpen(false);
   };
 
-  const selectAndOpen = (project: Project, nextPage: Page) => { onSelectProject(project.title); setMenuProject(null); onPage(nextPage); };
+  const selectAndOpen = (project: Project, nextPage: Page) => { setMenuProject(null); if (nextPage === 'Write') onOpenWritingBook(project.title); else { onSelectProject(project.title); onPage(nextPage); } };
   const updateLibraryProject = (title: string, changes: Partial<Project>) => onProjectsChange(projects.map((project) => project.title === title ? { ...project, ...changes, updatedAt: Date.now() } : project));
   const duplicateProject = (project: Project) => {
     const title = `${project.title} Copy`;
-const copy: Project = { ...project, cloudId: createLocalUuid(), cloudRevision: 0, title, updatedAt: Date.now(), archived: false, deletedAt: undefined, plan: { ...project.plan, structure: { ...project.plan.structure }, plotNotes: { ...project.plan.plotNotes }, unitIdeas: [...project.plan.unitIdeas], partNotes: { ...project.plan.partNotes }, chapterEnds: project.plan.chapterEnds ? { ...project.plan.chapterEnds } : {}, referenceEntries: project.plan.referenceEntries ? project.plan.referenceEntries.map((entry) => ({ ...entry })) : [], drafts: { ...project.plan.drafts }, journeyCelebrations: project.plan.journeyCelebrations ? { ...project.plan.journeyCelebrations } : {}, activity: project.plan.activity ? { ...project.plan.activity } : {}, chapterRevisions: {} }, studio: project.studio ? { ...project.studio, frontMatterIncluded: { ...project.studio.frontMatterIncluded }, frontMatterText: { ...project.studio.frontMatterText }, backMatterIncluded: { ...project.studio.backMatterIncluded }, backMatterText: { ...project.studio.backMatterText }, chapterOrder: [...project.studio.chapterOrder], appearance: { ...project.studio.appearance } } : undefined };
+const copy: Project = { ...project, cloudId: createLocalUuid(), cloudRevision: 0, title, updatedAt: Date.now(), archived: false, deletedAt: undefined, communityPublic: false, communityPreviewPublic: false, plan: { ...project.plan, structure: { ...project.plan.structure }, plotNotes: { ...project.plan.plotNotes }, unitIdeas: [...project.plan.unitIdeas], partNotes: { ...project.plan.partNotes }, chapterEnds: project.plan.chapterEnds ? { ...project.plan.chapterEnds } : {}, referenceEntries: project.plan.referenceEntries ? project.plan.referenceEntries.map((entry) => ({ ...entry })) : [], drafts: { ...project.plan.drafts }, journeyCelebrations: project.plan.journeyCelebrations ? { ...project.plan.journeyCelebrations } : {}, activity: project.plan.activity ? { ...project.plan.activity } : {}, chapterRevisions: {} }, studio: project.studio ? { ...project.studio, frontMatterIncluded: { ...project.studio.frontMatterIncluded }, frontMatterText: { ...project.studio.frontMatterText }, backMatterIncluded: { ...project.studio.backMatterIncluded }, backMatterText: { ...project.studio.backMatterText }, chapterOrder: [...project.studio.chapterOrder], appearance: { ...project.studio.appearance } } : undefined };
     onProjectsChange([copy, ...projects]); onSelectProject(title); setMenuProject(null);
   };
   const saveRename = () => { if (!renameProject) return; const nextTitle = renameValue.trim(); if (!nextTitle || nextTitle === renameProject.title || projects.some((project) => project.title === nextTitle)) return; onProjectsChange(projects.map((project) => project.title === renameProject.title ? { ...project, title: nextTitle, updatedAt: Date.now() } : project)); if (activeProject === renameProject.title) onSelectProject(nextTitle); setRenameProject(null); setRenameValue(''); };
   const confirmDelete = (project: Project) => Alert.alert(`Delete “${project.title}”?`, 'This hides the book and queues a secure cloud deletion. You can keep writing offline while it waits to sync.', [{ text: 'Cancel', style: 'cancel' }, { text: 'Delete', style: 'destructive', onPress: () => { const deletedAt = Date.now(); const remaining = projects.filter((item) => item.title !== project.title && !item.deletedAt); onProjectsChange(projects.map((item) => item.title === project.title ? { ...item, deletedAt, archived: true, updatedAt: deletedAt } : item)); if (activeProject === project.title && remaining[0]) onSelectProject(remaining[0].title); } }]);
+  const openCommunityShare = (project: Project) => { setMenuProject(null); setCommunityShareProject(project); setCommunityShareEnabled(Boolean(project.communityPublic)); setCommunityPreviewEnabled(Boolean(project.communityPreviewPublic)); };
+  useEffect(() => {
+    if (!communityShareProject?.cloudId || !userId) return;
+    let mounted = true;
+    void supabase.from('community_projects').select('show_in_community,show_preview').eq('project_id', communityShareProject.cloudId).maybeSingle().then(({ data }) => {
+      if (mounted && data) { setCommunityShareEnabled(data.show_in_community === true); setCommunityPreviewEnabled(data.show_preview === true); }
+    });
+    return () => { mounted = false; };
+  }, [communityShareProject?.cloudId, userId]);
+  const saveCommunitySettings = async (nextShareValue: boolean, nextPreviewValue: boolean) => {
+    const project = communityShareProject;
+    if (!project) return;
+    if (!userId) { Alert.alert('Sign in to share this book', 'Connect your Bookez account before making a book visible in Community.'); return; }
+    if (!project.cloudId) { Alert.alert('Sync this book first', 'This book needs to be connected to your Bookez account before it can appear in Community.'); return; }
+    setCommunityShareBusy(true);
+    const snapshot = getJourneySnapshot(project);
+    const coverImage = project.images?.find((image) => image.placement === 'cover');
+    let error = null;
+    if (nextShareValue && nextPreviewValue) {
+      const preview = buildCommunityPreviewSnapshot(project, snapshot);
+      const previewResult = await supabase.from('community_project_previews').upsert({ project_id: project.cloudId, user_id: userId, content: preview.content, word_count: preview.wordCount }, { onConflict: 'project_id' });
+      error = previewResult.error;
+    }
+    if (!error) {
+      const projectResult = await supabase.from('community_projects').upsert({ project_id: project.cloudId, user_id: userId, show_in_community: nextShareValue, show_preview: nextShareValue && nextPreviewValue, project_title: project.title, genre: project.type, project_type: project.type, completion_percent: snapshot.progressPercent, stage: snapshot.stage, public_status: snapshot.nextPart ? `Writing ${snapshot.nextPart.title}` : snapshot.stage, cover_color: project.color, cover_image_path: coverImage?.storagePath ?? null }, { onConflict: 'project_id' });
+      error = projectResult.error;
+    }
+    setCommunityShareBusy(false);
+    if (error) { Alert.alert('Could not update Community sharing', 'Your book stayed private. Please try again when your connection is stable.'); return; }
+    setCommunityShareEnabled(nextShareValue);
+    setCommunityPreviewEnabled(nextShareValue && nextPreviewValue);
+    const nextProject = { ...project, communityPublic: nextShareValue, communityPreviewPublic: nextShareValue && nextPreviewValue };
+    onProjectsChange(projects.map((item) => item.title === project.title ? nextProject : item));
+    setCommunityShareProject(nextProject);
+  };
+  const saveCommunityShare = (nextValue: boolean) => saveCommunitySettings(nextValue, nextValue && communityPreviewEnabled);
+  const saveCommunityPreview = (nextValue: boolean) => { if (communityShareEnabled) void saveCommunitySettings(true, nextValue); };
   const renderProjectCard = (project: Project, index: number) => {
     const projectSnapshot = getJourneySnapshot(project);
     const currentPart = projectSnapshot.nextPart?.title ?? (projectSnapshot.parts[projectSnapshot.parts.length - 1]?.title ?? 'No section selected');
@@ -1312,7 +1358,7 @@ const copy: Project = { ...project, cloudId: createLocalUuid(), cloudRevision: 0
     return <View key={projectKey(project, index)} style={[s.libraryProjectCard, project.archived && s.libraryProjectCardArchived]}>
       <Pressable onPress={() => onSelectProject(project.title)} style={s.libraryProjectTop} accessibilityLabel={`Select ${project.title}`}>
         <View style={[s.projectMark, { backgroundColor: project.color }]}>{coverImage ? <Image source={{ uri: coverImage.uri }} style={s.libraryProjectCover} resizeMode="cover" accessibilityLabel={`${project.title} cover image`} /> : <Text style={s.projectMarkText}>{project.mark}</Text>}</View>
-        <View style={s.projectCopy}><Text numberOfLines={1} style={s.projectTitle}>{project.title}</Text><Text numberOfLines={1} style={s.projectType}>{project.type}{project.archived ? ' · Archived' : ''}</Text><Text numberOfLines={1} style={s.projectDetail}>{projectSnapshot.stage} · {projectSnapshot.progressPercent}% complete</Text></View>
+        <View style={s.projectCopy}><Text numberOfLines={1} style={s.projectTitle}>{project.title}</Text><Text numberOfLines={1} style={s.projectType}>{project.type}{project.archived ? ' · Archived' : ''}</Text><Text numberOfLines={1} style={s.projectDetail}>{projectSnapshot.stage} · {projectSnapshot.progressPercent}% complete</Text>{project.communityPublic && <View style={s.projectCommunityBadge}><Text style={s.projectCommunityBadgeText}>PUBLIC IN COMMUNITY</Text></View>}</View>
         <Pressable onPress={() => setMenuProject(project)} style={s.projectOverflowButton} accessibilityLabel={`More actions for ${project.title}`}><Text style={s.projectOverflowText}>•••</Text></Pressable>
       </Pressable>
       <View style={s.projectStats}><Text style={s.projectStatText}>{formatCount(projectSnapshot.wordCount)} words</Text><Text style={s.projectStatDot}>·</Text><Text numberOfLines={1} style={s.projectStatText}>{currentPart}</Text><Text style={s.projectStatDot}>·</Text><Text style={s.projectStatText}>{project.images?.length ? `${project.images.length} visual${project.images.length === 1 ? '' : 's'}` : getImageSystemConfig(project.type).mode === 'IMAGE_LED' ? 'Illustrations planned' : 'Visuals optional'}</Text><Text style={s.projectStatDot}>·</Text><Text style={s.projectStatText}>{formatLastEdited(project.updatedAt)}</Text></View>
@@ -1356,9 +1402,10 @@ const copy: Project = { ...project, cloudId: createLocalUuid(), cloudRevision: 0
 
     <Modal animationType="fade" visible={menuProject !== null} transparent onRequestClose={() => setMenuProject(null)}>
       <Pressable style={s.libraryMenuShade} onPress={() => setMenuProject(null)}><View style={s.libraryMenu}><Text style={s.libraryMenuOverline}>BOOK ACTIONS</Text><Text numberOfLines={1} style={s.libraryMenuTitle}>{menuProject?.title}</Text>
+        <Pressable onPress={() => { if (!menuProject) return; const title = menuProject.title; setMenuProject(null); onOpenBookStudio(title, 'export'); }} style={libraryMenuFeaturedS.row} accessibilityRole="button" accessibilityLabel={`Export ${menuProject?.title ?? 'this book'}`}><View style={libraryMenuFeaturedS.icon}><Text style={libraryMenuFeaturedS.iconText}>↗</Text></View><View style={libraryMenuFeaturedS.copy}><Text style={libraryMenuFeaturedS.label}>Export book</Text><Text style={libraryMenuFeaturedS.hint}>PDF, Word, EPUB & backup</Text></View><Text style={libraryMenuFeaturedS.arrow}>›</Text></Pressable>
         <Pressable onPress={() => menuProject && onOpenBookStudio(menuProject.title, getBookStudioState(menuProject).lastSection)} style={s.libraryMenuRow}><Text style={s.libraryMenuIcon}>▣</Text><Text style={s.libraryMenuLabel}>Open Book Studio</Text><Text style={s.libraryMenuArrow}>›</Text></Pressable>
         <Pressable onPress={() => menuProject && onOpenBookStudio(menuProject.title, 'listen')} style={s.libraryMenuRow}><Text style={s.libraryMenuIcon}>◷</Text><Text style={s.libraryMenuLabel}>Listen to book</Text><Text style={s.libraryMenuArrow}>›</Text></Pressable>
-        <Pressable onPress={() => menuProject && onOpenBookStudio(menuProject.title, 'export')} style={s.libraryMenuRow}><Text style={s.libraryMenuIcon}>↗</Text><Text style={s.libraryMenuLabel}>Export</Text><Text style={s.libraryMenuArrow}>›</Text></Pressable>
+        <Pressable onPress={() => menuProject && openCommunityShare(menuProject)} style={s.libraryMenuRow} accessibilityRole="button" accessibilityLabel={menuProject?.communityPublic ? `Manage ${menuProject.title} Community sharing` : `Show ${menuProject?.title ?? 'this book'} in Community`}><Text style={s.libraryMenuIcon}>◎</Text><Text style={s.libraryMenuLabel}>{menuProject?.communityPublic ? 'Manage Community sharing' : 'Show in Community'}</Text><Text style={s.libraryMenuArrow}>›</Text></Pressable>
         <Pressable onPress={() => { if (!menuProject) return; onSelectProject(menuProject.title); setFeedbackProject(menuProject); setMenuProject(null); }} style={s.libraryMenuRow} accessibilityRole="button" accessibilityLabel={`Submit ${menuProject?.title ?? 'this book'} for feedback`}><Text style={s.libraryMenuIcon}>♡</Text><Text style={s.libraryMenuLabel}>Submit for feedback</Text><Text style={s.libraryMenuArrow}>›</Text></Pressable>
         <Pressable onPress={() => { if (!menuProject) return; onSelectProject(menuProject.title); setSourcesProject(menuProject); setMenuProject(null); }} style={s.libraryMenuRow} accessibilityRole="button" accessibilityLabel="Open sources and references"><Text style={s.libraryMenuIcon}>◌</Text><Text style={s.libraryMenuLabel}>Sources & references</Text><Text style={s.libraryMenuArrow}>›</Text></Pressable>
         <Pressable onPress={() => menuProject && selectAndOpen(menuProject, 'Journey')} style={s.libraryMenuRow}><Text style={s.libraryMenuIcon}>✦</Text><Text style={s.libraryMenuLabel}>View journey</Text><Text style={s.libraryMenuArrow}>›</Text></Pressable>
@@ -1367,6 +1414,9 @@ const copy: Project = { ...project, cloudId: createLocalUuid(), cloudRevision: 0
         <Pressable onPress={() => { if (!menuProject) return; onProjectsChange(projects.map((project) => project.title === menuProject.title ? { ...project, archived: !project.archived, updatedAt: Date.now() } : project)); setMenuProject(null); }} style={s.libraryMenuRow}><Text style={s.libraryMenuIcon}>⌁</Text><Text style={s.libraryMenuLabel}>{menuProject?.archived ? 'Unarchive' : 'Archive'}</Text><Text style={s.libraryMenuArrow}>›</Text></Pressable>
         <Pressable onPress={() => { if (menuProject) confirmDelete(menuProject); setMenuProject(null); }} style={s.libraryMenuRow}><Text style={s.libraryMenuIconDelete}>×</Text><Text style={s.libraryMenuDeleteLabel}>Delete</Text><Text style={s.libraryMenuArrow}>›</Text></Pressable>
       </View></Pressable>
+    </Modal>
+    <Modal animationType="slide" visible={communityShareProject !== null} transparent onRequestClose={() => setCommunityShareProject(null)}>
+      <View style={s.libraryCommunityShareShade}><Pressable style={s.libraryCommunityShareDismiss} onPress={() => setCommunityShareProject(null)} /><View style={s.libraryCommunityShareSheet}><View style={s.sheetHandle} /><View style={s.libraryCommunityShareHeader}><View style={[s.libraryCommunityShareMark, { backgroundColor: communityShareProject?.color ?? C.periwinkle }]}><Text style={s.libraryCommunityShareMarkText}>{communityShareProject?.mark ?? '◎'}</Text></View><View style={s.libraryCommunityShareCopy}><Text style={s.libraryCommunityShareOverline}>COMMUNITY / PUBLIC PROGRESS</Text><Text numberOfLines={1} style={s.libraryCommunityShareTitle}>{communityShareProject?.title ?? 'Share this book'}</Text></View><Pressable onPress={() => setCommunityShareProject(null)} style={s.closeButton} accessibilityLabel="Close Community sharing"><Text style={s.closeButtonText}>×</Text></Pressable></View><View style={s.libraryCommunityShareIntro}><Text style={s.libraryCommunityShareIntroIcon}>◎</Text><View style={s.libraryCommunityShareIntroCopy}><Text style={s.libraryCommunityShareIntroTitle}>Let writers follow along</Text><Text style={s.libraryCommunityShareIntroText}>Share the progress card while you work. Your manuscript stays private unless you enable the reading preview below; private notes and research are never shared.</Text></View></View><View style={[s.libraryCommunityShareToggleRow, communityShareBusy && s.libraryCommunityShareDisabled]}><View style={s.libraryCommunityShareToggleCopy}><Text style={s.libraryCommunityShareToggleTitle}>{communityShareEnabled ? 'Visible in Community' : 'Keep this book private'}</Text><Text style={s.libraryCommunityShareToggleHint}>{communityShareEnabled ? 'Other writers can discover its title, type, stage, and progress.' : 'Only you can see this book in your library.'}</Text></View><Switch value={communityShareEnabled} onValueChange={(value) => { if (!communityShareBusy) void saveCommunityShare(value); }} accessibilityLabel="Show this book in Community" /></View><View style={[s.libraryCommunityShareToggleRow, (!communityShareEnabled || communityShareBusy) && s.libraryCommunityShareDisabled]}><View style={s.libraryCommunityShareToggleCopy}><Text style={s.libraryCommunityShareToggleTitle}>{communityPreviewEnabled ? 'Reading preview is public' : 'Keep manuscript private'}</Text><Text style={s.libraryCommunityShareToggleHint}>{communityPreviewEnabled ? 'Readers can read or listen to drafted parts from Community.' : 'Turn this on when you want to share the drafted writing itself.'}</Text></View><Switch value={communityPreviewEnabled} onValueChange={(value) => { if (!communityShareBusy && communityShareEnabled) saveCommunityPreview(value); }} accessibilityLabel="Allow Community reading preview" /></View><Pressable onPress={() => setCommunityShareProject(null)} style={s.libraryCommunityShareDone}><Text style={s.libraryCommunityShareDoneText}>Done</Text></Pressable></View></View>
     </Modal>
     <Modal animationType="fade" visible={renameProject !== null} transparent onRequestClose={() => setRenameProject(null)}>
       <View style={s.renameModalShade}><View style={s.renameSheet}><Text style={s.libraryMenuOverline}>BOOK DETAILS</Text><Text style={s.renameTitle}>Rename this book</Text><TextInput autoFocus value={renameValue} onChangeText={setRenameValue} style={s.renameInput} placeholder="Book title" placeholderTextColor="#9A9DB7" returnKeyType="done" onSubmitEditing={saveRename} /><View style={s.renameActions}><Pressable onPress={() => setRenameProject(null)} style={s.renameCancel}><Text style={s.renameCancelText}>Cancel</Text></Pressable><Pressable onPress={saveRename} style={s.renameSave}><Text style={s.renameSaveText}>Save name</Text></Pressable></View></View></View>
@@ -1378,7 +1428,7 @@ const copy: Project = { ...project, cloudId: createLocalUuid(), cloudRevision: 0
   </>;
 }
 
-function Plan({ projects, activeProject, userId, onSelectProject, onUpdateProject, onPage }: { projects: Project[]; activeProject: string; userId: string | null; onSelectProject: (title: string) => void; onUpdateProject: (title: string, changes: Partial<Project>) => void; onPage: (page: Page) => void }) {
+function Plan({ projects, activeProject, userId, onSelectProject, onUpdateProject, onPage, onOpenWritingBook }: { projects: Project[]; activeProject: string; userId: string | null; onSelectProject: (title: string) => void; onUpdateProject: (title: string, changes: Partial<Project>) => void; onPage: (page: Page) => void; onOpenWritingBook: (title: string) => void }) {
   const currentProject = projects.find((project) => project.title === activeProject) ?? projects[0];
   const currentPlan = currentProject?.plan ?? defaultPlanFor(currentProject?.type ?? 'Custom Project');
   const { width: windowWidth } = useWindowDimensions();
@@ -1773,7 +1823,7 @@ function Plan({ projects, activeProject, userId, onSelectProject, onUpdateProjec
     <View style={s.planFooter}>
       <Pressable onPress={() => setStep(Math.max(0, step - 1))} disabled={step === 0} style={[s.planNavButton, step === 0 && s.planNavButtonDisabled]}><Text style={s.planNavButtonText}>← Back</Text></Pressable>
       <Text style={s.planFooterText}>STEP {step + 1} OF 3</Text>
-      <Pressable onPress={() => step === 2 ? onPage('Write') : setStep(step + 1)} style={[s.planNavButton, s.planNavButtonPrimary]}><Text style={[s.planNavButtonText, s.planNavButtonTextPrimary]}>{step === 2 ? 'Start writing' : 'Next →'}</Text></Pressable>
+      <Pressable onPress={() => step === 2 ? onOpenWritingBook(currentProject?.title ?? activeProject) : setStep(step + 1)} style={[s.planNavButton, s.planNavButtonPrimary]}><Text style={[s.planNavButtonText, s.planNavButtonTextPrimary]}>{step === 2 ? 'Start writing' : 'Next →'}</Text></Pressable>
     </View>
 
     <Modal animationType="slide" transparent visible={planningMethodOpen} onRequestClose={() => setPlanningMethodOpen(false)}>
@@ -1823,7 +1873,7 @@ function getWriteParts(project: Project, blueprint: PlanBlueprint): WritePart[] 
 
 type AssembledSection = { id: string; label: string; content: string; included: boolean; complete: boolean; kind: 'front' | 'back' };
 type AssembledChapter = { key: string; title: string; content: string; words: number; complete: boolean; kind: WritePart['kind']; images: BookezImage[] };
-type AssembledBook = { bookId: string; title: string; status: 'draft' | 'review' | 'finished'; frontMatter: AssembledSection[]; chapters: AssembledChapter[]; backMatter: AssembledSection[]; images: BookezImage[]; totalWords: number; generatedAt: string; sourceRevision: string };
+type AssembledBook = { bookId: string; title: string; authorName?: string; status: 'draft' | 'review' | 'finished'; frontMatter: AssembledSection[]; chapters: AssembledChapter[]; backMatter: AssembledSection[]; images: BookezImage[]; totalWords: number; generatedAt: string; sourceRevision: string };
 
 const studioFrontMatter = [
   { id: 'titlePage', label: 'Title page', automatic: true }, { id: 'copyrightPage', label: 'Copyright page' }, { id: 'dedication', label: 'Dedication' },
@@ -1842,9 +1892,10 @@ const defaultBookStudioState = (project: Project): BookStudioState => ({
   backMatterText: { acknowledgments: '', aboutAuthor: '', appendix: '', references: '', resources: '', endnotes: '' },
   chapterOrder: [],
   appearance: { fontSize: 16, paragraphSpacing: 10, lineSpacing: 1.55, headingStyle: 'classic', alignment: 'left' },
+  authorName: '',
 });
 
-function getBookStudioState(project: Project): BookStudioState {
+function getBookStudioState(project: Project, fallbackAuthorName = ''): BookStudioState {
   const defaults = defaultBookStudioState(project);
   const saved = project.studio;
   return {
@@ -1856,6 +1907,7 @@ function getBookStudioState(project: Project): BookStudioState {
     backMatterText: { ...defaults.backMatterText, ...saved?.backMatterText },
     appearance: { ...defaults.appearance, ...saved?.appearance },
     chapterOrder: saved?.chapterOrder ?? [],
+    authorName: saved?.authorName ?? fallbackAuthorName,
   };
 }
 
@@ -1886,7 +1938,7 @@ function assembleBook(project: Project, studio: BookStudioState): AssembledBook 
   const lastRequiredPartIndex = parts.reduce((lastIndex, part, index) => part.required ? index : lastIndex, -1);
   const draftComplete = requiredParts.length > 0 && requiredParts.every((part) => Boolean(project.plan.drafts[part.key]?.trim()));
   const status = totalWords === 0 ? 'draft' : draftComplete && project.plan.writeIndex > lastRequiredPartIndex ? 'finished' : 'review';
-  return { bookId: project.title, title: project.title, status, frontMatter, chapters, backMatter, images, totalWords, generatedAt: new Date().toISOString(), sourceRevision: String(project.updatedAt ?? totalWords) };
+  return { bookId: project.title, title: project.title, authorName: studio.authorName, status, frontMatter, chapters, backMatter, images, totalWords, generatedAt: new Date().toISOString(), sourceRevision: String(project.updatedAt ?? totalWords) };
 }
 
 const splitSpeechText = (value: string) => {
@@ -2074,6 +2126,28 @@ function getJourneySnapshot(project: Project): JourneySnapshot {
     ideaReady, foundationReady, outlineReady, firstDraftStarted, halfwayReady, draftComplete, manuscriptComplete,
     currentMilestoneIndex, progressPercent, stage, estimateLabel: completionEstimate.label, estimateDetail: completionEstimate.detail, exported: Boolean(project.studio?.exportedAt), nextPart: parts.find((part) => !plan.drafts[part.key]?.trim()) ?? parts[0],
   };
+}
+
+const COMMUNITY_PREVIEW_WORD_LIMIT = 20000;
+type CommunityPreviewSnapshotPart = { id: string; title: string; text: string; position: number };
+type CommunityPreviewSnapshot = { content: CommunityPreviewSnapshotPart[]; wordCount: number };
+
+function buildCommunityPreviewSnapshot(project: Project, snapshot: JourneySnapshot): CommunityPreviewSnapshot {
+  let remainingWords = COMMUNITY_PREVIEW_WORD_LIMIT;
+  const content: CommunityPreviewSnapshotPart[] = [];
+  snapshot.parts.forEach((part, position) => {
+    if (remainingWords <= 0) return;
+    const text = project.plan.drafts[part.key]?.trim() ?? '';
+    if (!text) return;
+    const words = text.match(/\S+/g) ?? [];
+    const visibleWords = words.slice(0, remainingWords);
+    if (visibleWords.length) {
+      const visibleText = visibleWords.length < words.length ? visibleWords.join(' ') + '…' : text;
+      content.push({ id: part.key, title: part.title, text: visibleText, position });
+      remainingWords -= visibleWords.length;
+    }
+  });
+  return { content, wordCount: COMMUNITY_PREVIEW_WORD_LIMIT - remainingWords };
 }
 
 function getJourneyMilestones(snapshot: JourneySnapshot): JourneyMilestone[] {
@@ -3716,7 +3790,7 @@ function WriteSessionPanel({ panel, activePart, parts, pageStats, draftText, ses
   </View>;
 }
 
-function Write({ projects, activeProject, onSelectProject, onUpdateProject }: { projects: Project[]; activeProject: string; onSelectProject: (title: string) => void; onUpdateProject: (title: string, changes: Partial<Project>) => void }) {
+function Write({ projects, activeProject, onOpenWritingBook, onUpdateProject }: { projects: Project[]; activeProject: string; onOpenWritingBook: (title: string) => void; onUpdateProject: (title: string, changes: Partial<Project>) => void }) {
   const currentProject = projects.find((project) => project.title === activeProject) ?? projects[0];
   const { width: viewportWidth } = useWindowDimensions();
   const compactHero = viewportWidth < 560;
@@ -3960,7 +4034,7 @@ function Write({ projects, activeProject, onSelectProject, onUpdateProject }: { 
   const refreshCompass = () => { if (!activePart) return; compassWordCount.current = countWords(plan.drafts[activePart.key] || ''); setCompass(getWritingCompass(currentProject, activePart, plan, blueprint)); };
 
   const chooseProject = (project: Project) => {
-    onSelectProject(project.title);
+    onOpenWritingBook(project.title);
     setNotesOpen(false);
     setHelpOpen(false);
     setContextOpen(false);
@@ -4327,7 +4401,7 @@ function JourneyEmptyState({ onBack, onPage }: { onBack: () => void; onPage: (pa
   </>;
 }
 
-function Journey({ projects, activeProject, onSelectProject, onUpdateProject, onPage, onBack, onOpenBookStudio, scrollY }: { projects: Project[]; activeProject: string; onSelectProject: (title: string) => void; onUpdateProject: (title: string, changes: Partial<Project>) => void; onPage: (page: Page) => void; onBack: () => void; onOpenBookStudio: (title: string, section: StudioSection) => void; scrollY?: SharedValue<number> }) {
+function Journey({ projects, activeProject, onSelectProject, onUpdateProject, onPage, onBack, onOpenBookStudio, onOpenWritingBook, scrollY }: { projects: Project[]; activeProject: string; onSelectProject: (title: string) => void; onUpdateProject: (title: string, changes: Partial<Project>) => void; onPage: (page: Page) => void; onBack: () => void; onOpenBookStudio: (title: string, section: StudioSection) => void; onOpenWritingBook: (title: string) => void; scrollY?: SharedValue<number> }) {
   const currentProject = projects.find((project) => project.title === activeProject) ?? projects[0];
   const snapshot = getJourneySnapshot(currentProject);
   const currentPlan = currentProject.plan ?? defaultPlanFor(currentProject.type);
@@ -4369,7 +4443,6 @@ function Journey({ projects, activeProject, onSelectProject, onUpdateProject, on
   const popupEstimatedHeight = 236;
   const popupTop = selectedJourneyPoint ? selectedJourneyPoint.y < popupEstimatedHeight * 0.72 ? selectedJourneyPoint.y + 34 : Math.max(10, Math.min(journeyLayout.height - popupEstimatedHeight - 10, selectedJourneyPoint.y - popupEstimatedHeight * 0.68)) : 10;
   const nextStep = getJourneyNextStep(snapshot, currentMilestone);
-  const nextPage: Page = 'Write';
   const nextAction = snapshot.manuscriptComplete ? 'Review the manuscript' : !snapshot.firstDraftStarted ? 'Start writing whenever you’re ready' : snapshot.nextPart ? `Write ${snapshot.nextPart.title}` : 'Continue manuscript';
 
   const openMilestoneDetail = (milestoneId: string) => { if (detailOpen && selectedMilestoneId === milestoneId && !selectedCheckpointId) { closeDetail(); return; } setSelectedMilestoneId(milestoneId); setSelectedCheckpointId(null); setDetailOpen(true); };
@@ -4403,7 +4476,7 @@ function Journey({ projects, activeProject, onSelectProject, onUpdateProject, on
       const partIndex = snapshot.parts.findIndex((part) => part.key === selectedCheckpoint.partKey);
       onUpdateProject(currentProject.title, { plan: { ...currentPlan, writeIndex: Math.max(0, partIndex) } });
       closeDetail();
-      onPage('Write');
+      onOpenWritingBook(currentProject.title);
       return;
     }
     if (selectedMilestone?.id === 'manuscript-complete' && snapshot.manuscriptComplete) {
@@ -4412,7 +4485,8 @@ function Journey({ projects, activeProject, onSelectProject, onUpdateProject, on
       return;
     }
     closeDetail();
-    onPage(selectedMilestone?.id === 'book-started' || selectedMilestone?.id === 'book-foundation' || selectedMilestone?.id === 'outline' ? 'Plan' : 'Write');
+    if (selectedMilestone?.id === 'book-started' || selectedMilestone?.id === 'book-foundation' || selectedMilestone?.id === 'outline') onPage('Plan');
+    else onOpenWritingBook(currentProject.title);
   };
 
   const totalWritingMinutes = Object.values(currentPlan.activity ?? {}).reduce((total, entry) => total + entry.minutes, 0);
@@ -4524,14 +4598,14 @@ function Journey({ projects, activeProject, onSelectProject, onUpdateProject, on
       <View style={s.journeyStatsRow}><View style={s.journeyStat}><Text style={s.journeyStatValue}>{formatCount(snapshot.wordCount)}</Text><Text style={s.journeyStatLabel}>WORDS WRITTEN</Text><Text style={s.journeyStatSub}>{snapshot.targetWords ? `of ${formatCount(snapshot.targetWords)} est. target` : 'Target not set'}</Text></View><View style={s.journeyStatDivider} /><View style={s.journeyStat}><Text style={s.journeyStatValue}>{snapshot.completedUnits} of {snapshot.unitCount}</Text><Text style={s.journeyStatLabel}>{snapshot.blueprint.unitLabelPlural.toUpperCase()}</Text><Text style={s.journeyStatSub}>with a draft</Text></View></View>
       <View style={s.journeyEstimateCard}><View style={s.journeyEstimateIcon}><Text style={s.journeyEstimateIconText}>◷</Text></View><View style={s.journeyEstimateCopy}><Text style={s.journeyEstimateLabel}>ESTIMATED FINISH</Text><Text style={s.journeyEstimateValue}>{snapshot.estimateLabel}</Text><Text style={s.journeyEstimateDetail}>{snapshot.estimateDetail}</Text></View></View>
       <View style={s.journeyNextRow}><View style={s.journeyNextDot}><Text style={s.journeyNextDotText}>{currentMilestone.icon}</Text></View><View style={s.journeyNextCopy}><Text style={s.journeyNextEyebrow}>NEXT STEP</Text><Text style={s.journeyNextTitle}>{nextStep.title}</Text><Text style={s.journeyNextMeta}>{nextStep.time}</Text></View><Text style={s.journeyNextArrow}>→</Text></View>
-      <Pressable onPress={() => snapshot.manuscriptComplete ? onOpenBookStudio(currentProject.title, 'read') : onPage(nextPage)} style={s.journeyContinueButton}><Text style={s.journeyContinueText}>{snapshot.manuscriptComplete ? 'Open Book Studio' : 'Continue Journey'}</Text><Text style={s.journeyContinueAction}>{nextAction}</Text><Text style={s.journeyContinueArrow}>→</Text></Pressable>
+      <Pressable onPress={() => snapshot.manuscriptComplete ? onOpenBookStudio(currentProject.title, 'read') : onOpenWritingBook(currentProject.title)} style={s.journeyContinueButton}><Text style={s.journeyContinueText}>{snapshot.manuscriptComplete ? 'Open Book Studio' : 'Continue Journey'}</Text><Text style={s.journeyContinueAction}>{nextAction}</Text><Text style={s.journeyContinueArrow}>→</Text></Pressable>
     </View>
 
     {todayPlan && <View style={[s.journeyTodayCard, todayPlan.tone === 'paused' && s.journeyTodayCardPaused, todayPlan.tone === 'foundation' && s.journeyTodayCardFoundation]}>
       <View style={s.journeyTodayHeader}><View style={[s.journeyTodayIcon, todayPlan.tone === 'paused' && s.journeyTodayIconPaused, todayPlan.tone === 'foundation' && s.journeyTodayIconFoundation]}><Text style={s.journeyTodayIconText}>{todayPlan.tone === 'paused' ? 'Ⅱ' : todayPlan.tone === 'foundation' ? '⌁' : '◷'}</Text></View><View style={s.journeyTodayCopy}><Text style={s.journeyTodayEyebrow}>TODAY’S WRITING PLAN</Text><Text style={s.journeyTodayTitle}>{todayPlan.title}</Text></View><Text style={s.journeyTodayStatus}>{todayPlan.tone === 'scheduled' ? 'TODAY' : todayPlan.tone === 'paused' ? 'PAUSED' : 'GENTLE'}</Text></View>
       <Text style={s.journeyTodayDetail}>{todayPlan.detail}</Text>
       <View style={s.journeyTodayGoalRow}><Text style={s.journeyTodayGoal}>{todayPlan.goal}</Text><Text style={s.journeyTodayHint}>A suggestion, not a deadline.</Text></View>
-      <View style={s.journeyTodayActions}><Pressable onPress={() => todayPlan.tone === 'paused' ? onUpdateProject(currentProject.title, { plan: { ...currentPlan, writingPlanPaused: false } }) : onPage(todayPlan.actionPage)} style={s.journeyTodayPrimary}><Text style={s.journeyTodayPrimaryText}>{todayPlan.actionLabel}</Text><Text style={s.journeyTodayPrimaryArrow}>→</Text></Pressable>{todayPlan.tone !== 'paused' && <Pressable onPress={() => onUpdateProject(currentProject.title, { plan: { ...currentPlan, writingPlanPaused: true } })} style={s.journeyTodayPause}><Text style={s.journeyTodayPauseText}>Pause plan</Text></Pressable>}</View>
+      <View style={s.journeyTodayActions}><Pressable onPress={() => todayPlan.tone === 'paused' ? onUpdateProject(currentProject.title, { plan: { ...currentPlan, writingPlanPaused: false } }) : todayPlan.actionPage === 'Write' ? onOpenWritingBook(currentProject.title) : onPage(todayPlan.actionPage)} style={s.journeyTodayPrimary}><Text style={s.journeyTodayPrimaryText}>{todayPlan.actionLabel}</Text><Text style={s.journeyTodayPrimaryArrow}>→</Text></Pressable>{todayPlan.tone !== 'paused' && <Pressable onPress={() => onUpdateProject(currentProject.title, { plan: { ...currentPlan, writingPlanPaused: true } })} style={s.journeyTodayPause}><Text style={s.journeyTodayPauseText}>Pause plan</Text></Pressable>}</View>
     </View>}
     {latestMilestone && <View style={[s.journeyMilestoneReached, latestMilestone.id === 'manuscript-complete' && journeyPopupS.journeyMilestoneReachedCelebration]}><View style={[s.journeyMilestoneReachedIcon, latestMilestone.id === 'manuscript-complete' && journeyPopupS.journeyMilestoneReachedCelebrationIcon]}><Text style={s.journeyMilestoneReachedIconText}>{latestMilestone.icon}</Text></View><View style={s.journeyMilestoneReachedCopy}><Text style={[s.journeyMilestoneReachedEyebrow, latestMilestone.id === 'manuscript-complete' && journeyPopupS.journeyMilestoneReachedCelebrationEyebrow]}>{latestMilestone.id === 'manuscript-complete' ? 'BOOK COMPLETE' : 'MILESTONE REACHED'}</Text><Text style={s.journeyMilestoneReachedTitle}>{latestMilestone.id === 'manuscript-complete' ? 'Your manuscript is complete' : latestMilestone.title} <Text style={s.journeyMilestoneReachedCheck}>✓</Text></Text></View></View>}
     {celebration && <JourneyCelebration celebration={celebration} reduceMotion={reduceMotion} onDismiss={() => setCelebration(null)} onPrimary={celebration.kind === 'final' ? () => { setCelebration(null); onOpenBookStudio(currentProject.title, 'read'); } : undefined} />}
@@ -4599,14 +4673,14 @@ function Journey({ projects, activeProject, onSelectProject, onUpdateProject, on
     </Modal>
 
     <Modal animationType="fade" visible={menuOpen} transparent onRequestClose={() => setMenuOpen(false)}>
-      <Pressable style={s.journeyMenuShade} onPress={() => setMenuOpen(false)}><View style={s.journeyMenu}><Text style={s.journeySheetEyebrow}>THIS BOOK</Text><Text style={s.journeyMenuTitle}>{currentProject.title}</Text><Pressable onPress={() => { setMenuOpen(false); onOpenBookStudio(currentProject.title, getBookStudioState(currentProject).lastSection); }} style={s.journeyMenuRow}><Text style={s.journeyMenuIcon}>▣</Text><Text style={s.journeyMenuLabel}>Open Book Studio</Text><Text style={s.journeyMenuArrow}>›</Text></Pressable><Pressable onPress={() => { setMenuOpen(false); onPage('Plan'); }} style={s.journeyMenuRow}><Text style={s.journeyMenuIcon}>⌁</Text><Text style={s.journeyMenuLabel}>Open planning</Text><Text style={s.journeyMenuArrow}>›</Text></Pressable><Pressable onPress={() => { setMenuOpen(false); onPage('Write'); }} style={s.journeyMenuRow}><Text style={s.journeyMenuIcon}>✎</Text><Text style={s.journeyMenuLabel}>Open manuscript</Text><Text style={s.journeyMenuArrow}>›</Text></Pressable></View></Pressable>
+      <Pressable style={s.journeyMenuShade} onPress={() => setMenuOpen(false)}><View style={s.journeyMenu}><Text style={s.journeySheetEyebrow}>THIS BOOK</Text><Text style={s.journeyMenuTitle}>{currentProject.title}</Text><Pressable onPress={() => { setMenuOpen(false); onOpenBookStudio(currentProject.title, getBookStudioState(currentProject).lastSection); }} style={s.journeyMenuRow}><Text style={s.journeyMenuIcon}>▣</Text><Text style={s.journeyMenuLabel}>Open Book Studio</Text><Text style={s.journeyMenuArrow}>›</Text></Pressable><Pressable onPress={() => { setMenuOpen(false); onPage('Plan'); }} style={s.journeyMenuRow}><Text style={s.journeyMenuIcon}>⌁</Text><Text style={s.journeyMenuLabel}>Open planning</Text><Text style={s.journeyMenuArrow}>›</Text></Pressable><Pressable onPress={() => { setMenuOpen(false); onOpenWritingBook(currentProject.title); }} style={s.journeyMenuRow}><Text style={s.journeyMenuIcon}>✎</Text><Text style={s.journeyMenuLabel}>Open manuscript</Text><Text style={s.journeyMenuArrow}>›</Text></Pressable></View></Pressable>
     </Modal>
   </>;
 }
 
-function BookStudio({ projects, project, userId, initialSection, onBack, onPage, onSelectProject, onUpdateProject, onOpenBookStudio }: { projects: Project[]; project?: Project; userId: string | null; initialSection: StudioSection; onBack: () => void; onPage: (page: Page) => void; onSelectProject: (title: string) => void; onUpdateProject: (title: string, changes: Partial<Project>) => void; onOpenBookStudio: (title: string, section: StudioSection) => void }) {
+function BookStudio({ projects, project, userId, authorName: profileAuthorName, initialSection, onBack, onPage, onSelectProject, onUpdateProject, onOpenBookStudio, onOpenWritingBook }: { projects: Project[]; project?: Project; userId: string | null; authorName?: string; initialSection: StudioSection; onBack: () => void; onPage: (page: Page) => void; onSelectProject: (title: string) => void; onUpdateProject: (title: string, changes: Partial<Project>) => void; onOpenBookStudio: (title: string, section: StudioSection) => void; onOpenWritingBook: (title: string) => void }) {
   const [section, setSection] = useState<StudioSection>(initialSection);
-  const [studio, setStudio] = useState<BookStudioState>(() => project ? getBookStudioState(project) : defaultBookStudioState({ title: 'Book', type: 'Custom Project', color: C.periwinkle, mark: '✦', pageGoal: '0', unitGoal: '0', plan: defaultPlanFor('Custom Project') }));
+  const [studio, setStudio] = useState<BookStudioState>(() => project ? getBookStudioState(project, profileAuthorName) : defaultBookStudioState({ title: 'Book', type: 'Custom Project', color: C.periwinkle, mark: '✦', pageGoal: '0', unitGoal: '0', plan: defaultPlanFor('Custom Project') }));
   const [openAccordion, setOpenAccordion] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -4617,18 +4691,29 @@ function BookStudio({ projects, project, userId, initialSection, onBack, onPage,
   const [speechVoice, setSpeechVoice] = useState<string | undefined>();
   const [speechRate, setSpeechRate] = useState(1);
   const [selectedExportFormat, setSelectedExportFormat] = useState<BookExportFormat>('pdf');
+  const [exportLayout, setExportLayout] = useState<BookExportLayout>('book');
   const [includeUnfinished, setIncludeUnfinished] = useState(true);
+  const [includeCover, setIncludeCover] = useState(true);
+  const [includeTableOfContents, setIncludeTableOfContents] = useState(true);
+  const [includeChapterTitles, setIncludeChapterTitles] = useState(true);
+  const [includePageNumbers, setIncludePageNumbers] = useState(true);
+  const [includeImages, setIncludeImages] = useState(true);
+  const [includeAuthor, setIncludeAuthor] = useState(Boolean(profileAuthorName?.trim()));
   const [exportBusy, setExportBusy] = useState(false);
   const [lastExportUri, setLastExportUri] = useState<string | null>(null);
+  const [copyNotice, setCopyNotice] = useState('');
   const speechRun = useRef(0);
   const activeSpeech = useRef<{ segments: { label: string; text: string }[]; segmentIndex: number; chunkIndex: number } | null>(null);
 
   useEffect(() => {
     if (!project) return;
-    setStudio(getBookStudioState(project));
-    setSection(initialSection || getBookStudioState(project).lastSection);
+    const nextStudio = getBookStudioState(project, profileAuthorName);
+    setStudio(nextStudio);
+    setSection(initialSection || nextStudio.lastSection);
     setReaderIndex(0);
-  }, [project?.title, initialSection]);
+    setIncludeAuthor(Boolean(nextStudio.authorName?.trim()));
+    setCopyNotice('');
+  }, [project?.title, initialSection, profileAuthorName]);
   useEffect(() => {
     let mounted = true;
     void loadBookezSpeechVoice().then((voice) => {
@@ -4647,7 +4732,7 @@ function BookStudio({ projects, project, userId, initialSection, onBack, onPage,
   const coverImage = projectImages.find((image) => image.placement === 'cover');
   const updateStudio = (changes: Partial<BookStudioState>) => { const next = { ...studio, ...changes }; setStudio(next); onUpdateProject(project.title, { studio: next }); };
   const changeSection = (nextSection: StudioSection) => { setSection(nextSection); updateStudio({ lastSection: nextSection }); };
-  const openWritingPart = (key: string) => { const originalIndex = getWriteParts(project, snapshot.blueprint).findIndex((part) => part.key === key); onUpdateProject(project.title, { plan: { ...project.plan, writeIndex: Math.max(0, originalIndex) } }); onPage('Write'); };
+  const openWritingPart = (key: string) => { const originalIndex = getWriteParts(project, snapshot.blueprint).findIndex((part) => part.key === key); onUpdateProject(project.title, { plan: { ...project.plan, writeIndex: Math.max(0, originalIndex) } }); onOpenWritingBook(project.title); };
   const refreshPreview = () => updateStudio({ lastSection: section });
   const toggleIncluded = (group: 'frontMatterIncluded' | 'backMatterIncluded', id: string) => updateStudio({ [group]: { ...studio[group], [id]: !studio[group][id] } } as Partial<BookStudioState>);
   const updateText = (group: 'frontMatterText' | 'backMatterText', id: string, value: string) => updateStudio({ [group]: { ...studio[group], [id]: value } } as Partial<BookStudioState>);
@@ -4686,6 +4771,7 @@ function BookStudio({ projects, project, userId, initialSection, onBack, onPage,
   };
   const moveChapter = (index: number, direction: -1 | 1) => { const keys = book.chapters.map((chapter) => chapter.key); const nextIndex = index + direction; if (nextIndex < 0 || nextIndex >= keys.length) return; [keys[index], keys[nextIndex]] = [keys[nextIndex], keys[index]]; updateStudio({ chapterOrder: keys }); };
   const exportDescriptor = BOOK_EXPORT_FORMATS.find((item) => item.format === selectedExportFormat) ?? BOOK_EXPORT_FORMATS[0];
+  const currentExportOptions: BookExportOptions = { layout: exportLayout, includeCover, includeTableOfContents, includeChapterTitles, includePageNumbers, includeImages, includeAuthor, authorName: studio.authorName };
   const exportFileName = `${project.title.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase() || 'bookez-book'}-${Date.now()}.${exportDescriptor.extension}`;
   const writeExportFile = async (format: BookExportFormat): Promise<string> => {
     const descriptor = BOOK_EXPORT_FORMATS.find((item) => item.format === format) ?? BOOK_EXPORT_FORMATS[0];
@@ -4695,14 +4781,16 @@ function BookStudio({ projects, project, userId, initialSection, onBack, onPage,
     await FileSystem.makeDirectoryAsync(exportDirectory, { intermediates: true }).catch(() => undefined);
     const uri = `${exportDirectory}${project.title.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase() || 'bookez-book'}-${Date.now()}.${descriptor.extension}`;
     if (format === 'pdf') {
-      const pdf = await Print.printToFileAsync({ html: buildBookHtml(book, includeUnfinished), margins: { top: 36, right: 42, bottom: 36, left: 42 } });
+      const pdf = await Print.printToFileAsync({ html: buildBookHtml(book, includeUnfinished, currentExportOptions), margins: exportLayout === 'manuscript' ? { top: 72, right: 72, bottom: 72, left: 72 } : { top: 36, right: 42, bottom: 36, left: 42 } });
       await FileSystem.copyAsync({ from: pdf.uri, to: uri });
     } else if (format === 'docx') {
-      await FileSystem.writeAsStringAsync(uri, bytesToBase64(buildDocx(book, includeUnfinished)), { encoding: FileSystem.EncodingType.Base64 });
+      await FileSystem.writeAsStringAsync(uri, bytesToBase64(buildDocx(book, includeUnfinished, currentExportOptions)), { encoding: FileSystem.EncodingType.Base64 });
     } else if (format === 'epub') {
-      await FileSystem.writeAsStringAsync(uri, bytesToBase64(buildEpub(book, includeUnfinished)), { encoding: FileSystem.EncodingType.Base64 });
+      await FileSystem.writeAsStringAsync(uri, bytesToBase64(buildEpub(book, includeUnfinished, currentExportOptions)), { encoding: FileSystem.EncodingType.Base64 });
+    } else if (format === 'backup') {
+      await FileSystem.writeAsStringAsync(uri, buildBookezBackup(book, project, currentExportOptions), { encoding: FileSystem.EncodingType.UTF8 });
     } else {
-      const content = format === 'txt' ? buildBookText(book, includeUnfinished) : format === 'md' ? buildBookMarkdown(book, includeUnfinished) : buildBookHtml(book, includeUnfinished);
+      const content = format === 'txt' ? buildBookText(book, includeUnfinished, currentExportOptions) : buildBookMarkdown(book, includeUnfinished, currentExportOptions);
       await FileSystem.writeAsStringAsync(uri, content, { encoding: FileSystem.EncodingType.UTF8 });
     }
     const info = await FileSystem.getInfoAsync(uri);
@@ -4738,7 +4826,7 @@ function BookStudio({ projects, project, userId, initialSection, onBack, onPage,
       if (Platform.OS === 'android') {
         const permissions = await FileSystem.StorageAccessFramework.requestDirectoryPermissionsAsync();
         if (!permissions.granted) return;
-        const targetUri = await FileSystem.StorageAccessFramework.createFileAsync(permissions.directoryUri, exportFileName.replace(/\.[^.]+$/, ''), exportDescriptor.mimeType);
+        const targetUri = await FileSystem.StorageAccessFramework.createFileAsync(permissions.directoryUri, exportFileName, exportDescriptor.mimeType);
         const base64 = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
         await FileSystem.writeAsStringAsync(targetUri, base64, { encoding: FileSystem.EncodingType.Base64 });
         Alert.alert('File saved', `${exportFileName} was saved to the folder you selected.`);
@@ -4748,6 +4836,51 @@ function BookStudio({ projects, project, userId, initialSection, onBack, onPage,
       }
     } catch (error) {
       Alert.alert('Could not save file', error instanceof Error ? error.message : 'Bookez could not save this export to your phone.');
+    } finally { setExportBusy(false); }
+  };
+  const copyManuscript = async () => {
+    setExportBusy(true);
+    try {
+      await Clipboard.setStringAsync(buildBookText(book, false, currentExportOptions));
+      setCopyNotice('The drafted manuscript is on your clipboard.');
+    } catch (error) {
+      Alert.alert('Could not copy manuscript', error instanceof Error ? error.message : 'Bookez could not copy the manuscript right now.');
+    } finally { setExportBusy(false); }
+  };
+  const copyChapter = async () => {
+    const chapter = book.chapters[readerIndex] ?? book.chapters.find((item) => item.complete);
+    if (!chapter?.content.trim()) { Alert.alert('No drafted chapter yet', 'Write a chapter before copying it.'); return; }
+    setExportBusy(true);
+    try {
+      const imageNotes = includeImages ? (chapter.images ?? []).map((image) => `[${image.placement ?? 'inline'}: ${image.caption || image.title}]`) : [];
+      await Clipboard.setStringAsync([chapter.title, ...imageNotes, chapter.content.trim()].join('\n\n'));
+      setCopyNotice(`“${chapter.title}” is on your clipboard.`);
+    } catch (error) {
+      Alert.alert('Could not copy chapter', error instanceof Error ? error.message : 'Bookez could not copy this chapter right now.');
+    } finally { setExportBusy(false); }
+  };
+  const writeChapterTextFile = async (chapter: AssembledChapter): Promise<string> => {
+    const documentDirectory = FileSystem.documentDirectory;
+    if (!documentDirectory) throw new Error('Bookez could not access the device document directory.');
+    const exportDirectory = `${documentDirectory}bookez-exports/`;
+    await FileSystem.makeDirectoryAsync(exportDirectory, { intermediates: true }).catch(() => undefined);
+    const bookSlug = project.title.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase() || 'bookez-book';
+    const chapterSlug = chapter.title.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase() || 'chapter';
+    const uri = `${exportDirectory}${bookSlug}-${chapterSlug}-${Date.now()}.txt`;
+    await FileSystem.writeAsStringAsync(uri, `${chapter.title}\n\n${chapter.content.trim()}\n`, { encoding: FileSystem.EncodingType.UTF8 });
+    return uri;
+  };
+  const emailChapter = async () => {
+    const chapter = book.chapters[readerIndex] ?? book.chapters.find((item) => item.complete);
+    if (!chapter?.content.trim()) { Alert.alert('No drafted chapter yet', 'Write a chapter before emailing it.'); return; }
+    setExportBusy(true);
+    try {
+      if (!(await MailComposer.isAvailableAsync())) throw new Error('No email account is configured on this device.');
+      const uri = await writeChapterTextFile(chapter);
+      await MailComposer.composeAsync({ subject: `${project.title} · ${chapter.title}`, body: `Attached is “${chapter.title}” from “${project.title}”.`, attachments: [uri] });
+      setCopyNotice(`“${chapter.title}” is ready to send as an email attachment.`);
+    } catch (error) {
+      Alert.alert('Email chapter unavailable', error instanceof Error ? error.message : 'Your device could not open an email composer.');
     } finally { setExportBusy(false); }
   };
   const speechSegments = [
@@ -4789,7 +4922,32 @@ function BookStudio({ projects, project, userId, initialSection, onBack, onPage,
     <Pressable onPress={refreshPreview} style={s.studioPrimaryButton}><Text style={s.studioPrimaryButtonText}>Refresh book preview</Text><Text style={s.studioPrimaryButtonArrow}>↗</Text></Pressable></>;
   const renderRead = () => <><View style={s.readerToolbar}><View><Text style={s.studioKicker}>READ PREVIEW</Text><Text style={s.readerToolbarTitle}>{book.totalWords ? `${formatCount(book.totalWords)} words` : 'No drafted content yet'}</Text></View><Pressable onPress={() => changeSection('listen')} style={s.readerListenButton}><Text style={s.readerListenText}>◷ Listen</Text></Pressable></View><View style={s.readerToc}><Text style={s.readerTocTitle}>In this book</Text>{book.chapters.map((chapter, index) => <Pressable key={chapter.key} onPress={() => setReaderIndex(index)} style={[s.readerTocRow, readerIndex === index && s.readerTocRowSelected]}><Text style={s.readerTocNumber}>{String(index + 1).padStart(2, '0')}</Text><Text numberOfLines={1} style={s.readerTocLabel}>{chapter.title}</Text><Text style={s.readerTocState}>{chapter.complete ? '✓' : '—'}</Text></Pressable>)}</View><View style={s.readerBook}><View style={s.readerTitlePage}><Text style={s.readerTitleKicker}>BOOKEZ STUDIO</Text>{book.images.find((image) => image.placement === 'cover') && <ImagePreview image={book.images.find((image) => image.placement === 'cover')} config={imageConfig} onPress={() => { setPreviewImageId(book.images.find((image) => image.placement === 'cover')?.id ?? null); setSection('assemble'); }} />}<Text style={[s.readerBookTitle, studio.appearance.headingStyle === 'modern' && s.readerBookTitleModern]}>{book.title}</Text><Text style={s.readerBookStatus}>{book.status === 'finished' ? 'Finished manuscript' : 'Work in progress'}</Text></View>{book.frontMatter.filter((item) => item.included && item.id !== 'titlePage' && item.id !== 'tableOfContents').map((item) => <View key={item.id} style={s.readerMatter}><Text style={s.readerMatterTitle}>{item.label}</Text><Text style={[s.readerBody, { textAlign: studio.appearance.alignment }]}>{item.content}</Text></View>)}{book.chapters.map((chapter, index) => <View key={chapter.key} style={s.readerChapter}><Text style={[s.readerChapterTitle, studio.appearance.headingStyle === 'modern' && s.readerChapterTitleModern]}>{chapter.title}</Text>{renderChapterVisuals(chapter)}{chapter.content ? chapter.content.split(/\n\s*\n/).map((paragraph, paragraphIndex) => <Text key={`${chapter.key}-${paragraphIndex}`} style={[s.readerBody, { fontSize: studio.appearance.fontSize, lineHeight: studio.appearance.fontSize * studio.appearance.lineSpacing, marginBottom: studio.appearance.paragraphSpacing, textAlign: studio.appearance.alignment }]}>{paragraph}</Text>) : <View style={s.readerMissing}><Text style={s.readerMissingIcon}>⌁</Text><Text style={s.readerMissingTitle}>This part is not drafted yet.</Text><Text style={s.readerMissingCopy}>It is intentionally left out of the reading flow until you write it.</Text><Pressable onPress={() => openWritingPart(chapter.key)} style={s.readerWriteButton}><Text style={s.readerWriteButtonText}>Open in Write</Text></Pressable></View>}</View>)}{book.backMatter.filter((item) => item.included).map((item) => <View key={item.id} style={s.readerMatter}><Text style={s.readerMatterTitle}>{item.label}</Text><Text style={[s.readerBody, { textAlign: studio.appearance.alignment }]}>{item.content}</Text></View>)}</View></>;
   const renderListen = () => <><View style={s.listenHero}><View style={s.listenOrb}><Text style={s.listenOrbText}>{isSpeaking ? '◷' : '♫'}</Text></View><View style={s.listenHeroCopy}><Text style={s.studioKicker}>READ ALOUD</Text><Text style={s.listenTitle}>{isSpeaking ? `Listening to ${speakingLabel}` : 'Hear the book take shape.'}</Text><Text style={s.listenCopy}>Uses your selected device voice and the same drafted manuscript shown in Read.</Text></View></View><View style={s.listenControls}><Pressable onPress={isSpeaking ? stopSpeaking : () => speakSegments(speechSegments)} style={[s.studioPrimaryButton, isSpeaking && s.studioStopButton]}><Text style={s.studioPrimaryButtonText}>{isSpeaking ? 'Stop listening' : 'Listen to book'}</Text><Text style={s.studioPrimaryButtonArrow}>{isSpeaking ? '×' : '▶'}</Text></Pressable><Text style={s.listenNote}>On iPhone, turn off silent mode to hear speech.</Text></View><View style={s.listenSpeedPanel}><View style={s.listenSpeedHeader}><Text style={s.listenSpeedLabel}>PLAYBACK SPEED</Text><Text style={s.listenSpeedValue}>{speechRate}×</Text></View><View style={s.listenSpeedRow}>{[0.75, 1, 1.25, 1.5, 2].map((rate) => <Pressable key={rate} onPress={() => updateSpeechRate(rate)} style={[s.listenSpeedOption, speechRate === rate && s.listenSpeedOptionSelected]} accessibilityRole="button" accessibilityState={{ selected: speechRate === rate }} accessibilityLabel={`Set playback speed to ${rate} times`}><Text style={[s.listenSpeedOptionText, speechRate === rate && s.listenSpeedOptionTextSelected]}>{rate}×</Text></Pressable>)}</View><Text style={s.listenSpeedHint}>{isSpeaking ? 'Speed updated from your current place.' : 'Choose a pace before you start listening.'}</Text></View><Text style={s.studioSectionTitle}>Drafted parts</Text>{book.chapters.map((chapter) => <View key={chapter.key} style={s.listenRow}><View style={s.listenRowIcon}><Text style={s.listenRowIconText}>{chapter.complete ? '♫' : '—'}</Text></View><View style={s.studioOrderCopy}><Text style={s.studioOrderTitle}>{chapter.title}</Text><Text style={s.studioOrderMeta}>{chapter.complete ? `${formatCount(chapter.words)} words` : 'Not available until drafted'}</Text></View>{chapter.complete && <Pressable onPress={() => speakSegments([{ label: chapter.title, text: chapter.content }])} style={s.listenRowButton}><Text style={s.listenRowButtonText}>Listen</Text></Pressable>}</View>)}</>;
-  const renderExport = () => <><View style={s.exportHero}><Text style={s.studioKicker}>EXPORT</Text><Text style={s.exportTitle}>Take the book with you.</Text><Text style={s.exportCopy}>Create a real file in the format your readers, editors, or publishing tools need. Every export includes the current saved draft and can include planned parts that are not finished yet.</Text></View><View style={s.exportStats}><View><Text style={s.exportStatValue}>{formatCount(book.totalWords)}</Text><Text style={s.exportStatLabel}>WORDS</Text></View><View style={s.exportStatDivider} /><View><Text style={s.exportStatValue}>{book.chapters.filter((chapter) => chapter.complete).length}/{book.chapters.length}</Text><Text style={s.exportStatLabel}>PARTS DRAFTED</Text></View></View><View style={exportS.panel}><Text style={exportS.panelLabel}>FILE FORMAT</Text><View style={exportS.formatGrid}>{BOOK_EXPORT_FORMATS.map((item) => <Pressable key={item.format} onPress={() => setSelectedExportFormat(item.format)} style={[exportS.formatCard, selectedExportFormat === item.format && exportS.formatCardSelected]} accessibilityRole="button" accessibilityState={{ selected: selectedExportFormat === item.format }}><Text style={[exportS.formatLabel, selectedExportFormat === item.format && exportS.formatLabelSelected]}>{item.label}</Text><Text style={exportS.formatDescription}>{item.description}</Text></Pressable>)}</View><View style={exportS.includeRow}><View style={exportS.includeCopy}><Text style={exportS.includeTitle}>Include unfinished parts</Text><Text style={exportS.includeHint}>Keeps every planned section in the export with a clear “not drafted yet” marker.</Text></View><Switch value={includeUnfinished} onValueChange={setIncludeUnfinished} accessibilityLabel="Include unfinished parts" trackColor={{ false: '#D7D9E6', true: '#BAB6F1' }} thumbColor={includeUnfinished ? C.periwinkle : '#FFF'} /></View><Text style={exportS.selectedSummary}>{exportDescriptor.label} · {exportDescriptor.description}</Text></View><View style={exportS.actionGrid}><Pressable onPress={shareExport} disabled={exportBusy} style={[exportS.actionButton, exportBusy && exportS.actionDisabled]}><Text style={exportS.actionIcon}>↗</Text><Text style={exportS.actionTitle}>{exportBusy ? 'Preparing…' : 'Share file'}</Text><Text style={exportS.actionHint}>Open the device share sheet</Text></Pressable><Pressable onPress={saveExportToPhone} disabled={exportBusy} style={[exportS.actionButton, exportBusy && exportS.actionDisabled]}><Text style={exportS.actionIcon}>⇩</Text><Text style={exportS.actionTitle}>Save to phone</Text><Text style={exportS.actionHint}>{Platform.OS === 'android' ? 'Choose a device folder' : 'Save through Files'}</Text></Pressable><Pressable onPress={emailExport} disabled={exportBusy} style={[exportS.actionButton, exportBusy && exportS.actionDisabled]}><Text style={exportS.actionIcon}>✉</Text><Text style={exportS.actionTitle}>Email export</Text><Text style={exportS.actionHint}>Attach the file to a new email</Text></Pressable></View>{lastExportUri && <Text style={exportS.savedNotice}>Saved in Bookez Documents. You can export again at any time as your draft changes.</Text>}<Text style={s.exportFootnote}>PDF, DOCX, EPUB, plain text, Markdown, and HTML are generated locally on your device. Nothing is uploaded to create an export.</Text></>;
+  const renderExport = () => {
+    const formatIcons: Record<BookExportFormat, string> = { pdf: '▤', docx: '✎', epub: '▥', txt: '¶', md: '#', backup: '▣' };
+    const layoutOptions: Array<{ id: BookExportLayout; label: string; hint: string }> = [
+      { id: 'book', label: 'Published book', hint: 'Elegant reading copy with breathing room' },
+      { id: 'manuscript', label: 'Standard manuscript', hint: 'Double-spaced and editor-friendly' },
+      { id: 'simple', label: 'Minimal document', hint: 'Clean and compact for everyday use' },
+    ];
+    const includeOptions: Array<{ key: 'includeCover' | 'includeTableOfContents' | 'includeChapterTitles' | 'includePageNumbers' | 'includeImages'; label: string; hint: string; value: boolean; onChange: (value: boolean) => void }> = [
+      { key: 'includeCover', label: 'Cover', hint: 'Use the cover image when one is set', value: includeCover, onChange: setIncludeCover },
+      { key: 'includeTableOfContents', label: 'Table of contents', hint: 'Keep the navigation page', value: includeTableOfContents, onChange: setIncludeTableOfContents },
+      { key: 'includeChapterTitles', label: 'Chapter titles', hint: 'Keep headings above each part', value: includeChapterTitles, onChange: setIncludeChapterTitles },
+      { key: 'includePageNumbers', label: 'Page numbers', hint: 'Add them to PDF and Word exports', value: includePageNumbers, onChange: setIncludePageNumbers },
+      { key: 'includeImages', label: 'Images', hint: 'Keep image placements and captions', value: includeImages, onChange: setIncludeImages },
+    ];
+    const selectedChapter = book.chapters[readerIndex] ?? book.chapters.find((chapter) => chapter.complete);
+    return <>
+      <View style={s.exportHero}><Text style={s.studioKicker}>EXPORT BOOK</Text><Text style={s.exportTitle}>Take the book with you.</Text><Text style={s.exportCopy}>Choose a format, set the finish, then send the work wherever it needs to go. Bookez creates exports locally on this device.</Text></View>
+      <View style={s.exportStats}><View><Text style={s.exportStatValue}>{formatCount(book.totalWords)}</Text><Text style={s.exportStatLabel}>WORDS</Text></View><View style={s.exportStatDivider} /><View><Text style={s.exportStatValue}>{book.chapters.filter((chapter) => chapter.complete).length}/{book.chapters.length}</Text><Text style={s.exportStatLabel}>PARTS DRAFTED</Text></View><View style={s.exportStatDivider} /><View><Text style={s.exportStatValue}>{book.status === 'finished' ? 'Ready' : 'Draft'}</Text><Text style={s.exportStatLabel}>BOOK STATUS</Text></View></View>
+      <View style={exportS.panel}><View style={exportS.panelHeading}><View style={exportS.panelHeadingCopy}><Text style={exportS.panelLabel}>1 · CHOOSE A FORMAT</Text><Text style={exportS.panelTitle}>The file writers actually use.</Text></View><Text style={exportS.panelHeadingIcon}>✦</Text></View><View style={exportS.formatGrid}>{BOOK_EXPORT_FORMATS.map((item) => <Pressable key={item.format} onPress={() => setSelectedExportFormat(item.format)} style={[exportS.formatCard, selectedExportFormat === item.format && exportS.formatCardSelected]} accessibilityRole="button" accessibilityState={{ selected: selectedExportFormat === item.format }}><View style={[exportS.formatIcon, selectedExportFormat === item.format && exportS.formatIconSelected]}><Text style={[exportS.formatIconText, selectedExportFormat === item.format && exportS.formatIconTextSelected]}>{formatIcons[item.format]}</Text></View><Text style={[exportS.formatLabel, selectedExportFormat === item.format && exportS.formatLabelSelected]}>{item.label}</Text><Text style={exportS.formatDescription}>{item.description}</Text></Pressable>)}</View><Text style={exportS.selectedSummary}>{exportDescriptor.label} · {exportDescriptor.description}</Text></View>
+      <View style={exportS.panel}><View style={exportS.panelHeading}><View style={exportS.panelHeadingCopy}><Text style={exportS.panelLabel}>2 · SET THE FINISH</Text><Text style={exportS.panelTitle}>How should it feel?</Text></View><Text style={exportS.panelHeadingIcon}>◌</Text></View><View style={exportS.layoutGrid}>{layoutOptions.map((item) => <Pressable key={item.id} onPress={() => setExportLayout(item.id)} style={[exportS.layoutCard, exportLayout === item.id && exportS.layoutCardSelected]} accessibilityRole="button" accessibilityState={{ selected: exportLayout === item.id }}><View style={[exportS.radio, exportLayout === item.id && exportS.radioSelected]}><View style={exportLayout === item.id ? exportS.radioDot : undefined} /></View><View style={exportS.layoutCopy}><Text style={[exportS.layoutLabel, exportLayout === item.id && exportS.layoutLabelSelected]}>{item.label}</Text><Text style={exportS.layoutHint}>{item.hint}</Text></View></Pressable>)}</View></View>
+      <View style={exportS.panel}><View style={exportS.panelHeading}><View style={exportS.panelHeadingCopy}><Text style={exportS.panelLabel}>3 · INCLUDE</Text><Text style={exportS.panelTitle}>Keep the right pieces.</Text></View><Text style={exportS.panelHeadingIcon}>✓</Text></View>{includeOptions.map((item) => <View key={item.key} style={exportS.includeRow}><View style={exportS.includeCopy}><Text style={exportS.includeTitle}>{item.label}</Text><Text style={exportS.includeHint}>{item.hint}</Text></View><Switch value={item.value} onValueChange={item.onChange} accessibilityLabel={`Include ${item.label.toLowerCase()}`} trackColor={{ false: '#D7D9E6', true: '#BAB6F1' }} thumbColor={item.value ? C.periwinkle : '#FFF'} /></View>)}<View style={exportS.includeRow}><View style={exportS.includeCopy}><Text style={exportS.includeTitle}>Author name</Text><Text style={exportS.includeHint}>Add your name to the title page and book metadata</Text></View><Switch value={includeAuthor} onValueChange={setIncludeAuthor} accessibilityLabel="Include author name" trackColor={{ false: '#D7D9E6', true: '#BAB6F1' }} thumbColor={includeAuthor ? C.periwinkle : '#FFF'} /></View>{includeAuthor && <View style={exportS.authorField}><Text style={exportS.authorLabel}>AUTHOR NAME</Text><TextInput value={studio.authorName ?? ''} onChangeText={(value) => updateStudio({ authorName: value })} placeholder="Your name" placeholderTextColor="#A0A3BB" style={exportS.authorInput} autoCapitalize="words" accessibilityLabel="Author name" /></View>}<View style={exportS.includeRow}><View style={exportS.includeCopy}><Text style={exportS.includeTitle}>Include unfinished parts</Text><Text style={exportS.includeHint}>Keep planned sections with a gentle “not drafted yet” marker.</Text></View><Switch value={includeUnfinished} onValueChange={setIncludeUnfinished} accessibilityLabel="Include unfinished parts" trackColor={{ false: '#D7D9E6', true: '#BAB6F1' }} thumbColor={includeUnfinished ? C.periwinkle : '#FFF'} /></View></View>
+      <View style={exportS.actionSection}><Text style={exportS.actionSectionLabel}>4 · SEND IT SOMEWHERE</Text><Text style={exportS.actionSectionTitle}>Your next step is one tap away.</Text><View style={exportS.actionGrid}><Pressable onPress={shareExport} disabled={exportBusy} style={[exportS.actionButton, exportBusy && exportS.actionDisabled]}><Text style={exportS.actionIcon}>↗</Text><Text style={exportS.actionTitle}>{exportBusy ? 'Preparing…' : 'Share file'}</Text><Text style={exportS.actionHint}>Open the native share sheet</Text></Pressable><Pressable onPress={saveExportToPhone} disabled={exportBusy} style={[exportS.actionButton, exportBusy && exportS.actionDisabled]}><Text style={exportS.actionIcon}>⇩</Text><Text style={exportS.actionTitle}>Save to Files</Text><Text style={exportS.actionHint}>{Platform.OS === 'android' ? 'Choose a device folder' : 'Send it to Files or Drive'}</Text></Pressable><Pressable onPress={emailExport} disabled={exportBusy} style={[exportS.actionButton, exportBusy && exportS.actionDisabled]}><Text style={exportS.actionIcon}>✉</Text><Text style={exportS.actionTitle}>Email attachment</Text><Text style={exportS.actionHint}>Open email with this file attached</Text></Pressable></View></View>
+      <View style={exportS.copyPanel}><View style={exportS.copyHeader}><View style={exportS.copyIcon}><Text style={exportS.copyIconText}>⌘</Text></View><View style={exportS.copyHeaderCopy}><Text style={exportS.panelLabel}>COPY OR SEND A PIECE</Text><Text style={exportS.panelTitle}>Move writing without exporting the whole book.</Text><Text style={exportS.copyHint}>{selectedChapter?.title ?? 'Choose a drafted chapter'} is the current chapter in the reader.</Text></View></View><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={exportS.chapterPicker}>{book.chapters.map((chapter, index) => <Pressable key={chapter.key} onPress={() => setReaderIndex(index)} style={[exportS.chapterChip, readerIndex === index && exportS.chapterChipSelected]} accessibilityRole="button" accessibilityState={{ selected: readerIndex === index }}><Text style={[exportS.chapterChipNumber, readerIndex === index && exportS.chapterChipNumberSelected]}>{String(index + 1).padStart(2, '0')}</Text><Text numberOfLines={1} style={[exportS.chapterChipLabel, readerIndex === index && exportS.chapterChipLabelSelected]}>{chapter.title}</Text></Pressable>)}</ScrollView><View style={exportS.copyActions}><Pressable onPress={copyChapter} disabled={exportBusy || !selectedChapter?.content.trim()} style={[exportS.copyAction, (exportBusy || !selectedChapter?.content.trim()) && exportS.actionDisabled]}><Text style={exportS.copyActionIcon}>▤</Text><View style={exportS.copyActionCopy}><Text style={exportS.copyActionTitle}>Copy chapter</Text><Text style={exportS.copyActionHint}>Put the selected chapter on your clipboard</Text></View></Pressable><Pressable onPress={copyManuscript} disabled={exportBusy || book.totalWords === 0} style={[exportS.copyAction, (exportBusy || book.totalWords === 0) && exportS.actionDisabled]}><Text style={exportS.copyActionIcon}>¶</Text><View style={exportS.copyActionCopy}><Text style={exportS.copyActionTitle}>Copy manuscript</Text><Text style={exportS.copyActionHint}>Copy all drafted writing as clean text</Text></View></Pressable><Pressable onPress={emailChapter} disabled={exportBusy || !selectedChapter?.content.trim()} style={[exportS.copyAction, (exportBusy || !selectedChapter?.content.trim()) && exportS.actionDisabled]}><Text style={exportS.copyActionIcon}>✉</Text><View style={exportS.copyActionCopy}><Text style={exportS.copyActionTitle}>Email chapter</Text><Text style={exportS.copyActionHint}>Attach the selected chapter as a .txt file</Text></View></Pressable></View></View>
+      {copyNotice ? <Text style={exportS.copyNotice}>✓ {copyNotice}</Text> : null}{lastExportUri && <Text style={exportS.savedNotice}>Saved in Bookez Documents. You can export again at any time as your draft changes.</Text>}<Text style={s.exportFootnote}>PDF, Word, EPUB, plain text, Markdown, and Bookez Backup are generated locally on your device. Your manuscript is not uploaded to create an export.</Text>
+    </>;
+  };
 
   return <View style={s.studioPage}><View style={s.studioHeader}><Pressable onPress={onBack} style={s.studioBackButton} accessibilityLabel="Back to Library"><Text style={s.studioBackIcon}>‹</Text></Pressable><Pressable onPress={() => setPickerOpen(true)} style={s.studioHeaderCopy}><Text style={s.studioOverline}>BOOKEZ / BOOK STUDIO</Text><Text numberOfLines={1} style={s.studioHeaderTitle}>{project.title}</Text><Text style={s.studioHeaderMeta}>{snapshot.stage} · {snapshot.progressPercent}% · {project.updatedAt ? `Saved ${formatLastEdited(project.updatedAt)}` : 'Local draft'}</Text></Pressable><Pressable onPress={() => setMenuOpen(true)} style={s.studioOverflowButton} accessibilityLabel="Open Book Studio menu"><Text style={s.studioOverflowText}>•••</Text></Pressable></View><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.studioTabs}>{(['assemble', 'read', 'listen', 'export'] as StudioSection[]).map((item) => <Pressable key={item} onPress={() => changeSection(item)} style={[s.studioTab, section === item && s.studioTabSelected]}><Text style={[s.studioTabText, section === item && s.studioTabTextSelected]}>{item[0].toUpperCase() + item.slice(1)}</Text></Pressable>)}</ScrollView>{section === 'assemble' ? renderAssemble() : section === 'read' ? renderRead() : section === 'listen' ? renderListen() : renderExport()}
     <Modal animationType="fade" visible={menuOpen} transparent onRequestClose={() => setMenuOpen(false)}><Pressable style={s.studioMenuShade} onPress={() => setMenuOpen(false)}><View style={s.studioMenu}><Text style={s.libraryMenuOverline}>THIS BOOK</Text><Text numberOfLines={1} style={s.libraryMenuTitle}>{project.title}</Text><Pressable onPress={() => { setMenuOpen(false); openWritingPart(book.chapters[readerIndex]?.key ?? book.chapters[0]?.key ?? ''); }} style={s.libraryMenuRow}><Text style={s.libraryMenuIcon}>✎</Text><Text style={s.libraryMenuLabel}>Continue writing</Text><Text style={s.libraryMenuArrow}>›</Text></Pressable><Pressable onPress={() => { setMenuOpen(false); onPage('Journey'); }} style={s.libraryMenuRow}><Text style={s.libraryMenuIcon}>✦</Text><Text style={s.libraryMenuLabel}>View journey</Text><Text style={s.libraryMenuArrow}>›</Text></Pressable><Pressable onPress={() => { setMenuOpen(false); changeSection('read'); }} style={s.libraryMenuRow}><Text style={s.libraryMenuIcon}>◌</Text><Text style={s.libraryMenuLabel}>Review book</Text><Text style={s.libraryMenuArrow}>›</Text></Pressable><Pressable onPress={() => { setMenuOpen(false); changeSection('export'); }} style={s.libraryMenuRow}><Text style={s.libraryMenuIcon}>↗</Text><Text style={s.libraryMenuLabel}>Export</Text><Text style={s.libraryMenuArrow}>›</Text></Pressable><Pressable onPress={() => { setMenuOpen(false); refreshPreview(); }} style={s.libraryMenuRow}><Text style={s.libraryMenuIcon}>⟳</Text><Text style={s.libraryMenuLabel}>Refresh preview</Text><Text style={s.libraryMenuArrow}>›</Text></Pressable></View></Pressable></Modal>
@@ -5618,6 +5776,19 @@ export default Sentry.wrap(function App() {
   useEffect(() => { appScrollRef.current?.scrollTo({ y: 0, animated: false }); }, [page]);
   const migrationPrompted = useRef<string | null>(null);
   const queuedFingerprints = useRef<Record<string, string>>({});
+  useEffect(() => {
+    if (!cloudUserId || !storageReady) return;
+    let mounted = true;
+    void supabase.from('community_projects').select('project_id,show_in_community,show_preview').eq('user_id', cloudUserId).then(({ data }) => {
+      if (!mounted || !data?.length) return;
+      const visibility = new Map(data.map((row) => [row.project_id, { communityPublic: row.show_in_community, communityPreviewPublic: row.show_preview }]));
+      setProjects((current) => current.map((project) => {
+        const sharing = project.cloudId ? visibility.get(project.cloudId) : undefined;
+        return sharing === undefined ? project : { ...project, ...sharing };
+      }));
+    });
+    return () => { mounted = false; };
+  }, [cloudUserId, storageReady]);
   const applyFlushResult = (result: Awaited<ReturnType<typeof flushBookezQueue>>) => {
     if (result.applied.length) {
       setProjects((current) => current.map((project) => {
@@ -5890,6 +6061,24 @@ export default Sentry.wrap(function App() {
           const planPayload = { id: stableUuidFrom(`${project.cloudId}:plan`), project_id: project.cloudId, user_id: cloudUserId, writing_frequency: project.plan.writingFrequency ?? null, reminder_enabled: project.plan.reminderEnabled ?? false, reminder_time: project.plan.writingReminderTime ?? null, pace: project.plan.paceFlexibility ?? null, planned_completion_date: project.plan.plannedCompletionDate ?? null, words_per_session: Number.parseInt(project.plan.targetWords ?? '', 10) || null, plan_json: cloudPlanSnapshot(project.plan), deleted_at: project.deletedAt ? new Date(project.deletedAt).toISOString() : null };
           const planFingerprint = JSON.stringify(planPayload);
           if (queuedFingerprints.current[`plan:${project.cloudId}`] !== planFingerprint) { queuedFingerprints.current[`plan:${project.cloudId}`] = planFingerprint; await saveBookezPlanSettings(planPayload); }
+          if (project.communityPublic) {
+            const coverImage = project.images?.find((image) => image.placement === 'cover');
+            const communityPayload = { project_id: project.cloudId, user_id: cloudUserId, show_in_community: true, ...(project.communityPreviewPublic !== undefined ? { show_preview: project.communityPreviewPublic } : {}), project_title: project.title, genre: project.type, project_type: project.type, completion_percent: snapshot.progressPercent, stage: snapshot.stage, public_status: snapshot.nextPart ? `Writing ${snapshot.nextPart.title}` : snapshot.stage, cover_color: project.color, cover_image_path: coverImage?.storagePath ?? null };
+            const communityFingerprint = JSON.stringify(communityPayload);
+            if (queuedFingerprints.current[`community:${project.cloudId}`] !== communityFingerprint) {
+              const { error: communityError } = await supabase.from('community_projects').upsert(communityPayload, { onConflict: 'project_id' });
+              if (!communityError) queuedFingerprints.current[`community:${project.cloudId}`] = communityFingerprint;
+            }
+            if (project.communityPreviewPublic === true) {
+              const preview = buildCommunityPreviewSnapshot(project, snapshot);
+              const previewPayload = { project_id: project.cloudId, user_id: cloudUserId, content: preview.content, word_count: preview.wordCount };
+              const previewFingerprint = JSON.stringify(previewPayload);
+              if (queuedFingerprints.current[`community-preview:${project.cloudId}`] !== previewFingerprint) {
+                const { error: previewError } = await supabase.from('community_project_previews').upsert(previewPayload, { onConflict: 'project_id' });
+                if (!previewError) queuedFingerprints.current[`community-preview:${project.cloudId}`] = previewFingerprint;
+              }
+            }
+          }
           if (project.deletedAt) return;
           await Promise.all(snapshot.parts.map(async (part, index) => {
             const chapterId = stableUuidFrom(`${project.cloudId}:${part.key}`);
@@ -5965,6 +6154,7 @@ export default Sentry.wrap(function App() {
     if (onboardingOwner) void bookezSecureStorage.setItem(onboardingStorageKey(onboardingOwner), onboardingVersion);
   };
   const openBookStudio = (title: string, section: StudioSection) => { setActiveProject(title); setStudioRoute({ title, section }); setPage('BookStudio'); };
+  const openWritingBook = (title: string) => { setActiveProject(title); setPage('Write'); };
   const returnFromAccount = () => {
     if (accountState === 'deleted') {
       setProjects([{ title: 'The Midnight Atlas', color: C.periwinkle, mark: '✦', type: 'Fiction Book', pageGoal: '240', unitGoal: '24', plan: defaultPlanFor('Fiction Book') }]);
@@ -5995,19 +6185,29 @@ export default Sentry.wrap(function App() {
     }
   };
   const renderPage = () => {
-    if (page === 'Library') return <Library projects={projects} activeProject={activeProject} userId={cloudUserId} onPage={setPage} onSelectProject={setActiveProject} onProjectsChange={setProjects} onOpenBookStudio={openBookStudio} />;
-    if (page === 'Plan') return <Plan projects={projects} activeProject={activeProject} userId={cloudUserId} onSelectProject={setActiveProject} onUpdateProject={updateProject} onPage={setPage} />;
-    if (page === 'Write') return <Write projects={projects} activeProject={activeProject} onSelectProject={setActiveProject} onUpdateProject={updateProject} />;
+    if (page === 'Library') return <Library projects={projects} activeProject={activeProject} userId={cloudUserId} onPage={setPage} onSelectProject={setActiveProject} onProjectsChange={setProjects} onOpenBookStudio={openBookStudio} onOpenWritingBook={openWritingBook} />;
+    if (page === 'Plan') return <Plan projects={projects} activeProject={activeProject} userId={cloudUserId} onSelectProject={setActiveProject} onUpdateProject={updateProject} onPage={setPage} onOpenWritingBook={openWritingBook} />;
+    if (page === 'Write') return <Write projects={projects} activeProject={activeProject} onOpenWritingBook={openWritingBook} onUpdateProject={updateProject} />;
     if (page === 'Journey') {
       const journeyProject = projects.find((project) => project.title === activeProject) ?? projects[0];
-      return journeyProject ? <Journey projects={projects} activeProject={activeProject} onSelectProject={setActiveProject} onUpdateProject={updateProject} onPage={setPage} onBack={() => setPage('Library')} onOpenBookStudio={openBookStudio} scrollY={journeyScrollY} /> : <JourneyEmptyState onBack={() => setPage('Library')} onPage={setPage} />;
+      return journeyProject ? <Journey projects={projects} activeProject={activeProject} onSelectProject={setActiveProject} onUpdateProject={updateProject} onPage={setPage} onBack={() => setPage('Library')} onOpenBookStudio={openBookStudio} onOpenWritingBook={openWritingBook} scrollY={journeyScrollY} /> : <JourneyEmptyState onBack={() => setPage('Library')} onPage={setPage} />;
     }
     if (page === 'Community') { const communityProjects = projects.filter((project) => !project.archived && !project.deletedAt).map((project) => { const snapshot = getJourneySnapshot(project); const communityParts = getWriteParts(project, planBlueprints[project.type] ?? planBlueprints['Custom Project']).map((part) => ({ id: part.key, title: part.title, text: project.plan.drafts[part.key] ?? '' })).filter((part) => part.text.trim()); return { id: project.cloudId, title: project.title, genre: project.type, progress: snapshot.progressPercent, stage: snapshot.stage, parts: communityParts, mark: project.mark, color: project.color, coverImagePath: project.images?.find((image) => image.placement === 'cover')?.storagePath }; }); const communityProject = communityProjects.find((project) => project.title === activeProject); return <Community userId={cloudUserId} projects={communityProjects} activeProject={communityProject} onSelectProject={setActiveProject} />; }
-    if (page === 'BookStudio') return <BookStudio projects={projects} project={projects.find((project) => project.title === studioRoute.title) ?? projects.find((project) => project.title === activeProject)} userId={cloudUserId} initialSection={studioRoute.section} onBack={() => setPage('Library')} onPage={setPage} onSelectProject={setActiveProject} onUpdateProject={updateProject} onOpenBookStudio={openBookStudio} />;
+    if (page === 'BookStudio') return <BookStudio projects={projects} project={projects.find((project) => project.title === studioRoute.title) ?? projects.find((project) => project.title === activeProject)} userId={cloudUserId} initialSection={studioRoute.section} onBack={() => setPage('Library')} onPage={setPage} onSelectProject={setActiveProject} onUpdateProject={updateProject} onOpenBookStudio={openBookStudio} onOpenWritingBook={openWritingBook} />;
     if (page === 'Profile') return <Profile projects={projects} reminders={reminders} onRemindersChange={onRemindersChange} profileReminders={profileReminders} onProfileRemindersChange={setProfileReminders} cloudSyncState={cloudSyncState} cloudConflictCount={cloudConflictCount} cloudBackupEnabled={cloudBackupEnabled} onCloudBackupChange={setCloudBackupEnabled} onSyncNow={() => { void runBookezSync(true); }} onReviewConflicts={() => { void reviewBookezConflicts(); }} onPage={setPage} onOpenBookStudio={openBookStudio} onOpenOnboarding={() => setOnboardingVisible(true)} onLogout={async () => { try { await signOutBookez(); } finally { setCloudUserId(null); setCloudMigrationReady(true); setAccountState('signedOut'); setPage('Library'); } }} onDeleteAccount={deleteAccountData} />;
     return <Stats projects={projects} activeProject={activeProject} onSelectProject={setActiveProject} onPage={setPage} />;
   };
   return <><StatusBar style="dark" /><Ambient><SafeAreaView style={s.safe}>{!authReady ? null : accountState === 'active' ? <><Reanimated.ScrollView ref={appScrollRef} contentContainerStyle={s.content} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" onScroll={page === 'Journey' ? journeyScrollHandler : undefined} scrollEventThrottle={16}>{renderPage()}</Reanimated.ScrollView><Navigation page={page} onPage={setPage} projects={projects} activeProject={activeProject} /></> : accountState === 'signedOut' ? <AuthSheet visible onClose={() => undefined} signedInEmail={null} dismissible={false} /> : <ScrollView contentContainerStyle={s.content} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled"><AccountExit deleted onReturn={returnFromAccount} /></ScrollView>}</SafeAreaView></Ambient><PasswordUpdateScreen visible={passwordResetVisible} onComplete={() => setPasswordResetVisible(false)} /><BookezOnboarding visible={onboardingVisible && accountState === 'active' && onboardingOwnerChecked === onboardingOwner} onFinish={completeOnboarding} /></>;
+});
+
+const libraryMenuFeaturedS = StyleSheet.create({
+  row: { minHeight: 58, marginTop: 7, paddingHorizontal: 8, paddingVertical: 7, borderRadius: 15, backgroundColor: '#F0EDFF', borderWidth: 1, borderColor: '#DCD5FC', flexDirection: 'row', alignItems: 'center' },
+  icon: { width: 30, height: 30, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: C.periwinkle },
+  iconText: { color: '#FFF', fontSize: 16, fontWeight: '800' },
+  copy: { flex: 1, minWidth: 0, marginLeft: 9 },
+  label: { color: C.ink, fontSize: 10, fontWeight: '800' },
+  hint: { color: C.muted, fontSize: 7, lineHeight: 11, marginTop: 2 },
+  arrow: { color: C.periwinkle, fontSize: 20, marginLeft: 7 },
 });
 
 const studioCommunityShareS = StyleSheet.create({
@@ -6613,7 +6813,7 @@ const s: any = Object.assign(StyleSheet.create({
   orb: { position: 'absolute', borderRadius: 999, opacity: 0.46 }, orbOne: { width: 270, height: 270, backgroundColor: C.lavender, top: -110, right: -100 }, orbTwo: { width: 230, height: 230, backgroundColor: C.sky, top: 310, left: -155 }, orbThree: { width: 190, height: 190, backgroundColor: C.peach, bottom: 20, right: -110 },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }, overline: { color: C.muted, fontSize: 9, letterSpacing: 1.15, fontWeight: '700' }, pageTitle: { color: C.ink, fontSize: 31, letterSpacing: -0.8, fontWeight: '700', marginTop: 4 }, headerActions: { flexDirection: 'row', alignItems: 'center', gap: 9 }, tinyButton: { width: 39, height: 39, backgroundColor: 'rgba(255,255,255,0.7)', borderRadius: 20, alignItems: 'center', justifyContent: 'center' }, tinyButtonText: { color: C.periwinkle, fontSize: 18 }, avatar: { width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFF8F3', shadowColor: '#666187', shadowOpacity: 0.14, shadowRadius: 9, shadowOffset: { width: 0, height: 4 }, elevation: 3 }, avatarText: { color: C.coral, fontWeight: '700', fontSize: 16 }, avatarDot: { width: 10, height: 10, borderRadius: 5, position: 'absolute', right: 0, bottom: 2, borderWidth: 2, borderColor: '#FFF8F3', backgroundColor: C.sage },
   intro: { fontSize: 15, lineHeight: 21, color: C.muted, marginBottom: 21, maxWidth: 310 }, focusCard: { height: 206, borderRadius: 28, padding: 21, overflow: 'hidden', shadowColor: '#5D598A', shadowOpacity: 0.21, shadowRadius: 19, shadowOffset: { width: 0, height: 10 }, elevation: 7 }, focusHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, focusEyebrow: { color: '#F7F9FF', fontSize: 9, letterSpacing: 1.05, fontWeight: '700' }, focusPickerButton: { minHeight: 27, paddingHorizontal: 9, borderRadius: 10, flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.18)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.32)' }, focusPickerButtonText: { color: '#FFF', fontSize: 8, fontWeight: '700' }, focusPickerButtonArrow: { color: '#FFF', fontSize: 13, marginLeft: 4, marginTop: -3 }, focusTitle: { color: '#FFF', fontSize: 26, fontWeight: '700', letterSpacing: -0.5, marginTop: 10 }, focusCopy: { color: '#F5F4FF', fontSize: 12, marginTop: 5, maxWidth: 245 }, focusProgress: { color: '#ECEBFF', fontSize: 9, fontWeight: '700', marginTop: 7 }, focusActions: { position: 'absolute', left: 21, right: 21, bottom: 17, flexDirection: 'row', alignItems: 'center', gap: 8 }, lightAction: { flex: 1, borderRadius: 15, paddingHorizontal: 13, paddingVertical: 9, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: 'rgba(255,255,255,0.22)' }, lightActionText: { fontSize: 11, color: '#FFF', fontWeight: '700' }, lightArrow: { color: '#FFF', fontSize: 16 }, focusJourneyAction: { paddingHorizontal: 11, paddingVertical: 9, borderRadius: 15, borderWidth: 1, borderColor: 'rgba(255,255,255,0.4)' }, focusJourneyActionText: { color: '#FFF', fontSize: 10, fontWeight: '700' }, focusShape: { position: 'absolute', right: -15, bottom: -58, fontSize: 195, color: '#FFF1DF', opacity: 0.55, transform: [{ rotate: '-12deg' }] }, focusPickerShade: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(32,41,84,0.24)' }, focusPickerDismiss: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 }, focusPickerSheet: { maxHeight: '72%', padding: 20, paddingBottom: 28, borderTopLeftRadius: 29, borderTopRightRadius: 29, backgroundColor: '#FBFAFF' }, focusPickerOverline: { color: C.periwinkle, fontSize: 8, letterSpacing: 1, fontWeight: '700', marginTop: 17 }, focusPickerTitle: { color: C.ink, fontSize: 22, fontWeight: '700', marginTop: 5 }, focusPickerHint: { color: C.muted, fontSize: 10, lineHeight: 15, marginTop: 5, marginBottom: 7 }, focusPickerRow: { minHeight: 59, marginTop: 7, paddingHorizontal: 10, borderRadius: 15, flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF', borderWidth: 1, borderColor: '#E8E7F1' }, focusPickerRowSelected: { backgroundColor: '#F3F1FF', borderColor: '#D9D2FA' }, focusPickerMark: { width: 34, height: 34, borderRadius: 12, alignItems: 'center', justifyContent: 'center' }, focusPickerMarkText: { color: '#FFF', fontSize: 15 }, focusPickerCopy: { flex: 1, marginLeft: 9 }, focusPickerBookTitle: { color: C.ink, fontSize: 12, fontWeight: '700' }, focusPickerBookMeta: { color: C.muted, fontSize: 9, marginTop: 3 }, focusPickerCheck: { color: C.periwinkle, fontSize: 17, fontWeight: '700', marginLeft: 8 },
-  sectionBar: { marginTop: 28, marginBottom: 13, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }, sectionTitle: { fontSize: 18, fontWeight: '700', letterSpacing: -0.3, color: C.ink }, link: { color: C.periwinkle, fontSize: 9, fontWeight: '700', letterSpacing: 0.8 }, newProjectButton: { paddingVertical: 8, paddingHorizontal: 10, borderRadius: 11, backgroundColor: '#EEEDFF' }, newProjectText: { color: C.periwinkle, fontSize: 9, fontWeight: '700', letterSpacing: 0.65 }, projectRow: { minHeight: 74, marginBottom: 9, padding: 12, borderRadius: 19, flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.68)' }, projectRowActive: { backgroundColor: '#FFF', shadowColor: '#68638D', shadowOpacity: 0.11, shadowRadius: 11, shadowOffset: { width: 0, height: 5 }, elevation: 2 }, projectMark: { width: 44, height: 44, borderRadius: 15, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }, libraryProjectCover: { width: '100%', height: '100%' }, projectMarkText: { color: '#FFF', fontSize: 18 }, projectCopy: { flex: 1, marginLeft: 12 }, projectTitle: { color: C.ink, fontWeight: '700', fontSize: 14 }, projectDetail: { color: C.muted, marginTop: 4, fontSize: 10, letterSpacing: 0.25 }, continueTag: { paddingHorizontal: 8, paddingVertical: 6, borderRadius: 9, backgroundColor: '#EEEDFF' }, continueTagText: { fontSize: 8, letterSpacing: 0.6, color: C.periwinkle, fontWeight: '700' }, chevron: { color: C.periwinkle, fontSize: 25 }, addProjectRow: { marginTop: 4, borderRadius: 19, borderWidth: 1.5, borderStyle: 'dashed', borderColor: '#C8C8E8', minHeight: 72, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.32)' }, addProjectPlus: { width: 38, height: 38, borderRadius: 14, backgroundColor: '#EEEDFF', alignItems: 'center', justifyContent: 'center' }, addProjectPlusText: { color: C.periwinkle, fontSize: 24, fontWeight: '400' }, addProjectTitle: { color: C.ink, fontSize: 13, fontWeight: '700', marginLeft: 12 }, addProjectSub: { color: C.muted, fontSize: 10, marginLeft: 12, marginTop: 4 },
+  sectionBar: { marginTop: 28, marginBottom: 13, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }, sectionTitle: { fontSize: 18, fontWeight: '700', letterSpacing: -0.3, color: C.ink }, link: { color: C.periwinkle, fontSize: 9, fontWeight: '700', letterSpacing: 0.8 }, newProjectButton: { paddingVertical: 8, paddingHorizontal: 10, borderRadius: 11, backgroundColor: '#EEEDFF' }, newProjectText: { color: C.periwinkle, fontSize: 9, fontWeight: '700', letterSpacing: 0.65 }, projectRow: { minHeight: 74, marginBottom: 9, padding: 12, borderRadius: 19, flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.68)' }, projectRowActive: { backgroundColor: '#FFF', shadowColor: '#68638D', shadowOpacity: 0.11, shadowRadius: 11, shadowOffset: { width: 0, height: 5 }, elevation: 2 }, projectMark: { width: 44, height: 44, borderRadius: 15, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }, libraryProjectCover: { width: '100%', height: '100%' }, projectMarkText: { color: '#FFF', fontSize: 18 }, projectCopy: { flex: 1, marginLeft: 12 }, projectTitle: { color: C.ink, fontWeight: '700', fontSize: 14 }, projectDetail: { color: C.muted, marginTop: 4, fontSize: 10, letterSpacing: 0.25 }, projectCommunityBadge: { alignSelf: 'flex-start', marginTop: 6, paddingHorizontal: 7, paddingVertical: 3, borderRadius: 7, backgroundColor: '#EEF8F0' }, projectCommunityBadgeText: { color: '#4D8B59', fontSize: 7, letterSpacing: 0.45, fontWeight: '800' }, continueTag: { paddingHorizontal: 8, paddingVertical: 6, borderRadius: 9, backgroundColor: '#EEEDFF' }, continueTagText: { fontSize: 8, letterSpacing: 0.6, color: C.periwinkle, fontWeight: '700' }, chevron: { color: C.periwinkle, fontSize: 25 }, addProjectRow: { marginTop: 4, borderRadius: 19, borderWidth: 1.5, borderStyle: 'dashed', borderColor: '#C8C8E8', minHeight: 72, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.32)' }, addProjectPlus: { width: 38, height: 38, borderRadius: 14, backgroundColor: '#EEEDFF', alignItems: 'center', justifyContent: 'center' }, addProjectPlusText: { color: C.periwinkle, fontSize: 24, fontWeight: '400' }, addProjectTitle: { color: C.ink, fontSize: 13, fontWeight: '700', marginLeft: 12 }, addProjectSub: { color: C.muted, fontSize: 10, marginLeft: 12, marginTop: 4 },
   modalShade: { flex: 1, backgroundColor: 'rgba(29, 33, 69, 0.35)', justifyContent: 'flex-end' }, composerSheet: { height: '88%', paddingHorizontal: 20, paddingTop: 12, paddingBottom: 26, backgroundColor: '#FAFAFF', borderTopLeftRadius: 32, borderTopRightRadius: 32 }, sheetHandle: { width: 38, height: 4, borderRadius: 4, backgroundColor: '#D9D9E7', alignSelf: 'center' }, composerHeader: { marginTop: 17, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }, composerOverline: { color: C.periwinkle, letterSpacing: 1, fontSize: 9, fontWeight: '700' }, composerTitle: { color: C.ink, fontSize: 23, letterSpacing: -0.5, fontWeight: '700', marginTop: 5 }, closeButton: { height: 34, width: 34, borderRadius: 17, backgroundColor: '#F0F0F9', alignItems: 'center', justifyContent: 'center' }, closeButtonText: { color: C.muted, fontSize: 23, lineHeight: 24 }, projectInput: { marginTop: 17, minHeight: 50, paddingHorizontal: 15, backgroundColor: '#FFF', borderRadius: 15, color: C.ink, fontSize: 14, borderWidth: 1, borderColor: '#E5E5F0' }, typePrompt: { color: C.muted, fontSize: 9, letterSpacing: 0.9, fontWeight: '700', marginTop: 20, marginBottom: 10 }, typeScroller: { flex: 1 }, typeGrid: { paddingBottom: 14, gap: 8 }, typeCard: { padding: 10, minHeight: 63, borderRadius: 17, flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: '#EBEBF2', backgroundColor: '#FFF' }, typeCardSelected: { borderColor: C.periwinkle, backgroundColor: '#F4F2FF' }, typeIcon: { width: 35, height: 35, borderRadius: 12, alignItems: 'center', justifyContent: 'center' }, typeIconText: { color: '#FFF', fontSize: 16 }, typeCopy: { flex: 1, marginLeft: 10 }, typeName: { color: C.ink, fontSize: 12, fontWeight: '700' }, typeExample: { color: C.muted, fontSize: 9, marginTop: 3 }, typeCheck: { width: 20, height: 20, borderRadius: 10, borderWidth: 1.5, borderColor: '#D2D4E2', alignItems: 'center', justifyContent: 'center' }, typeCheckSelected: { backgroundColor: C.periwinkle, borderColor: C.periwinkle }, typeCheckText: { color: '#FFF', fontSize: 11, fontWeight: '700' }, createProjectButton: { marginTop: 11, backgroundColor: C.periwinkle, height: 53, borderRadius: 17, paddingHorizontal: 18, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', shadowColor: '#7470C9', shadowOpacity: 0.28, shadowRadius: 12, shadowOffset: { width: 0, height: 6 }, elevation: 5 }, createProjectButtonText: { color: '#FFF', fontSize: 14, fontWeight: '700' }, createProjectArrow: { color: '#FFF', fontSize: 21 },
   structureLegend: { marginTop: 12, flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 10 }, structureLegendItem: { flexDirection: 'row', alignItems: 'center', gap: 5 }, structureLegendDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#D9DAE8' }, structureLegendDotRecommended: { backgroundColor: C.periwinkle }, structureLegendText: { color: C.muted, fontSize: 8, fontWeight: '700' }, structureLegendHint: { color: '#A4A7BE', fontSize: 8, marginLeft: 3 }, recommendationLegend: { marginTop: 13, padding: 10, borderRadius: 15, backgroundColor: '#FAF9FF', borderWidth: 1, borderColor: '#E8E5F7' }, recommendationLegendTitle: { color: C.muted, fontSize: 7, letterSpacing: 0.8, fontWeight: '700' }, recommendationLegendItems: { marginTop: 7, flexDirection: 'row', flexWrap: 'wrap', gap: 5 }, recommendationLegendChip: { paddingHorizontal: 6, paddingVertical: 4, borderRadius: 6 }, recommendationLegendText: { fontSize: 6, letterSpacing: 0.35, fontWeight: '700' }, structureFilterRow: { marginTop: 13, padding: 4, borderRadius: 14, backgroundColor: '#F1F0F8', flexDirection: 'row', gap: 4 }, structureFilterButton: { flex: 1, paddingVertical: 7, borderRadius: 10, alignItems: 'center' }, structureFilterButtonActive: { backgroundColor: '#FFF', shadowColor: '#6E6A91', shadowOpacity: 0.08, shadowRadius: 5, shadowOffset: { width: 0, height: 2 }, elevation: 1 }, structureFilterText: { color: C.muted, fontSize: 8, fontWeight: '700' }, structureFilterTextActive: { color: C.ink }, structureChecklistHeader: { marginTop: 13, padding: 11, borderRadius: 15, backgroundColor: '#F4F2FF', borderWidth: 1, borderColor: '#E4E1F4', flexDirection: 'row', alignItems: 'center' }, structureChecklistCopy: { flex: 1 }, structureChecklistTitle: { color: C.ink, fontSize: 9, letterSpacing: 0.8, fontWeight: '700' }, structureChecklistHint: { color: C.muted, fontSize: 9, marginTop: 4 }, structureCategory: { color: '#9A9CB1', fontSize: 6, letterSpacing: 0.7, fontWeight: '700', marginBottom: 3 }, partTag: { paddingHorizontal: 5, paddingVertical: 3, borderRadius: 5, fontSize: 6, letterSpacing: 0.35, fontWeight: '700' }, essentialTag: { color: '#A45467', backgroundColor: '#FFE7E6' }, stronglyRecommendedTag: { color: '#715BC3', backgroundColor: '#E9E1FF' }, recommendedTag: { color: C.periwinkle, backgroundColor: '#EEEDFF' }, commonTag: { color: '#4E8B67', backgroundColor: '#E8F6EA' }, whenRelevantTag: { color: '#A97819', backgroundColor: '#FFF3CB' }, optionalTag: { color: C.muted, backgroundColor: '#F1F1F6' },
   structureFooterRow: { marginTop: 13, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, structureFooterCompact: { color: C.muted, fontSize: 10 }, structurePager: { flexDirection: 'row', alignItems: 'center', gap: 7 }, structurePagerButton: { width: 27, height: 27, borderRadius: 10, backgroundColor: '#EEEDFF', alignItems: 'center', justifyContent: 'center' }, structurePagerButtonDisabled: { opacity: 0.35 }, structurePagerButtonText: { color: C.periwinkle, fontSize: 19, lineHeight: 21 }, structurePagerCount: { color: C.muted, fontSize: 9, fontWeight: '700', minWidth: 27, textAlign: 'center' }, referencePlanCard: { marginTop: 16, padding: 13, borderRadius: 18, backgroundColor: '#F7F7FA', borderWidth: 1, borderColor: '#E6E5ED' }, referencePlanHeader: { flexDirection: 'row', alignItems: 'flex-start' }, referencePlanIcon: { width: 33, height: 33, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: '#E8E8EE' }, referencePlanIconText: { color: '#8F91A3', fontSize: 16 }, referencePlanCopy: { flex: 1, minWidth: 0, marginLeft: 9, marginRight: 7 }, referencePlanEyebrow: { color: '#9A9CAA', fontSize: 7, letterSpacing: 0.7, fontWeight: '700' }, referencePlanTitle: { color: C.ink, fontSize: 14, fontWeight: '700', marginTop: 3 }, referencePlanHint: { color: '#9294A4', fontSize: 9, lineHeight: 13, marginTop: 4 }, referencePlanToggle: { minWidth: 43, minHeight: 27, paddingHorizontal: 7, borderRadius: 9, backgroundColor: '#E8E8EE', alignItems: 'center', justifyContent: 'center' }, referencePlanToggleOn: { backgroundColor: '#DCD7FB' }, referencePlanToggleText: { color: '#999BAA', fontSize: 7, letterSpacing: 0.5, fontWeight: '700' }, referencePlanToggleTextOn: { color: C.periwinkle }, referencePlanBody: { marginTop: 11, paddingTop: 10, borderTopWidth: 1, borderTopColor: '#E4E3EA' }, referencePlanFieldLabel: { color: '#999BAA', fontSize: 7, letterSpacing: 0.65, fontWeight: '700' }, referencePlanInput: { minHeight: 70, marginTop: 6, padding: 9, borderRadius: 10, backgroundColor: '#FFF', borderWidth: 1, borderColor: '#E3E2EA', color: C.ink, fontSize: 10, lineHeight: 15, textAlignVertical: 'top' }, referencePlanExample: { color: '#A4A5B1', fontSize: 8, lineHeight: 12, marginTop: 7 },
@@ -6654,6 +6854,27 @@ const s: any = Object.assign(StyleSheet.create({
 }));
 
 Object.assign(s, {
+  libraryCommunityShareShade: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(29,33,69,0.26)' },
+  libraryCommunityShareDismiss: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 },
+  libraryCommunityShareSheet: { maxHeight: '84%', paddingHorizontal: 20, paddingTop: 12, paddingBottom: 24, borderTopLeftRadius: 29, borderTopRightRadius: 29, backgroundColor: '#FBFAFF' },
+  libraryCommunityShareHeader: { marginTop: 6, flexDirection: 'row', alignItems: 'center' },
+  libraryCommunityShareMark: { width: 42, height: 42, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
+  libraryCommunityShareMarkText: { color: '#FFF', fontSize: 18, fontWeight: '700' },
+  libraryCommunityShareCopy: { flex: 1, minWidth: 0, marginLeft: 10 },
+  libraryCommunityShareOverline: { color: C.periwinkle, fontSize: 7, letterSpacing: 0.9, fontWeight: '800' },
+  libraryCommunityShareTitle: { color: C.ink, fontSize: 18, fontWeight: '800', marginTop: 3 },
+  libraryCommunityShareIntro: { marginTop: 16, padding: 13, borderRadius: 16, backgroundColor: '#F0EDFF', borderWidth: 1, borderColor: '#DED8FA', flexDirection: 'row', alignItems: 'flex-start' },
+  libraryCommunityShareIntroIcon: { color: C.periwinkle, fontSize: 19, lineHeight: 22, marginRight: 9 },
+  libraryCommunityShareIntroCopy: { flex: 1 },
+  libraryCommunityShareIntroTitle: { color: C.ink, fontSize: 11, fontWeight: '800' },
+  libraryCommunityShareIntroText: { color: C.muted, fontSize: 9, lineHeight: 14, marginTop: 4 },
+  libraryCommunityShareToggleRow: { marginTop: 14, padding: 13, borderRadius: 16, backgroundColor: '#FFF', borderWidth: 1, borderColor: '#E4E2EF', flexDirection: 'row', alignItems: 'center' },
+  libraryCommunityShareDisabled: { opacity: 0.55 },
+  libraryCommunityShareToggleCopy: { flex: 1, paddingRight: 12 },
+  libraryCommunityShareToggleTitle: { color: C.ink, fontSize: 10, fontWeight: '800' },
+  libraryCommunityShareToggleHint: { color: C.muted, fontSize: 8, lineHeight: 12, marginTop: 3 },
+  libraryCommunityShareDone: { minHeight: 43, marginTop: 14, borderRadius: 13, backgroundColor: C.periwinkle, alignItems: 'center', justifyContent: 'center' },
+  libraryCommunityShareDoneText: { color: '#FFF', fontSize: 9, fontWeight: '800' },
   writeEditorLabelGroup: { flex: 1, minWidth: 0, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 },
   focusModeHeader: { marginTop: 12, minHeight: 42, paddingHorizontal: 13, borderRadius: 14, backgroundColor: '#252D59', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   focusModeLabel: { color: '#FFF', fontSize: 8, letterSpacing: 1, fontWeight: '800' },
@@ -6817,24 +7038,68 @@ Object.assign(s, {
 
 const exportS = StyleSheet.create({
   panel: { marginTop: 13, padding: 13, borderRadius: 19, backgroundColor: 'rgba(255,255,255,0.86)', borderWidth: 1, borderColor: '#E7E5F1' },
+  panelHeading: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' },
+  panelHeadingCopy: { flex: 1, minWidth: 0 },
+  panelTitle: { color: C.ink, fontSize: 15, lineHeight: 19, fontWeight: '800', marginTop: 4 },
+  panelHeadingIcon: { width: 31, height: 31, borderRadius: 11, backgroundColor: '#F0EDFF', color: C.periwinkle, fontSize: 16, lineHeight: 31, textAlign: 'center', marginLeft: 8 },
   panelLabel: { color: C.muted, fontSize: 8, letterSpacing: 0.9, fontWeight: '800' },
-  formatGrid: { marginTop: 9, flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
-  formatCard: { width: '31.8%', minHeight: 60, padding: 8, borderRadius: 12, backgroundColor: '#F5F4FA', borderWidth: 1, borderColor: '#ECEAF3' },
+  formatGrid: { marginTop: 9, flexDirection: 'row', flexWrap: 'wrap' },
+  formatCard: { width: '31%', minHeight: 96, marginRight: '2%', marginBottom: 7, padding: 8, borderRadius: 14, backgroundColor: '#F5F4FA', borderWidth: 1, borderColor: '#ECEAF3' },
   formatCardSelected: { backgroundColor: '#F0EDFF', borderColor: C.periwinkle },
+  formatIcon: { width: 27, height: 27, borderRadius: 9, alignItems: 'center', justifyContent: 'center', backgroundColor: '#E9E7F2', marginBottom: 7 },
+  formatIconSelected: { backgroundColor: '#DCD5FC' },
+  formatIconText: { color: C.muted, fontSize: 14, fontWeight: '800' },
+  formatIconTextSelected: { color: C.periwinkle },
   formatLabel: { color: C.ink, fontSize: 10, fontWeight: '800' },
   formatLabelSelected: { color: C.periwinkle },
   formatDescription: { color: C.muted, fontSize: 7, lineHeight: 10, marginTop: 4 },
+  layoutGrid: { marginTop: 9, gap: 7 },
+  layoutCard: { minHeight: 52, padding: 9, borderRadius: 13, backgroundColor: '#F7F6FB', borderWidth: 1, borderColor: '#ECEAF3', flexDirection: 'row', alignItems: 'center' },
+  layoutCardSelected: { backgroundColor: '#F0EDFF', borderColor: '#C9C0F3' },
+  radio: { width: 20, height: 20, borderRadius: 10, borderWidth: 1.5, borderColor: '#D2D1DF', alignItems: 'center', justifyContent: 'center', marginRight: 9 },
+  radioSelected: { borderColor: C.periwinkle },
+  radioDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: C.periwinkle },
+  layoutCopy: { flex: 1, minWidth: 0 },
+  layoutLabel: { color: C.ink, fontSize: 10, fontWeight: '800' },
+  layoutLabelSelected: { color: C.periwinkle },
+  layoutHint: { color: C.muted, fontSize: 8, lineHeight: 12, marginTop: 2 },
   includeRow: { marginTop: 13, paddingTop: 11, borderTopWidth: 1, borderTopColor: '#ECEAF2', flexDirection: 'row', alignItems: 'center' },
   includeCopy: { flex: 1, marginRight: 10 },
   includeTitle: { color: C.ink, fontSize: 10, fontWeight: '800' },
   includeHint: { color: C.muted, fontSize: 8, lineHeight: 12, marginTop: 3 },
+  authorField: { marginTop: 10, padding: 10, borderRadius: 12, backgroundColor: '#F7F6FC', borderWidth: 1, borderColor: '#E9E6F3' },
+  authorLabel: { color: C.muted, fontSize: 7, letterSpacing: 0.75, fontWeight: '800' },
+  authorInput: { minHeight: 38, marginTop: 6, paddingHorizontal: 10, borderRadius: 10, backgroundColor: '#FFF', borderWidth: 1, borderColor: '#E4E1EF', color: C.ink, fontSize: 10 },
   selectedSummary: { color: C.periwinkle, fontSize: 8, fontWeight: '700', marginTop: 10 },
+  actionSection: { marginTop: 18, padding: 14, borderRadius: 19, backgroundColor: '#F0EDFF', borderWidth: 1, borderColor: '#DDD7FA' },
+  actionSectionLabel: { color: C.periwinkle, fontSize: 8, letterSpacing: 0.9, fontWeight: '800' },
+  actionSectionTitle: { color: C.ink, fontSize: 15, fontWeight: '800', marginTop: 4 },
   actionGrid: { marginTop: 11, flexDirection: 'row', gap: 7 },
   actionButton: { flex: 1, minHeight: 110, padding: 10, borderRadius: 16, backgroundColor: '#FFF', borderWidth: 1, borderColor: '#E6E4EF' },
   actionDisabled: { opacity: 0.55 },
   actionIcon: { color: C.periwinkle, fontSize: 21, fontWeight: '700' },
   actionTitle: { color: C.ink, fontSize: 10, fontWeight: '800', marginTop: 8 },
   actionHint: { color: C.muted, fontSize: 8, lineHeight: 12, marginTop: 4 },
+  copyPanel: { marginTop: 13, padding: 13, borderRadius: 19, backgroundColor: '#FFFDF8', borderWidth: 1, borderColor: '#F0E5C7' },
+  copyHeader: { flexDirection: 'row', alignItems: 'flex-start' },
+  copyIcon: { width: 34, height: 34, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFF0C9' },
+  copyIconText: { color: '#A97819', fontSize: 17, fontWeight: '800' },
+  copyHeaderCopy: { flex: 1, minWidth: 0, marginLeft: 9 },
+  copyHint: { color: C.muted, fontSize: 8, lineHeight: 12, marginTop: 5 },
+  chapterPicker: { paddingTop: 10, paddingBottom: 1, gap: 6 },
+  chapterChip: { maxWidth: 145, minHeight: 32, paddingHorizontal: 8, borderRadius: 10, backgroundColor: '#FFF', borderWidth: 1, borderColor: '#EEE5D0', flexDirection: 'row', alignItems: 'center' },
+  chapterChipSelected: { backgroundColor: '#FFF0C9', borderColor: '#E7C875' },
+  chapterChipNumber: { color: '#A97819', fontSize: 7, fontWeight: '800' },
+  chapterChipNumberSelected: { color: '#8A6413' },
+  chapterChipLabel: { flexShrink: 1, color: C.muted, fontSize: 8, fontWeight: '700', marginLeft: 5 },
+  chapterChipLabelSelected: { color: '#7E5E1A' },
+  copyActions: { marginTop: 12, gap: 7 },
+  copyAction: { minHeight: 56, paddingHorizontal: 10, paddingVertical: 8, borderRadius: 13, backgroundColor: '#FFF', borderWidth: 1, borderColor: '#EEE5D0', flexDirection: 'row', alignItems: 'center' },
+  copyActionIcon: { width: 29, height: 29, borderRadius: 10, backgroundColor: '#FFF4D7', color: '#A97819', fontSize: 14, lineHeight: 29, textAlign: 'center', fontWeight: '800' },
+  copyActionCopy: { flex: 1, minWidth: 0, marginLeft: 9 },
+  copyActionTitle: { color: C.ink, fontSize: 10, fontWeight: '800' },
+  copyActionHint: { color: C.muted, fontSize: 8, lineHeight: 12, marginTop: 3 },
+  copyNotice: { marginTop: 11, padding: 10, borderRadius: 12, color: '#5C8964', backgroundColor: '#EEF9EF', fontSize: 8, lineHeight: 12, textAlign: 'center' },
   savedNotice: { marginTop: 11, padding: 10, borderRadius: 12, color: '#5C8964', backgroundColor: '#EEF9EF', fontSize: 8, lineHeight: 12, textAlign: 'center' },
   profileAvatarImage: { width: '100%', height: '100%', borderRadius: 32 },
   profileAvatarEditBadge: { position: 'absolute', right: 4, bottom: 4, width: 19, height: 19, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: C.periwinkle, borderWidth: 1.5, borderColor: '#FFF' },

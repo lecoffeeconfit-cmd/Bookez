@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import * as Speech from 'expo-speech';
 import { ActivityIndicator, Alert, Image, Modal, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { supabase } from '../lib/supabase';
+import { loadBookezSpeechVoice } from '../lib/speech-preferences';
 import { FeedbackHub, FeedbackRequestBuilder, FeedbackRequestDetail, type FeedbackRequest } from './CommunityFeedback';
 
 type ReactionType = 'keep_going' | 'great_progress' | 'congrats';
@@ -54,6 +56,7 @@ type CommunityItem = {
   coverColor: string;
   coverImagePath?: string | null;
   coverImageUri?: string;
+  previewAvailable?: boolean;
   reactions: Record<ReactionType, number>;
   myReaction?: ReactionType | null;
   demo?: boolean;
@@ -94,14 +97,41 @@ const demoItems: CommunityItem[] = [
 ];
 
 const safeNumber = (value: unknown) => typeof value === 'number' && Number.isFinite(value) ? value : null;
+const formatPreviewCount = (value: number) => value >= 1000 ? `${(value / 1000).toFixed(value >= 10000 ? 0 : 1)}k` : String(value);
 const normalizeItem = (row: Record<string, unknown>): CommunityItem => ({
   id: String(row.project_id ?? row.id), userId: String(row.user_id), displayName: String(row.display_name ?? 'Bookez writer'), bio: typeof row.bio === 'string' ? row.bio : null,
   projectTitle: typeof row.project_title === 'string' ? row.project_title : null, genre: typeof row.genre === 'string' ? row.genre : null, projectType: typeof row.project_type === 'string' ? row.project_type : null,
   completionPercent: safeNumber(row.completion_percent), stage: typeof row.stage === 'string' ? row.stage : null, publicStatus: typeof row.public_status === 'string' ? row.public_status : null,
   writingNow: row.writing_now === true, completed: row.completed === true, finishedLabel: typeof row.finished_label === 'string' ? row.finished_label : null, updatedAt: typeof row.updated_at === 'string' ? row.updated_at : undefined,
   avatarInitials: typeof row.avatar_initials === 'string' ? row.avatar_initials : null, avatarImagePath: typeof row.avatar_path === 'string' ? row.avatar_path : null, avatarColor: typeof row.avatar_color === 'string' ? row.avatar_color : '#C9BCF5', coverColor: typeof row.cover_color === 'string' ? row.cover_color : '#5B638E',
-  coverImagePath: typeof row.cover_image_path === 'string' ? row.cover_image_path : null, reactions: { keep_going: 0, great_progress: 0, congrats: 0 },
+  coverImagePath: typeof row.cover_image_path === 'string' ? row.cover_image_path : null, previewAvailable: row.preview_available === true, reactions: { keep_going: 0, great_progress: 0, congrats: 0 },
 });
+
+type CommunityPreviewPart = { id: string; title: string; text: string; position: number };
+type CommunityPreview = { projectId: string; title?: string; content: CommunityPreviewPart[]; wordCount: number; updatedAt?: string };
+
+const normalizePreview = (value: unknown, fallbackId: string): CommunityPreview => {
+  const row = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  const content = Array.isArray(row.content) ? row.content.map((entry, index) => {
+    if (!entry || typeof entry !== 'object') return null;
+    const part = entry as Record<string, unknown>;
+    const text = typeof part.text === 'string' ? part.text.trim() : '';
+    if (!text) return null;
+    return { id: String(part.id ?? `part-${index}`), title: String(part.title ?? `Part ${index + 1}`), text, position: typeof part.position === 'number' ? part.position : index };
+  }).filter((part): part is CommunityPreviewPart => Boolean(part)) : [];
+  return { projectId: typeof row.project_id === 'string' ? row.project_id : fallbackId, title: typeof row.project_title === 'string' ? row.project_title : undefined, content, wordCount: safeNumber(row.word_count) ?? content.reduce((sum, part) => sum + part.text.split(/\s+/).length, 0), updatedAt: typeof row.updated_at === 'string' ? row.updated_at : undefined };
+};
+
+const splitCommunitySpeechText = (value: string) => {
+  const maxLength = Math.max(500, Math.min(3500, Speech.maxSpeechInputLength || 3500));
+  if (value.length <= maxLength) return [value];
+  const sentences = value.match(/[^.!?]+[.!?]+|[^.!?]+$/g) ?? [value];
+  const chunks: string[] = [];
+  let current = '';
+  sentences.forEach((sentence) => { if ((current + sentence).length > maxLength && current) { chunks.push(current.trim()); current = ''; } current += sentence; });
+  if (current.trim()) chunks.push(current.trim());
+  return chunks;
+};
 
 function EmptyState({ icon, title, copy }: { icon: string; title: string; copy: string }) {
   return <View style={s.empty}><Text style={s.emptyIcon}>{icon}</Text><Text style={s.emptyTitle}>{title}</Text><Text style={s.emptyCopy}>{copy}</Text></View>;
@@ -127,7 +157,7 @@ function ReactionTotals({ item }: { item: CommunityItem }) {
 }
 
 function ProjectCard({ item, onPress, onReact }: { item: CommunityItem; onPress: () => void; onReact: (item: CommunityItem, reaction: ReactionType) => void }) {
-  return <Pressable onPress={onPress} style={s.card} accessibilityRole="button" accessibilityLabel={`Open ${item.projectTitle ?? 'writer project'} details`}><View style={s.cardTop}><Cover item={item} /><View style={s.cardCopy}><View style={s.writerRow}><Avatar item={item} /><Text numberOfLines={1} style={s.writerName}>{item.displayName}</Text>{item.writingNow && <View style={s.writingPill}><View style={s.liveDot} /><Text style={s.writingPillText}>Writing now</Text></View>}</View><Text numberOfLines={2} style={s.projectTitle}>{item.projectTitle ?? 'Untitled project'}</Text><Text numberOfLines={1} style={s.projectMeta}>{item.genre ?? item.projectType ?? 'Writing project'} · {item.stage ?? 'In progress'}</Text>{item.feedbackRequest && <Text numberOfLines={1} style={s.feedbackBadge}>Open for feedback · Read or listen</Text>}{item.publicStatus && <Text numberOfLines={1} style={s.publicStatus}>{item.publicStatus}</Text>}<View style={s.progressTrack}><View style={[s.progressFill, { width: `${Math.max(2, Math.min(100, item.completionPercent ?? 0))}%`, backgroundColor: item.completed ? C.gold : C.periwinkle }]} /></View><Text style={s.progressText}>{item.completionPercent ?? 0}% complete</Text></View><Text style={s.cardArrow}>›</Text></View><View style={s.cardFooter}><ReactionTotals item={item} />{item.feedbackRequestId ? <Text style={s.feedbackCardAction}>Open</Text> : <View style={s.reactionActions}>{reactionOptions.map((reaction) => <Pressable key={reaction.key} onPress={(event) => { event.stopPropagation(); onReact(item, reaction.key); }} style={[s.reactionButton, item.myReaction === reaction.key && s.reactionButtonActive]} accessibilityLabel={reaction.label}><Text style={[s.reactionIcon, item.myReaction === reaction.key && s.reactionIconActive]}>{reaction.icon}</Text></Pressable>)}</View>}</View></Pressable>;
+  return <Pressable onPress={onPress} style={s.card} accessibilityRole="button" accessibilityLabel={`Open ${item.projectTitle ?? 'writer project'} details`}><View style={s.cardTop}><Cover item={item} /><View style={s.cardCopy}><View style={s.writerRow}><Avatar item={item} /><Text numberOfLines={1} style={s.writerName}>{item.displayName}</Text>{item.writingNow && <View style={s.writingPill}><View style={s.liveDot} /><Text style={s.writingPillText}>Writing now</Text></View>}</View><Text numberOfLines={2} style={s.projectTitle}>{item.projectTitle ?? 'Untitled project'}</Text><Text numberOfLines={1} style={s.projectMeta}>{item.genre ?? item.projectType ?? 'Writing project'} · {item.stage ?? 'In progress'}</Text>{item.feedbackRequest && <Text numberOfLines={1} style={s.feedbackBadge}>Open for feedback · Read or listen</Text>}{item.previewAvailable && !item.feedbackRequest && <Text numberOfLines={1} style={s.previewBadge}>Read or listen to preview</Text>}{item.publicStatus && <Text numberOfLines={1} style={s.publicStatus}>{item.publicStatus}</Text>}<View style={s.progressTrack}><View style={[s.progressFill, { width: `${Math.max(2, Math.min(100, item.completionPercent ?? 0))}%`, backgroundColor: item.completed ? C.gold : C.periwinkle }]} /></View><Text style={s.progressText}>{item.completionPercent ?? 0}% complete</Text></View><Text style={s.cardArrow}>›</Text></View><View style={s.cardFooter}><ReactionTotals item={item} />{item.feedbackRequestId ? <Text style={s.feedbackCardAction}>Open</Text> : <View style={s.reactionActions}>{reactionOptions.map((reaction) => <Pressable key={reaction.key} onPress={(event) => { event.stopPropagation(); onReact(item, reaction.key); }} style={[s.reactionButton, item.myReaction === reaction.key && s.reactionButtonActive]} accessibilityLabel={reaction.label}><Text style={[s.reactionIcon, item.myReaction === reaction.key && s.reactionIconActive]}>{reaction.icon}</Text></Pressable>)}</View>}</View></Pressable>;
 }
 
 const feedbackFocuses = ['Title or cover', 'Opening', 'Pacing', 'Characters', 'Overall direction'];
@@ -150,13 +180,81 @@ function FeedbackPicker({ item, userId, onClose }: { item: CommunityItem; userId
   return <Modal visible transparent animationType="slide" onRequestClose={onClose}><View style={s.modalShade}><Pressable style={s.modalDismiss} onPress={onClose} /><View style={s.smallSheet}><View style={s.sheetHandle} /><Text style={s.overline}>COMMUNITY / FEEDBACK</Text><Text style={s.sheetTitle}>What would you like help with?</Text><Text style={s.sheetHint}>{project.title} does not need to be finished. Choose one focused area so other writers know where their perspective would be useful.</Text><View style={s.feedbackProjectSummary}><Text style={s.feedbackProjectTitle}>{project.title}</Text><Text style={s.feedbackProjectMeta}>{project.genre} · {project.progress}% · {project.stage}</Text></View><Text style={s.fieldLabel}>FOCUS</Text><View style={s.feedbackFocusGrid}>{feedbackFocuses.map((option) => <Pressable key={option} onPress={() => setFocus(option)} style={[s.pill, focus === option && s.pillActive]}><Text style={[s.pillText, focus === option && s.pillTextActive]}>{option}</Text></Pressable>)}</View><Text style={s.fieldLabel}>OPTIONAL QUESTION</Text><TextInput value={question} onChangeText={setQuestion} multiline placeholder="What should readers pay attention to?" placeholderTextColor="#A0A3BB" style={s.feedbackInput} /><Pressable disabled={saving} onPress={() => void send()} style={[s.primaryButton, saving && s.primaryDisabled]}><Text style={s.primaryButtonText}>{saving ? 'Sending…' : 'Send to Community'}</Text></Pressable></View></View></Modal>;
 }
 
+function CommunityReader({ item, visible, initialMode, onClose }: { item: CommunityItem; visible: boolean; initialMode: 'read' | 'listen'; onClose: () => void }) {
+  const [preview, setPreview] = useState<CommunityPreview | null>(null);
+  const [selectedPartIndex, setSelectedPartIndex] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [speakingLabel, setSpeakingLabel] = useState('');
+  const [speechVoice, setSpeechVoice] = useState<string | undefined>();
+  const speechRun = useRef(0);
+
+  const stopListening = () => {
+    speechRun.current += 1;
+    void Speech.stop();
+    setIsSpeaking(false);
+    setSpeakingLabel('');
+  };
+
+  const startListening = (book: CommunityPreview, startIndex = selectedPartIndex) => {
+    if (!book.content.length) { Alert.alert('Nothing to listen to yet', 'This writer has not shared any drafted writing in the preview.'); return; }
+    const run = speechRun.current + 1;
+    speechRun.current = run;
+    void Speech.stop();
+    setSelectedPartIndex(Math.max(0, Math.min(startIndex, book.content.length - 1)));
+    const speakAt = (partIndex: number, chunkIndex = 0) => {
+      if (speechRun.current !== run || partIndex >= book.content.length) { if (speechRun.current === run) { setIsSpeaking(false); setSpeakingLabel(''); } return; }
+      const part = book.content[partIndex];
+      const chunks = splitCommunitySpeechText(part.text);
+      setSpeakingLabel(part.title);
+      Speech.speak(chunks[chunkIndex], { rate: 1, voice: speechVoice, onStart: () => setIsSpeaking(true), onDone: () => chunkIndex + 1 < chunks.length ? speakAt(partIndex, chunkIndex + 1) : speakAt(partIndex + 1), onError: () => { if (speechRun.current === run) { setIsSpeaking(false); setSpeakingLabel(''); } } });
+    };
+    speakAt(Math.max(0, Math.min(startIndex, book.content.length - 1)));
+  };
+
+  useEffect(() => {
+    let mounted = true;
+    void loadBookezSpeechVoice().then((voice) => { if (mounted) setSpeechVoice(voice?.identifier); });
+    return () => { mounted = false; stopListening(); };
+  }, []);
+
+  useEffect(() => {
+    if (!visible) { stopListening(); return; }
+    if (!item.previewAvailable) { setPreview(null); setError('This writer shared public progress, but not a reading preview.'); return; }
+    let mounted = true;
+    setPreview(null);
+    setSelectedPartIndex(0);
+    setLoading(true);
+    setError('');
+    void supabase.rpc('get_community_project_preview', { p_project_id: item.id }).then(({ data, error: requestError }) => {
+      if (!mounted) return;
+      if (requestError) { setError('This reading preview could not be opened. Please try again.'); setLoading(false); return; }
+      const next = normalizePreview(data, item.id);
+      if (!next.content.length) setError('The writer has not shared any drafted writing yet.');
+      setPreview(next);
+      setSelectedPartIndex(0);
+      setLoading(false);
+      if (initialMode === 'listen' && next.content.length) startListening(next, 0);
+    });
+    return () => { mounted = false; stopListening(); };
+  }, [initialMode, item.id, item.previewAvailable, visible]);
+
+  if (!visible) return null;
+  const selectedPart = preview?.content[selectedPartIndex];
+  const readPart = (index: number) => { setSelectedPartIndex(index); if (isSpeaking) stopListening(); };
+  return <Modal visible transparent animationType="slide" onRequestClose={onClose}><View style={s.modalShade}><Pressable style={s.modalDismiss} onPress={onClose} /><View style={s.readerSheet}><View style={s.sheetHandle} /><View style={s.readerHeader}><Cover item={item} large /><View style={s.readerHeaderCopy}><Text style={s.overline}>COMMUNITY / READING PREVIEW</Text><Text style={s.readerTitle}>{item.projectTitle ?? 'Untitled project'}</Text><Text style={s.readerMeta}>{item.displayName} · {preview ? `${formatPreviewCount(preview.wordCount)} words` : 'Public preview'}</Text></View><Pressable onPress={onClose} style={s.closeTextButton} accessibilityLabel="Close reading preview"><Text style={s.closeText}>×</Text></Pressable></View>{loading ? <View style={s.readerLoading}><ActivityIndicator color={C.periwinkle} /><Text style={s.readerLoadingText}>Opening the writer’s preview…</Text></View> : error && !preview?.content.length ? <View style={s.readerEmpty}><Text style={s.readerEmptyIcon}>◌</Text><Text style={s.readerEmptyTitle}>Preview unavailable</Text><Text style={s.readerEmptyCopy}>{error}</Text><Pressable onPress={onClose} style={s.closeButton}><Text style={s.closeButtonText}>Done</Text></Pressable></View> : preview && selectedPart ? <><View style={s.readerNotice}><Text style={s.readerNoticeIcon}>◎</Text><View style={s.readerNoticeCopy}><Text style={s.readerNoticeTitle}>A living draft</Text><Text style={s.readerNoticeText}>This is a public reading snapshot. It may grow as {item.displayName} keeps writing.</Text></View></View><View style={s.readerListenBar}><View style={s.readerListenCopy}><Text style={s.readerListenLabel}>{isSpeaking ? `Listening to ${speakingLabel}` : 'Read or listen'}</Text><Text style={s.readerListenHint}>{preview.content.length} drafted part{preview.content.length === 1 ? '' : 's'} · {formatPreviewCount(preview.wordCount)} words</Text></View><Pressable onPress={() => isSpeaking ? stopListening() : startListening(preview)} style={[s.readerListenButton, isSpeaking && s.readerListenButtonActive]} accessibilityRole="button" accessibilityLabel={isSpeaking ? 'Stop listening to preview' : 'Listen to preview'}><Text style={[s.readerListenText, isSpeaking && s.readerListenTextActive]}>{isSpeaking ? 'Stop' : 'Listen'} {isSpeaking ? '×' : '▶'}</Text></Pressable></View><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.readerPartRail}>{preview.content.map((part, index) => <Pressable key={part.id} onPress={() => readPart(index)} style={[s.readerPartPill, index === selectedPartIndex && s.readerPartPillActive]} accessibilityRole="button" accessibilityState={{ selected: index === selectedPartIndex }}><Text style={[s.readerPartNumber, index === selectedPartIndex && s.readerPartNumberActive]}>{String(index + 1).padStart(2, '0')}</Text><Text numberOfLines={1} style={[s.readerPartLabel, index === selectedPartIndex && s.readerPartLabelActive]}>{part.title}</Text></Pressable>)}</ScrollView><ScrollView style={s.readerScroll} showsVerticalScrollIndicator={false} contentContainerStyle={s.readerContent}><Text style={s.readerPartKicker}>PART {String(selectedPartIndex + 1).padStart(2, '0')} OF {String(preview.content.length).padStart(2, '0')}</Text><Text style={s.readerPartTitle}>{selectedPart.title}</Text>{selectedPart.text.split(/\n\s*\n/).map((paragraph, index) => <Text key={`${selectedPart.id}-${index}`} style={s.readerParagraph}>{paragraph}</Text>)}<View style={s.readerNavigation}><Pressable disabled={selectedPartIndex === 0} onPress={() => readPart(selectedPartIndex - 1)} style={[s.readerNavButton, selectedPartIndex === 0 && s.readerNavButtonDisabled]}><Text style={s.readerNavText}>‹ Previous</Text></Pressable><Pressable disabled={selectedPartIndex === preview.content.length - 1} onPress={() => readPart(selectedPartIndex + 1)} style={[s.readerNavButton, selectedPartIndex === preview.content.length - 1 && s.readerNavButtonDisabled]}><Text style={s.readerNavText}>Next ›</Text></Pressable></View></ScrollView></> : <View style={s.readerEmpty}><Text style={s.readerEmptyIcon}>◌</Text><Text style={s.readerEmptyTitle}>No preview yet</Text><Text style={s.readerEmptyCopy}>The writer has not shared drafted writing for this book.</Text></View>}</View></View></Modal>;
+}
+
 function ProjectDetail({ item, userId, onClose, onReact, onBlock, onReport, onFeedbackChanged }: { item: CommunityItem | null; userId: string | null; onClose: () => void; onReact: (item: CommunityItem, reaction: ReactionType) => void; onBlock: (item: CommunityItem) => void; onReport: (item: CommunityItem) => void; onFeedbackChanged?: () => void }) {
+  const [readerMode, setReaderMode] = useState<'read' | 'listen' | null>(null);
+  useEffect(() => { setReaderMode(null); }, [item?.id]);
   if (!item) return null;
   if (item.feedbackMode && item.feedbackProject && item.feedbackManage && item.feedbackRequestId) return <FeedbackHub userId={userId} initialRequestId={item.feedbackRequestId} onChanged={onFeedbackChanged} onClose={onClose} />;
   if (item.feedbackMode && item.feedbackProject) return <FeedbackRequestBuilder project={item.feedbackProject} userId={userId} onPublished={onFeedbackChanged} onClose={onClose} />;
   if (item.feedbackRequest) return <FeedbackRequestDetail request={item.feedbackRequest} userId={userId} responseCount={0} standalone onChanged={() => { onFeedbackChanged?.(); onClose(); }} onClose={onClose} />;
   if (item.hubMode) return <FeedbackHub userId={userId} initialRequestId={item.feedbackRequestId} onClose={onClose} />;
-  return <Modal visible={Boolean(item)} transparent animationType="slide" onRequestClose={onClose}><View style={s.modalShade}><Pressable style={s.modalDismiss} onPress={onClose} /><View style={s.detailSheet}><View style={s.sheetHandle} /><View style={s.detailHeader}><Cover item={item} large /><View style={s.detailHeaderCopy}><View style={s.writerRow}><Avatar item={item} /><Text style={s.writerName}>{item.displayName}</Text></View><Text style={s.detailTitle}>{item.projectTitle ?? 'Untitled project'}</Text><Text style={s.projectMeta}>{item.genre ?? item.projectType ?? 'Writing project'} · {item.stage ?? 'In progress'}</Text></View></View><Text style={s.detailBio}>{item.bio ?? `${item.displayName} is making steady progress on this writing project.`}</Text><View style={s.detailProgress}><View style={s.detailProgressTop}><Text style={s.detailProgressLabel}>CURRENT PROGRESS</Text><Text style={s.detailProgressValue}>{item.completionPercent ?? 0}%</Text></View><View style={s.progressTrack}><View style={[s.progressFill, { width: `${Math.max(2, Math.min(100, item.completionPercent ?? 0))}%`, backgroundColor: item.completed ? C.gold : C.periwinkle }]} /></View><Text style={s.detailStage}>{item.completed ? item.finishedLabel ?? 'Completed project' : item.publicStatus ?? item.stage ?? 'In progress'}</Text></View><Text style={s.detailSectionTitle}>Encourage this writer</Text><View style={s.detailReactions}>{reactionOptions.map((reaction) => <Pressable key={reaction.key} onPress={() => onReact(item, reaction.key)} style={[s.detailReaction, item.myReaction === reaction.key && s.detailReactionActive]}><Text style={[s.detailReactionIcon, item.myReaction === reaction.key && s.detailReactionTextActive]}>{reaction.icon}</Text><Text style={[s.detailReactionText, item.myReaction === reaction.key && s.detailReactionTextActive]}>{reaction.label}</Text></Pressable>)}</View>{!userId && <Text style={s.detailSignIn}>Sign in to send an encouragement.</Text>}<View style={s.detailActions}><Pressable onPress={() => onReport(item)} style={s.detailAction}><Text style={s.detailActionText}>Report</Text></Pressable>{item.userId !== userId && !item.demo && <Pressable onPress={() => onBlock(item)} style={s.detailAction}><Text style={s.detailActionText}>Block writer</Text></Pressable>}</View><Pressable onPress={onClose} style={s.closeButton}><Text style={s.closeButtonText}>Done</Text></Pressable></View></View></Modal>;
+  return <><Modal visible={Boolean(item)} transparent animationType="slide" onRequestClose={onClose}><View style={s.modalShade}><Pressable style={s.modalDismiss} onPress={onClose} /><View style={s.detailSheet}><View style={s.sheetHandle} /><View style={s.detailHeader}><Cover item={item} large /><View style={s.detailHeaderCopy}><View style={s.writerRow}><Avatar item={item} /><Text style={s.writerName}>{item.displayName}</Text></View><Text style={s.detailTitle}>{item.projectTitle ?? 'Untitled project'}</Text><Text style={s.projectMeta}>{item.genre ?? item.projectType ?? 'Writing project'} · {item.stage ?? 'In progress'}</Text></View></View><Text style={s.detailBio}>{item.bio ?? `${item.displayName} is making steady progress on this writing project.`}</Text><View style={s.detailProgress}><View style={s.detailProgressTop}><Text style={s.detailProgressLabel}>CURRENT PROGRESS</Text><Text style={s.detailProgressValue}>{item.completionPercent ?? 0}%</Text></View><View style={s.progressTrack}><View style={[s.progressFill, { width: `${Math.max(2, Math.min(100, item.completionPercent ?? 0))}%`, backgroundColor: item.completed ? C.gold : C.periwinkle }]} /></View><Text style={s.detailStage}>{item.completed ? item.finishedLabel ?? 'Completed project' : item.publicStatus ?? item.stage ?? 'In progress'}</Text></View>{item.previewAvailable ? <View style={s.previewActions}><Pressable onPress={() => setReaderMode('read')} style={s.previewReadButton} accessibilityRole="button"><Text style={s.previewReadButtonText}>Read preview</Text><Text style={s.previewReadButtonArrow}>→</Text></Pressable><Pressable onPress={() => setReaderMode('listen')} style={s.previewListenButton} accessibilityRole="button"><Text style={s.previewListenButtonText}>Listen</Text><Text style={s.previewListenButtonIcon}>♫</Text></Pressable></View> : <Text style={s.previewUnavailable}>Public progress only · no reading preview shared yet.</Text>}<Text style={s.detailSectionTitle}>Encourage this writer</Text><View style={s.detailReactions}>{reactionOptions.map((reaction) => <Pressable key={reaction.key} onPress={() => onReact(item, reaction.key)} style={[s.detailReaction, item.myReaction === reaction.key && s.detailReactionActive]}><Text style={[s.detailReactionIcon, item.myReaction === reaction.key && s.detailReactionTextActive]}>{reaction.icon}</Text><Text style={[s.detailReactionText, item.myReaction === reaction.key && s.detailReactionTextActive]}>{reaction.label}</Text></Pressable>)}</View>{!userId && <Text style={s.detailSignIn}>Sign in to send an encouragement.</Text>}<View style={s.detailActions}><Pressable onPress={() => onReport(item)} style={s.detailAction}><Text style={s.detailActionText}>Report</Text></Pressable>{item.userId !== userId && !item.demo && <Pressable onPress={() => onBlock(item)} style={s.detailAction}><Text style={s.detailActionText}>Block writer</Text></Pressable>}</View><Pressable onPress={onClose} style={s.closeButton}><Text style={s.closeButtonText}>Done</Text></Pressable></View></View></Modal><CommunityReader item={item} visible={readerMode !== null} initialMode={readerMode ?? 'read'} onClose={() => setReaderMode(null)} /></>;
 }
 
 export default function Community({ userId, activeProject, projects = [], onSelectProject, initialFeedbackProjectTitle, onFeedbackOpened }: CommunityProps) {
@@ -173,6 +271,7 @@ export default function Community({ userId, activeProject, projects = [], onSele
   const [query, setQuery] = useState('');
   const [filterOpen, setFilterOpen] = useState(false);
   const [stageFilter, setStageFilter] = useState('All stages');
+  const [typeFilter, setTypeFilter] = useState('All types');
   const [writingOnly, setWritingOnly] = useState(false);
   const [privacyOpen, setPrivacyOpen] = useState(false);
   const [browseSection, setBrowseSectionState] = useState<string | null>(null);
@@ -250,7 +349,7 @@ export default function Community({ userId, activeProject, projects = [], onSele
   const upsertCurrentProject = async (nextPreferences: Preferences) => {
     if (!userId || !activeProject?.id) return;
     await supabase.from('community_profiles').upsert({ user_id: userId, display_name: 'Bookez writer' }, { onConflict: 'user_id' });
-    await supabase.from('community_projects').upsert({ project_id: activeProject.id, user_id: userId, project_title: nextPreferences.show_project_title ? activeProject.title : null, genre: nextPreferences.show_genre ? activeProject.genre : null, project_type: nextPreferences.show_genre ? activeProject.genre : null, completion_percent: nextPreferences.show_completion_percent ? activeProject.progress : null, stage: nextPreferences.show_current_stage ? activeProject.stage : null, public_status: nextPreferences.show_current_section ? activeProject.stage : null, cover_color: activeProject.color ?? '#5B638E', cover_image_path: nextPreferences.show_project_title ? activeProject.coverImagePath ?? null : null }, { onConflict: 'project_id' });
+    await supabase.from('community_projects').upsert({ project_id: activeProject.id, user_id: userId, show_in_community: nextPreferences.show_current_project, project_title: nextPreferences.show_project_title ? activeProject.title : null, genre: nextPreferences.show_genre ? activeProject.genre : null, project_type: nextPreferences.show_genre ? activeProject.genre : null, completion_percent: nextPreferences.show_completion_percent ? activeProject.progress : null, stage: nextPreferences.show_current_stage ? activeProject.stage : null, public_status: nextPreferences.show_current_section ? activeProject.stage : null, cover_color: activeProject.color ?? '#5B638E', cover_image_path: nextPreferences.show_project_title ? activeProject.coverImagePath ?? null : null }, { onConflict: 'project_id' });
   };
 
   const savePreference = async (key: keyof Preferences, value: boolean) => {
@@ -284,13 +383,15 @@ export default function Community({ userId, activeProject, projects = [], onSele
 
   const visibleItems = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
-    return items.map((item) => ({ ...item, feedbackRequest: feedbackRequestsByProject[item.id] })).filter((item) => { const matchesQuery = !normalizedQuery || [item.displayName, item.projectTitle, item.genre, item.projectType].filter(Boolean).some((value) => String(value).toLowerCase().includes(normalizedQuery)); const matchesStage = stageFilter === 'All stages' || item.stage === stageFilter; return matchesQuery && matchesStage && (!writingOnly || item.writingNow); });
-  }, [feedbackRequestsByProject, items, query, stageFilter, writingOnly]);
+    return items.map((item) => ({ ...item, feedbackRequest: feedbackRequestsByProject[item.id] })).filter((item) => { const matchesQuery = !normalizedQuery || [item.displayName, item.projectTitle, item.genre, item.projectType].filter(Boolean).some((value) => String(value).toLowerCase().includes(normalizedQuery)); const matchesStage = stageFilter === 'All stages' || item.stage === stageFilter; const matchesType = typeFilter === 'All types' || (item.projectType ?? item.genre) === typeFilter; return matchesQuery && matchesStage && matchesType && (!writingOnly || item.writingNow); });
+  }, [feedbackRequestsByProject, items, query, stageFilter, typeFilter, writingOnly]);
+  const writingTypes = useMemo(() => ['All types', ...Array.from(new Set(items.map((item) => item.projectType ?? item.genre).filter((value): value is string => Boolean(value)))).sort()], [items]);
   const activeGenre = activeProject?.genre?.toLowerCase();
   const sections = useMemo(() => {
     const recent = [...visibleItems].sort((a, b) => Date.parse(b.updatedAt ?? '') - Date.parse(a.updatedAt ?? ''));
     const active = [...visibleItems].sort((a, b) => ((b.completionPercent ?? 0) + (b.writingNow ? 20 : 0)) - ((a.completionPercent ?? 0) + (a.writingNow ? 20 : 0)));
     return [
+      { key: 'all', title: 'All public writing', hint: 'Every book and writing project shared by the room.', items: recent, empty: ['◌', 'No public writing yet.', 'When writers choose to share a project, it will appear here.'] },
       { key: 'writing', title: 'Writing Now', hint: 'The writing room is active.', items: visibleItems.filter((item) => item.writingNow), empty: ['◌', 'The writing room is quiet right now.', 'Check back soon for writers making progress.'] },
       { key: 'active', title: 'Most Active This Week', hint: 'Steady progress worth celebrating.', items: active.slice(0, 6), empty: ['✦', 'No activity to show yet.', 'Writers will appear here as they make meaningful progress.'] },
       { key: 'near', title: 'Near Completion', hint: 'Projects close to the finish line.', items: visibleItems.filter((item) => (item.completionPercent ?? 0) >= 75 && (item.completionPercent ?? 0) < 100), empty: ['◎', 'No books are nearing the finish line yet.', 'Check back soon.'] },
@@ -313,14 +414,14 @@ export default function Community({ userId, activeProject, projects = [], onSele
       <View style={s.header}><View style={s.headerCopy}><Text style={s.overline}>BOOKEZ / WRITING ROOM</Text><Text style={s.title}>Community</Text><Text style={s.subtitle}>See what other writers are creating.</Text></View><View style={s.headerActions}><Pressable onPress={() => setSearchOpen((value) => !value)} style={s.iconButton} accessibilityLabel="Search Community"><Text style={s.iconButtonText}>⌕</Text></Pressable><Pressable onPress={() => setPrivacyOpen(true)} style={s.iconButton} accessibilityLabel="Community sharing settings"><Text style={s.iconButtonText}>⚙</Text></Pressable></View></View>
       {searchOpen && <View style={s.searchBox}><TextInput value={query} onChangeText={setQuery} autoFocus placeholder="Search writers, books, or genres" placeholderTextColor="#A0A3BB" style={s.searchInput} /><Pressable onPress={() => { setQuery(''); setSearchOpen(false); }}><Text style={s.clearSearch}>×</Text></Pressable></View>}
       <View style={s.introCard}><View style={s.introCopy}><Text style={s.introEyebrow}>A QUIET WRITING ROOM</Text><Text style={s.introTitle}>Progress is better together.</Text><Text style={s.introText}>Browse public writing progress, discover books taking shape, and leave a little encouragement.</Text></View><View style={s.introSeal}><Text style={s.introSealMark}>✦</Text><Text style={s.introSealText}>{visibleItems.length} writers</Text></View></View>
-      <View style={s.toolbar}><Text style={s.toolbarText}>{usingDemo ? 'Previewing the writing room' : 'Public progress from Bookez writers'}</Text><Pressable onPress={() => setFilterOpen(true)} style={s.filterButton}><Text style={s.filterButtonText}>{writingOnly || stageFilter !== 'All stages' ? 'Filtered' : 'Filter'} · ≡</Text></Pressable></View>
+      <View style={s.toolbar}><Text style={s.toolbarText}>{usingDemo ? 'Previewing the writing room' : 'Public progress from Bookez writers'}</Text><Pressable onPress={() => setFilterOpen(true)} style={s.filterButton}><Text style={s.filterButtonText}>{writingOnly || stageFilter !== 'All stages' || typeFilter !== 'All types' ? 'Filtered' : 'Filter'} · ≡</Text></Pressable></View>
       {offline && <View style={s.offline}><Text style={s.offlineText}>Community is offline right now. Your private writing is safe.</Text><Pressable onPress={() => void loadFeed(true)}><Text style={s.retry}>Retry</Text></Pressable></View>}
       {loading ? <View style={s.loading}><ActivityIndicator color={C.periwinkle} /><Text style={s.loadingText}>Opening the writing room…</Text></View> : sections.map((section) => <View key={section.key} style={s.section}><View style={s.sectionHeader}><View><Text style={s.sectionTitle}>{section.title}</Text><Text style={s.sectionHint}>{section.hint}</Text></View><Pressable onPress={() => setBrowseSection(section.key)}><Text style={s.seeAll}>See all</Text></Pressable></View>{section.items.length ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.cardRail}>{section.items.map((item) => <ProjectCard key={`${section.key}-${item.id}`} item={item} onPress={() => { setSelected(item); if (item.demo || item.feedbackRequestId) return; onSelectProject?.(item.projectTitle ?? ''); }} onReact={react} />)}</ScrollView> : <EmptyState icon={section.empty[0]} title={section.empty[1]} copy={section.empty[2]} />}</View>)}
       {!userId && <View style={s.signInNote}><Text style={s.signInTitle}>Sharing is optional</Text><Text style={s.signInCopy}>You can browse the writing room without sharing your own work. Sign in when you want to participate.</Text></View>}
     </ScrollView>
     <ProjectDetail item={selected} userId={userId} onClose={() => setSelected(null)} onReact={react} onBlock={block} onReport={report} onFeedbackChanged={() => void loadFeedbackRequestFeed()} />
     <Modal visible={Boolean(currentBrowse)} transparent animationType="slide" onRequestClose={() => setBrowseSection(null)}><View style={s.modalShade}><Pressable style={s.modalDismiss} onPress={() => setBrowseSection(null)} /><View style={s.browseSheet}><View style={s.sheetHandle} /><View style={s.sheetHeader}><View><Text style={s.overline}>COMMUNITY / SEE ALL</Text><Text style={s.sheetTitle}>{currentBrowse?.title}</Text><Text style={s.sheetHint}>{currentBrowse?.hint}</Text></View><Pressable onPress={() => setBrowseSection(null)}><Text style={s.closeText}>×</Text></Pressable></View>{currentBrowse?.items.length ? <ScrollView showsVerticalScrollIndicator={false}>{currentBrowse.items.map((item) => <ProjectCard key={`browse-${item.id}`} item={item} onPress={() => { setBrowseSection(null); setSelected(item); }} onReact={react} />)}</ScrollView> : <EmptyState icon="◌" title="Nothing here yet" copy="The writing room will fill in as more writers opt into sharing." />}</View></View></Modal>
-    <Modal visible={filterOpen} transparent animationType="slide" onRequestClose={() => setFilterOpen(false)}><View style={s.modalShade}><Pressable style={s.modalDismiss} onPress={() => setFilterOpen(false)} /><View style={s.smallSheet}><View style={s.sheetHandle} /><Text style={s.sheetTitle}>Filter Community</Text><Text style={s.fieldLabel}>WRITING STAGE</Text><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.pillRail}>{['All stages', 'Planning', 'Drafting', 'Revising', 'Final review', 'Complete'].map((stage) => <Pressable key={stage} onPress={() => setStageFilter(stage)} style={[s.pill, stageFilter === stage && s.pillActive]}><Text style={[s.pillText, stageFilter === stage && s.pillTextActive]}>{stage}</Text></Pressable>)}</ScrollView><Pressable onPress={() => setWritingOnly((value) => !value)} style={s.filterRow}><View><Text style={s.filterRowTitle}>Writing now only</Text><Text style={s.filterRowHint}>Show people actively making progress.</Text></View><View style={[s.toggle, writingOnly && s.toggleOn]}><View style={[s.toggleThumb, writingOnly && s.toggleThumbOn]} /></View></Pressable><Pressable onPress={() => setFilterOpen(false)} style={s.primaryButton}><Text style={s.primaryButtonText}>Apply filters</Text></Pressable></View></View></Modal>
+    <Modal visible={filterOpen} transparent animationType="slide" onRequestClose={() => setFilterOpen(false)}><View style={s.modalShade}><Pressable style={s.modalDismiss} onPress={() => setFilterOpen(false)} /><View style={s.smallSheet}><View style={s.sheetHandle} /><Text style={s.overline}>COMMUNITY / DISCOVER</Text><Text style={s.sheetTitle}>Find your kind of writing</Text><Text style={s.sheetHint}>Choose a type or stage, then browse every matching public project together.</Text><Text style={s.fieldLabel}>WRITING TYPE</Text><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.pillRail}>{writingTypes.map((type) => <Pressable key={type} onPress={() => setTypeFilter(type)} style={[s.pill, typeFilter === type && s.pillActive]}><Text style={[s.pillText, typeFilter === type && s.pillTextActive]}>{type}</Text></Pressable>)}</ScrollView><Text style={s.fieldLabel}>WRITING STAGE</Text><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.pillRail}>{['All stages', 'Planning', 'Drafting', 'Revising', 'Final review', 'Complete'].map((stage) => <Pressable key={stage} onPress={() => setStageFilter(stage)} style={[s.pill, stageFilter === stage && s.pillActive]}><Text style={[s.pillText, stageFilter === stage && s.pillTextActive]}>{stage}</Text></Pressable>)}</ScrollView><Pressable onPress={() => setWritingOnly((value) => !value)} style={s.filterRow}><View><Text style={s.filterRowTitle}>Writing now only</Text><Text style={s.filterRowHint}>Show people actively making progress.</Text></View><View style={[s.toggle, writingOnly && s.toggleOn]}><View style={[s.toggleThumb, writingOnly && s.toggleThumbOn]} /></View></Pressable><Pressable onPress={() => setFilterOpen(false)} style={s.primaryButton}><Text style={s.primaryButtonText}>Apply filters</Text></Pressable></View></View></Modal>
     <Modal visible={privacyOpen} transparent animationType="slide" onRequestClose={() => setPrivacyOpen(false)}><View style={s.modalShade}><Pressable style={s.modalDismiss} onPress={() => setPrivacyOpen(false)} /><View style={s.smallSheet}><View style={s.sheetHandle} /><Text style={s.overline}>COMMUNITY / PRIVACY</Text><Text style={s.sheetTitle}>Choose what to share</Text><Text style={s.sheetHint}>All sharing is optional. You can browse and encourage writers without publishing your own work.</Text>{([['show_profile', 'Show my profile', 'Display your name in the writing room'], ['show_current_project', 'Show my current project', 'Let others discover that you are making a book'], ['show_project_title', 'Show project title', 'Display the title and cover image'], ['show_genre', 'Show genre or type', 'Help writers find their creative neighbors'], ['show_completion_percent', 'Show completion percentage', 'Share a broad progress marker'], ['show_current_stage', 'Show current stage', 'Planning, drafting, revising, or complete'], ['show_writing_now', 'Show Writing Now status', 'Use a subtle active indicator while you write'], ['show_completed_projects', 'Show completed projects', 'Celebrate finished work in Community'] ] as Array<[keyof Preferences, string, string]>).map(([key, label, hint]) => <Pressable key={key} onPress={() => void savePreference(key, !preferences[key])} style={s.privacyRow}><View style={s.privacyCopy}><Text style={s.privacyTitle}>{label}</Text><Text style={s.privacyHint}>{hint}</Text></View><View style={[s.toggle, preferences[key] && s.toggleOn]}><View style={[s.toggleThumb, preferences[key] && s.toggleThumbOn]} /></View></Pressable>)}<Pressable onPress={() => setPrivacyOpen(false)} style={s.primaryButton}><Text style={s.primaryButtonText}>Done</Text></Pressable></View></View></Modal>
   </View>;
 }
@@ -362,4 +463,54 @@ Object.assign(s, {
   feedbackFocusGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 },
   feedbackInput: { minHeight: 72, marginTop: 8, paddingHorizontal: 11, paddingVertical: 9, borderRadius: 12, backgroundColor: '#FFF', borderWidth: 1, borderColor: '#E4E2EF', color: C.ink, fontSize: 10, textAlignVertical: 'top' },
   primaryDisabled: { opacity: 0.55 },
+  previewBadge: { color: C.periwinkle, fontSize: 7, fontWeight: '800', marginTop: 4 },
+  previewActions: { flexDirection: 'row', gap: 8, marginTop: 15 },
+  previewReadButton: { flex: 1, minHeight: 43, paddingHorizontal: 12, borderRadius: 13, backgroundColor: C.periwinkle, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  previewReadButtonText: { color: '#FFF', fontSize: 9, fontWeight: '800' },
+  previewReadButtonArrow: { color: '#FFF', fontSize: 16 },
+  previewListenButton: { minHeight: 43, paddingHorizontal: 12, borderRadius: 13, backgroundColor: '#FFF3E9', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
+  previewListenButtonText: { color: '#A97819', fontSize: 9, fontWeight: '800' },
+  previewListenButtonIcon: { color: '#A97819', fontSize: 13 },
+  previewUnavailable: { color: C.muted, fontSize: 8, lineHeight: 12, marginTop: 14, textAlign: 'center' },
+  readerSheet: { height: '94%', maxHeight: '94%', padding: 20, paddingBottom: 25, borderTopLeftRadius: 29, borderTopRightRadius: 29, backgroundColor: '#FBFAFF' },
+  readerHeader: { flexDirection: 'row', alignItems: 'center' },
+  readerHeaderCopy: { flex: 1, minWidth: 0, marginLeft: 12 },
+  readerTitle: { color: C.ink, fontSize: 20, lineHeight: 24, fontWeight: '800', marginTop: 5 },
+  readerMeta: { color: C.muted, fontSize: 8, marginTop: 4 },
+  closeTextButton: { padding: 4, marginLeft: 7 },
+  readerNotice: { marginTop: 14, padding: 12, borderRadius: 15, backgroundColor: '#F0EDFF', borderWidth: 1, borderColor: '#DED8FA', flexDirection: 'row', alignItems: 'flex-start' },
+  readerNoticeIcon: { color: C.periwinkle, fontSize: 18, lineHeight: 20, marginRight: 8 },
+  readerNoticeCopy: { flex: 1 },
+  readerNoticeTitle: { color: C.ink, fontSize: 10, fontWeight: '800' },
+  readerNoticeText: { color: C.muted, fontSize: 8, lineHeight: 12, marginTop: 3 },
+  readerListenBar: { marginTop: 10, padding: 11, borderRadius: 14, backgroundColor: '#FFF', borderWidth: 1, borderColor: '#E4E2EF', flexDirection: 'row', alignItems: 'center' },
+  readerListenCopy: { flex: 1, minWidth: 0 },
+  readerListenLabel: { color: C.ink, fontSize: 9, fontWeight: '800' },
+  readerListenHint: { color: C.muted, fontSize: 8, marginTop: 3 },
+  readerListenButton: { minHeight: 34, paddingHorizontal: 11, borderRadius: 10, backgroundColor: '#FFF3E9', justifyContent: 'center' },
+  readerListenButtonActive: { backgroundColor: '#FBE0D3' },
+  readerListenText: { color: '#A97819', fontSize: 8, fontWeight: '800' },
+  readerListenTextActive: { color: '#9B5B27' },
+  readerPartRail: { paddingTop: 10, paddingBottom: 2, gap: 6 },
+  readerPartPill: { maxWidth: 180, minHeight: 35, paddingHorizontal: 9, borderRadius: 10, backgroundColor: '#F2F1F7', borderWidth: 1, borderColor: '#E5E2EE', flexDirection: 'row', alignItems: 'center' },
+  readerPartPillActive: { backgroundColor: '#F0EDFF', borderColor: '#C9C1F6' },
+  readerPartNumber: { color: C.muted, fontSize: 7, fontWeight: '800', marginRight: 6 },
+  readerPartNumberActive: { color: C.periwinkle },
+  readerPartLabel: { flexShrink: 1, color: C.muted, fontSize: 8, fontWeight: '700' },
+  readerPartLabelActive: { color: C.periwinkle },
+  readerScroll: { flex: 1 },
+  readerContent: { paddingTop: 19, paddingBottom: 25 },
+  readerPartKicker: { color: C.coral, fontSize: 7, letterSpacing: 1, fontWeight: '800' },
+  readerPartTitle: { color: C.ink, fontSize: 24, lineHeight: 29, fontWeight: '800', marginTop: 6, marginBottom: 13 },
+  readerParagraph: { color: '#46465C', fontSize: 16, lineHeight: 25, marginBottom: 14 },
+  readerNavigation: { marginTop: 8, paddingTop: 14, borderTopWidth: 1, borderTopColor: '#EEEAF4', flexDirection: 'row', justifyContent: 'space-between' },
+  readerNavButton: { minHeight: 36, paddingHorizontal: 11, borderRadius: 10, backgroundColor: '#F0EDFF', justifyContent: 'center' },
+  readerNavButtonDisabled: { opacity: 0.35 },
+  readerNavText: { color: C.periwinkle, fontSize: 8, fontWeight: '800' },
+  readerLoading: { minHeight: 270, alignItems: 'center', justifyContent: 'center' },
+  readerLoadingText: { color: C.muted, fontSize: 9, marginTop: 10 },
+  readerEmpty: { paddingVertical: 45, alignItems: 'center' },
+  readerEmptyIcon: { color: C.lavender, fontSize: 29 },
+  readerEmptyTitle: { color: C.ink, fontSize: 13, fontWeight: '800', marginTop: 8 },
+  readerEmptyCopy: { maxWidth: 270, color: C.muted, fontSize: 9, lineHeight: 14, textAlign: 'center', marginTop: 5 },
 });

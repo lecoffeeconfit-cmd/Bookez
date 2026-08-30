@@ -387,6 +387,8 @@ const styles = StyleSheet.create({
   maskedArtworkImage: { width: '100%', height: '100%' },
   scenicSideVignette: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 },
   pathReadabilityVeil: { position: 'absolute', top: 0, right: '28%', bottom: 0, left: '28%' },
+  biomeTopFeather: { position: 'absolute', top: 0, right: 0, left: 0 },
+  biomeBottomFeather: { position: 'absolute', right: 0, bottom: 0, left: 0 },
   biomeTransition: { position: 'absolute', right: 0, left: 0, overflow: 'hidden' },
   transitionLayer: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 },
   transitionMask: { flex: 1 },

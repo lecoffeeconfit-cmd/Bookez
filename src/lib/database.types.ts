@@ -22,10 +22,16 @@ export type Database = {
         Relationships: [];
       };
       community_projects: {
-        Row: { project_id: string; user_id: string; project_title: string | null; genre: string | null; project_type: string | null; description: string | null; completion_percent: number | null; stage: string | null; public_status: string | null; cover_color: string | null; cover_image_path: string | null; updated_at: string };
-        Insert: { project_id: string; user_id: string; project_title?: string | null; genre?: string | null; project_type?: string | null; description?: string | null; completion_percent?: number | null; stage?: string | null; public_status?: string | null; cover_color?: string | null; cover_image_path?: string | null; updated_at?: string };
-        Update: { project_id?: string; user_id?: string; project_title?: string | null; genre?: string | null; project_type?: string | null; description?: string | null; completion_percent?: number | null; stage?: string | null; public_status?: string | null; cover_color?: string | null; cover_image_path?: string | null; updated_at?: string };
+        Row: { project_id: string; user_id: string; show_in_community: boolean; show_preview: boolean; project_title: string | null; genre: string | null; project_type: string | null; description: string | null; completion_percent: number | null; stage: string | null; public_status: string | null; cover_color: string | null; cover_image_path: string | null; updated_at: string };
+        Insert: { project_id: string; user_id: string; show_in_community?: boolean; show_preview?: boolean; project_title?: string | null; genre?: string | null; project_type?: string | null; description?: string | null; completion_percent?: number | null; stage?: string | null; public_status?: string | null; cover_color?: string | null; cover_image_path?: string | null; updated_at?: string };
+        Update: { project_id?: string; user_id?: string; show_in_community?: boolean; show_preview?: boolean; project_title?: string | null; genre?: string | null; project_type?: string | null; description?: string | null; completion_percent?: number | null; stage?: string | null; public_status?: string | null; cover_color?: string | null; cover_image_path?: string | null; updated_at?: string };
         Relationships: [];
+      };
+      community_project_previews: {
+        Row: { project_id: string; user_id: string; content: Json; word_count: number; updated_at: string };
+        Insert: { project_id: string; user_id: string; content?: Json; word_count?: number; updated_at?: string };
+        Update: { project_id?: string; user_id?: string; content?: Json; word_count?: number; updated_at?: string };
+        Relationships: [{ foreignKeyName: 'community_project_previews_project_id_fkey'; columns: ['project_id']; isOneToOne: true; referencedRelation: 'projects'; referencedColumns: ['id'] }];
       };
       community_presence: {
         Row: { user_id: string; project_id: string | null; active_until: string; updated_at: string };
@@ -156,6 +162,7 @@ export type Database = {
       };
       get_community_feed: { Args: { p_limit?: number; p_offset?: number }; Returns: Json };
       get_community_reaction_summary: { Args: { p_item_ids: string[] }; Returns: Json };
+      get_community_project_preview: { Args: { p_project_id: string }; Returns: Json };
       get_feedback_requests: { Args: { p_tab?: string; p_limit?: number; p_offset?: number }; Returns: Json };
       get_feedback_request: { Args: { p_request_id: string }; Returns: Database['bookez']['Tables']['feedback_requests']['Row'][] };
       increment_feedback_view: { Args: { p_request_id: string }; Returns: number };
