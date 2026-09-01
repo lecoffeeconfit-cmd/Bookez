@@ -13,12 +13,28 @@ export type AIWritingOperation =
   | 'brainstorm'
   | 'ask';
 
+export type AIWritingContextMode = 'auto' | 'page' | 'nearby' | 'book-aware';
+
 export type AIWritingContext = {
+  /** The resolved context level used for this request. Auto is resolved in the UI. */
+  contextMode?: AIWritingContextMode;
+  projectTitle?: string;
+  projectType?: string;
   chapterTitle: string;
   chapterPlan?: string;
   nearbyText?: string;
   notes?: string;
   compass?: string;
+  /** Book-level planning memory. Sent only for book-aware requests. */
+  bookIdea?: string;
+  plotThread?: string;
+  characters?: string;
+  chapterSummaries?: string;
+  earlierWriting?: string;
+  continuity?: string;
+  references?: string;
+  toneSample?: string;
+  currentSectionSummary?: string;
 };
 
 export type AIWritingRequest = {
@@ -35,6 +51,39 @@ export type AIWritingResponse = {
   ideas?: Array<{ title: string; detail: string }>;
   /** Concise writing feedback for section questions. */
   feedback?: string;
+};
+
+/**
+ * Strip context that is not needed for the selected mode before a request
+ * reaches either the native provider or the authenticated cloud function.
+ * This keeps Page and Nearby requests deliberately small and avoids making
+ * Book-aware mode a reason to send the manuscript on every request.
+ */
+export const prepareAIWritingContext = (context: AIWritingContext, mode: AIWritingContextMode): AIWritingContext => {
+  const base = { ...context, contextMode: mode };
+  if (mode === 'page') {
+    return {
+      contextMode: mode,
+      chapterTitle: context.chapterTitle,
+      projectTitle: context.projectTitle,
+      projectType: context.projectType,
+    };
+  }
+  if (mode === 'nearby') {
+    return {
+      contextMode: mode,
+      chapterTitle: context.chapterTitle,
+      chapterPlan: context.chapterPlan,
+      nearbyText: context.nearbyText,
+      notes: context.notes,
+      compass: context.compass,
+      projectTitle: context.projectTitle,
+      projectType: context.projectType,
+      toneSample: context.toneSample,
+      currentSectionSummary: context.currentSectionSummary,
+    };
+  }
+  return base;
 };
 
 type NativeAIWritingModule = {

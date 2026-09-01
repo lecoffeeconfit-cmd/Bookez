@@ -1,5 +1,5 @@
 import { requireOptionalNativeModule } from 'expo';
-import { forwardRef, useEffect, useRef, useState } from 'react';
+import { forwardRef, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Alert, Pressable, StyleSheet, Text, TextInput, type TextInputProps, View } from 'react-native';
 
 type SpeechRecognitionPackage = typeof import('expo-speech-recognition');
@@ -12,6 +12,8 @@ type InputMode = 'dictation' | 'writing';
 
 type DictationInputProps = TextInputProps & {
   grow?: boolean;
+  trailingAccessory?: ReactNode;
+  trailingAccessoryWidth?: number;
   onInputMode?: (mode: InputMode) => void;
   onDictationState?: (active: boolean) => void;
 };
@@ -19,7 +21,7 @@ type DictationInputProps = TextInputProps & {
 let nextDictationInputId = 0;
 let activeDictationInputId: string | null = null;
 
-const KeyboardDictationInput = forwardRef<TextInput, DictationInputProps>(function KeyboardDictationInput({ style, accessibilityLabel, grow = false, onInputMode, onDictationState, onKeyPress, ...props }, ref) {
+const KeyboardDictationInput = forwardRef<TextInput, DictationInputProps>(function KeyboardDictationInput({ style, accessibilityLabel, grow = false, trailingAccessory, trailingAccessoryWidth = 76, onInputMode, onDictationState, onKeyPress, ...props }, ref) {
   const inputRef = useRef<TextInput>(null);
   const keyboardDictationRef = useRef(false);
   const fieldName = accessibilityLabel ? ` for ${accessibilityLabel}` : '';
@@ -37,14 +39,17 @@ const KeyboardDictationInput = forwardRef<TextInput, DictationInputProps>(functi
   };
 
   return <View style={[s.field, grow && s.fieldGrow]}>
-    <TextInput ref={(instance) => { inputRef.current = instance; if (typeof ref === 'function') ref(instance); else if (ref) ref.current = instance; }} {...props} showSoftInputOnFocus onKeyPress={(event) => { onKeyPress?.(event); onInputMode?.('writing'); endKeyboardDictation(); }} accessibilityLabel={accessibilityLabel} style={[style, s.input]} />
-    <Pressable onPress={openKeyboardForDictation} hitSlop={8} style={s.button} accessibilityRole="button" accessibilityLabel={`Open keyboard dictation${fieldName}`} accessibilityHint="Opens the keyboard. Tap the keyboard microphone to dictate.">
-      <Text style={s.icon}>🎙</Text>
-    </Pressable>
+    <TextInput ref={(instance) => { inputRef.current = instance; if (typeof ref === 'function') ref(instance); else if (ref) ref.current = instance; }} {...props} showSoftInputOnFocus onKeyPress={(event) => { onKeyPress?.(event); onInputMode?.('writing'); endKeyboardDictation(); }} accessibilityLabel={accessibilityLabel} style={[style, s.input, trailingAccessory ? { paddingRight: trailingAccessoryWidth } : null]} />
+    <View style={s.actionRail}>
+      {trailingAccessory}
+      <Pressable onPress={openKeyboardForDictation} hitSlop={8} style={s.button} accessibilityRole="button" accessibilityLabel={`Open keyboard dictation${fieldName}`} accessibilityHint="Opens the keyboard. Tap the keyboard microphone to dictate.">
+        <Text style={s.icon}>🎙</Text>
+      </Pressable>
+    </View>
   </View>;
 });
 
-const NativeDictationInput = forwardRef<TextInput, DictationInputProps>(function NativeDictationInput({ style, accessibilityLabel, grow = false, onInputMode, onDictationState, onChangeText, onKeyPress, value, ...props }, ref) {
+const NativeDictationInput = forwardRef<TextInput, DictationInputProps>(function NativeDictationInput({ style, accessibilityLabel, grow = false, trailingAccessory, trailingAccessoryWidth = 76, onInputMode, onDictationState, onChangeText, onKeyPress, value, ...props }, ref) {
   const { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent } = speechRecognition!;
   const [isDictating, setIsDictating] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
@@ -144,10 +149,13 @@ const NativeDictationInput = forwardRef<TextInput, DictationInputProps>(function
   const dictating = isDictating || isStarting;
   const fieldName = accessibilityLabel ? ` for ${accessibilityLabel}` : '';
   return <View style={[s.field, grow && s.fieldGrow]}>
-    <TextInput ref={ref} {...props} value={value} onChangeText={onChangeText} onKeyPress={(event) => { onKeyPress?.(event); onInputMode?.('writing'); onDictationStateRef.current?.(false); }} accessibilityLabel={accessibilityLabel} style={[style, s.input]} />
-    <Pressable onPress={() => void startDictation()} disabled={isStarting} hitSlop={8} style={[s.button, dictating && s.buttonListening]} accessibilityRole="button" accessibilityState={{ busy: isStarting, selected: isDictating }} accessibilityLabel={`${dictating ? 'Stop' : 'Start'} dictation${fieldName}`} accessibilityHint={dictating ? 'Stops dictation and keeps the transcribed text.' : 'Starts dictation directly. The keyboard stays closed.'}>
-      <Text style={s.icon}>{dictating ? '■' : '🎙'}</Text>
-    </Pressable>
+    <TextInput ref={ref} {...props} value={value} onChangeText={onChangeText} onKeyPress={(event) => { onKeyPress?.(event); onInputMode?.('writing'); onDictationStateRef.current?.(false); }} accessibilityLabel={accessibilityLabel} style={[style, s.input, trailingAccessory ? { paddingRight: trailingAccessoryWidth } : null]} />
+    <View style={s.actionRail}>
+      {trailingAccessory}
+      <Pressable onPress={() => void startDictation()} disabled={isStarting} hitSlop={8} style={[s.button, dictating && s.buttonListening]} accessibilityRole="button" accessibilityState={{ busy: isStarting, selected: isDictating }} accessibilityLabel={`${dictating ? 'Stop' : 'Start'} dictation${fieldName}`} accessibilityHint={dictating ? 'Stops dictation and keeps the transcribed text.' : 'Starts dictation directly. The keyboard stays closed.'}>
+        <Text style={s.icon}>{dictating ? '■' : '🎙'}</Text>
+      </Pressable>
+    </View>
   </View>;
 });
 
@@ -161,7 +169,9 @@ const s = StyleSheet.create({
   field: { position: 'relative' },
   fieldGrow: { flex: 1, minWidth: 0 },
   input: { paddingRight: 38 },
-  button: { position: 'absolute', right: 5, bottom: 8, width: 31, height: 31, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F3F1FC', borderWidth: 1, borderColor: '#DED9EF' },
+  inputWithAccessory: { paddingRight: 76 },
+  actionRail: { position: 'absolute', right: 5, bottom: 8, flexDirection: 'row', alignItems: 'center', gap: 5 },
+  button: { width: 31, height: 31, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F3F1FC', borderWidth: 1, borderColor: '#DED9EF' },
   buttonListening: { backgroundColor: '#FEE8E8', borderColor: '#F3B5B5' },
   icon: { color: '#7068C9', fontSize: 13, lineHeight: 16 },
 });

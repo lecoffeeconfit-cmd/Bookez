@@ -10,6 +10,7 @@ export type BookezWritingReminder = {
   time: string;
   days: number[];
   enabled: boolean;
+  adaptive?: boolean;
   book?: BookezNotificationBook;
 };
 
@@ -20,6 +21,11 @@ export type BookezNotificationBook = {
   nextPartTitle?: string;
   nextPartKey?: string;
   manuscriptComplete: boolean;
+  reminderKind?: 'foundation' | 'steady' | 'catch_up' | 'complete' | 'paused';
+  missedSessions?: number;
+  suggestedWords?: number;
+  suggestedMinutes?: number;
+  finishLabel?: string;
 };
 
 Notifications.setNotificationHandler({
@@ -64,10 +70,26 @@ const parseReminderTime = (value: string) => {
   return { hour, minute };
 };
 
-const notificationCopy = (book: BookezNotificationBook) => {
+const notificationCopy = (book: BookezNotificationBook, adaptive: boolean) => {
   if (book.manuscriptComplete) {
     return {
       body: `${book.title} is complete. Open Bookez for a calm final read-through.`,
+    };
+  }
+  if (adaptive && book.reminderKind === 'catch_up') {
+    const missed = book.missedSessions ? `${book.missedSessions} missed day${book.missedSessions === 1 ? '' : 's'} folded in · ` : '';
+    return {
+      body: `${missed}A softer return to ${book.nextPartTitle ?? 'your next page'}: about ${book.suggestedWords ?? 150} words or ${book.suggestedMinutes ?? 15} minutes.`,
+    };
+  }
+  if (adaptive && book.reminderKind === 'foundation') {
+    return {
+      body: `Your next small step is ready: open Bookez to shape ${book.nextPartTitle ?? 'the book'} before you draft.`,
+    };
+  }
+  if (adaptive && book.suggestedWords) {
+    return {
+      body: `${book.progressPercent}% complete · about ${book.suggestedWords} words keeps ${book.nextPartTitle ?? 'the next page'} moving toward ${book.finishLabel ?? 'the finish line'}.`,
     };
   }
   if (!book.wordCount) {
@@ -117,7 +139,7 @@ export async function syncBookezWritingNotifications({
     const parsedTime = parseReminderTime(reminder.time);
     if (!reminder.enabled || !parsedTime || !reminder.days.length) return [];
     const reminderBook = reminder.book ?? book;
-    const copy = notificationCopy(reminderBook);
+    const copy = notificationCopy(reminderBook, reminder.adaptive !== false);
     return reminder.days.map((day) => ({
       identifier: `${BOOKEZ_NOTIFICATION_PREFIX}${reminder.id}:${day}`,
       content: {

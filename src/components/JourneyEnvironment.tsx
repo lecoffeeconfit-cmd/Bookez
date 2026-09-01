@@ -90,7 +90,7 @@ const BIOMES: BiomeConfig[] = [
 
 function ScenicLayer({ width, height }: { width: number; height: number }) {
   const sectionHeight = height / BIOME_ARTWORK.length;
-  const transitionOverlap = Math.min(140, Math.max(80, sectionHeight * 0.1));
+  const transitionOverlap = Math.min(180, Math.max(110, sectionHeight * 0.16));
   const sceneMetrics = BIOME_ARTWORK.map((_, index) => {
     const frameTop = index * sectionHeight - (index === 0 ? 0 : transitionOverlap);
     const frameHeight = sectionHeight + (index === 0 ? 0 : transitionOverlap) + (index === BIOME_ARTWORK.length - 1 ? 0 : transitionOverlap);
@@ -130,19 +130,19 @@ function ScenicLayer({ width, height }: { width: number; height: number }) {
         {scene.hasUpperContinuation && <View style={[styles.biomeContinuation, { top: 0, width, height: scene.artworkTop + scene.seamBlendHeight }]}>
           <Image
             source={aboveContinuation}
-            resizeMode="contain"
+            resizeMode="cover"
             fadeDuration={0}
             accessible={false}
-            style={[styles.continuationArtwork, { width, height: scene.continuationHeight, bottom: 0 }]}
+            style={[styles.continuationArtwork, { width, height: Math.max(scene.continuationHeight, scene.artworkTop + scene.seamBlendHeight), bottom: 0 }]}
           />
         </View>}
         {scene.hasLowerContinuation && <View style={[styles.biomeContinuation, { top: scene.lowerContinuationTop - scene.seamBlendHeight, width, height: scene.lowerContinuationHeight + scene.seamBlendHeight }]}>
           <Image
             source={belowContinuation}
-            resizeMode="contain"
+            resizeMode="cover"
             fadeDuration={0}
             accessible={false}
-            style={[styles.continuationArtwork, { width, height: scene.continuationHeight, top: 0 }]}
+            style={[styles.continuationArtwork, { width, height: Math.max(scene.continuationHeight, scene.lowerContinuationHeight + scene.seamBlendHeight), top: 0 }]}
           />
         </View>}
         <MaskedView
@@ -192,6 +192,10 @@ function ScenicLayer({ width, height }: { width: number; height: number }) {
       const transitionHeight = transitionOverlap * 2;
       const previousContinuationTop = previousScene.frameTop + previousScene.lowerContinuationTop - previousScene.seamBlendHeight;
       const nextContinuationTop = nextScene.frameTop + nextScene.artworkTop + nextScene.seamBlendHeight - nextScene.continuationHeight;
+      const previousTransitionArtworkHeight = Math.max(transitionHeight, previousScene.continuationHeight);
+      const nextTransitionArtworkHeight = Math.max(transitionHeight, nextScene.continuationHeight);
+      const previousTransitionArtworkTop = Math.max(transitionHeight - previousTransitionArtworkHeight, Math.min(0, previousContinuationTop - transitionTop));
+      const nextTransitionArtworkTop = Math.max(transitionHeight - nextTransitionArtworkHeight, Math.min(0, nextContinuationTop - transitionTop));
       return <View
         key={`${previousBiome.id}-${biome.id}-transition`}
         style={[styles.biomeTransition, { top: transitionTop, height: transitionHeight }]}
@@ -199,8 +203,8 @@ function ScenicLayer({ width, height }: { width: number; height: number }) {
         <MaskedView
           style={styles.transitionLayer}
           maskElement={<LinearGradient
-            colors={['#000000', '#000000', 'transparent'] as const}
-            locations={[0, 0.48, 1] as const}
+            colors={['#000000', 'transparent'] as const}
+            locations={[0, 1] as const}
             start={{ x: 0, y: 0 }}
             end={{ x: 0, y: 1 }}
             style={styles.transitionMask}
@@ -208,17 +212,17 @@ function ScenicLayer({ width, height }: { width: number; height: number }) {
         >
           <Image
             source={BIOME_BELOW_CONTINUATIONS[index]}
-            resizeMode="contain"
+            resizeMode="cover"
             fadeDuration={0}
             accessible={false}
-            style={[styles.transitionArtwork, { width, height: previousScene.continuationHeight, top: previousContinuationTop - transitionTop }]}
+            style={[styles.transitionArtwork, { width, height: previousTransitionArtworkHeight, top: previousTransitionArtworkTop }]}
           />
         </MaskedView>
         <MaskedView
           style={styles.transitionLayer}
           maskElement={<LinearGradient
-            colors={['transparent', '#000000', '#000000'] as const}
-            locations={[0, 0.52, 1] as const}
+            colors={['transparent', '#000000'] as const}
+            locations={[0, 1] as const}
             start={{ x: 0, y: 0 }}
             end={{ x: 0, y: 1 }}
             style={styles.transitionMask}
@@ -226,26 +230,12 @@ function ScenicLayer({ width, height }: { width: number; height: number }) {
         >
           <Image
             source={BIOME_ABOVE_CONTINUATIONS[index + 1]}
-            resizeMode="contain"
+            resizeMode="cover"
             fadeDuration={0}
             accessible={false}
-            style={[styles.transitionArtwork, { width, height: nextScene.continuationHeight, top: nextContinuationTop - transitionTop }]}
+            style={[styles.transitionArtwork, { width, height: nextTransitionArtworkHeight, top: nextTransitionArtworkTop }]}
           />
         </MaskedView>
-        <LinearGradient
-          colors={[withAlpha(previousBiome.base, 0.1), 'rgba(244,249,248,0.05)', withAlpha(biome.base, 0.1)] as const}
-          locations={[0, 0.5, 1] as const}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 0, y: 1 }}
-          style={styles.transitionAtmosphere}
-        />
-        <LinearGradient
-          colors={['rgba(180,225,234,0)', 'rgba(220,246,249,0.24)', 'rgba(180,225,234,0)'] as const}
-          locations={[0, 0.5, 1] as const}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 0, y: 1 }}
-          style={[styles.transitionRiverGlow, { top: transitionOverlap * 0.22, height: transitionOverlap * 1.56 }]}
-        />
       </View>;
     })}
   </View>;
@@ -393,8 +383,6 @@ const styles = StyleSheet.create({
   transitionLayer: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 },
   transitionMask: { flex: 1 },
   transitionArtwork: { position: 'absolute', left: 0 },
-  transitionAtmosphere: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 },
-  transitionRiverGlow: { position: 'absolute', left: '39%', right: '39%', borderRadius: 80 },
   atmosphereLayer: { position: 'absolute', top: 0, left: 0 },
   motionSection: { position: 'absolute', left: 0, overflow: 'hidden' },
   cloudFar: { position: 'absolute', top: '9%', left: '5%' },
