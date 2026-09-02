@@ -33,27 +33,6 @@ const BIOME_ARTWORK = [
   require('../../assets/journey/journey-sunset.png'),
 ] as const;
 
-// Each supplied scene has its own directional continuations. They render only
-// above and below the untouched source artwork, never as a replacement layer.
-const BIOME_ABOVE_CONTINUATIONS = [
-  require('../../assets/journey/journey-meadow-above.png'),
-  require('../../assets/journey/journey-alpine-above.png'),
-  require('../../assets/journey/journey-night-forest-above.png'),
-  require('../../assets/journey/journey-canyon-above.png'),
-  require('../../assets/journey/journey-sunset-above.png'),
-] as const;
-
-const BIOME_BELOW_CONTINUATIONS = [
-  require('../../assets/journey/journey-meadow-below.png'),
-  require('../../assets/journey/journey-alpine-below.png'),
-  require('../../assets/journey/journey-night-forest-below.png'),
-  require('../../assets/journey/journey-canyon-below.png'),
-  require('../../assets/journey/journey-sunset-below.png'),
-] as const;
-
-// Every source uses its own measured aspect ratio. This keeps all five
-// illustrations—including the 1023 × 1537 moonlit forest—pixel-faithful.
-const ARTWORK_ASPECTS = [1024 / 1536, 1024 / 1536, 1023 / 1537, 1024 / 1536, 1024 / 1536] as const;
 const withAlpha = (hex: string, alpha: number) => {
   const normalized = hex.replace('#', '');
   const value = normalized.length === 3 ? normalized.split('').map((part) => part + part).join('') : normalized;
@@ -91,71 +70,32 @@ const BIOMES: BiomeConfig[] = [
 function ScenicLayer({ width, height }: { width: number; height: number }) {
   const sectionHeight = height / BIOME_ARTWORK.length;
   const transitionOverlap = Math.min(180, Math.max(110, sectionHeight * 0.16));
-  const sceneMetrics = BIOME_ARTWORK.map((_, index) => {
-    const frameTop = index * sectionHeight - (index === 0 ? 0 : transitionOverlap);
-    const frameHeight = sectionHeight + (index === 0 ? 0 : transitionOverlap) + (index === BIOME_ARTWORK.length - 1 ? 0 : transitionOverlap);
-    const artworkAspect = ARTWORK_ASPECTS[index];
-    const artworkWidth = Math.min(width, frameHeight * artworkAspect);
-    const artworkHeight = artworkWidth / artworkAspect;
-    const artworkTop = Math.max(0, (frameHeight - artworkHeight) / 2);
-    const continuationHeight = width / artworkAspect;
-    const artworkBottom = artworkTop + artworkHeight;
-    const seamBlendHeight = Math.min(132, Math.max(92, artworkHeight * 0.12));
-    const lowerContinuationHeight = frameHeight - artworkBottom;
-    return {
-      frameTop,
-      frameHeight,
-      artworkWidth,
-      artworkHeight,
-      artworkLeft: (width - artworkWidth) / 2,
-      artworkTop,
-      continuationHeight,
-      seamBlendHeight,
-      lowerContinuationTop: artworkBottom,
-      lowerContinuationHeight,
-      hasUpperContinuation: artworkTop > 0,
-      hasLowerContinuation: lowerContinuationHeight > 0,
-    };
-  });
 
+  // Keep each biome on one complete source image. Mixing separately generated
+  // continuations into the same frame made their different crops visible as
+  // hard horizontal seams.
   return <View pointerEvents="none" style={[styles.scenicLayer, { width, height }]}>
     {BIOME_ARTWORK.map((source, index) => {
       const biome = BIOMES[index];
-      const aboveContinuation = BIOME_ABOVE_CONTINUATIONS[index];
-      const belowContinuation = BIOME_BELOW_CONTINUATIONS[index];
-      const scene = sceneMetrics[index];
-      const topMaskStop = scene.hasUpperContinuation ? scene.seamBlendHeight / scene.artworkHeight : 0;
-      const bottomMaskStop = scene.hasLowerContinuation ? 1 - scene.seamBlendHeight / scene.artworkHeight : 1;
-      return <View key={biome.id} collapsable={false} style={[styles.biomeArtworkFrame, { width, height: scene.frameHeight, top: scene.frameTop, backgroundColor: biome.base }]}>
-        {scene.hasUpperContinuation && <View style={[styles.biomeContinuation, { top: 0, width, height: scene.artworkTop + scene.seamBlendHeight }]}>
-          <Image
-            source={aboveContinuation}
-            resizeMode="cover"
-            fadeDuration={0}
-            accessible={false}
-            style={[styles.continuationArtwork, { width, height: Math.max(scene.continuationHeight, scene.artworkTop + scene.seamBlendHeight), bottom: 0 }]}
-          />
-        </View>}
-        {scene.hasLowerContinuation && <View style={[styles.biomeContinuation, { top: scene.lowerContinuationTop - scene.seamBlendHeight, width, height: scene.lowerContinuationHeight + scene.seamBlendHeight }]}>
-          <Image
-            source={belowContinuation}
-            resizeMode="cover"
-            fadeDuration={0}
-            accessible={false}
-            style={[styles.continuationArtwork, { width, height: Math.max(scene.continuationHeight, scene.lowerContinuationHeight + scene.seamBlendHeight), top: 0 }]}
-          />
-        </View>}
+      const isFirst = index === 0;
+      const isLast = index === BIOME_ARTWORK.length - 1;
+      const frameTop = index * sectionHeight - (isFirst ? 0 : transitionOverlap);
+      const frameHeight = sectionHeight + (isFirst ? 0 : transitionOverlap) + (isLast ? 0 : transitionOverlap);
+      const fadeHeight = Math.min(transitionOverlap, frameHeight * 0.24);
+      const topFadeStop = isFirst ? 0 : fadeHeight / frameHeight;
+      const bottomFadeStop = isLast ? 1 : 1 - fadeHeight / frameHeight;
+      return <View key={biome.id} collapsable={false} style={[styles.biomeArtworkFrame, { width, height: frameHeight, top: frameTop }]}>
         <MaskedView
-          style={[styles.biomeArtwork, { width: scene.artworkWidth, height: scene.artworkHeight, left: scene.artworkLeft, top: scene.artworkTop }]}
+          style={StyleSheet.absoluteFill}
           maskElement={<LinearGradient
-            colors={[scene.hasUpperContinuation ? 'transparent' : '#000000', '#000000', '#000000', scene.hasLowerContinuation ? 'transparent' : '#000000'] as const}
-            locations={[0, topMaskStop, bottomMaskStop, 1] as const}
+            colors={[isFirst ? '#000000' : 'transparent', '#000000', '#000000', isLast ? '#000000' : 'transparent'] as const}
+            locations={[0, topFadeStop, bottomFadeStop, 1] as const}
             style={styles.artworkMask}
           />}
         >
           <Image
             source={source}
-            resizeMode="contain"
+            resizeMode="cover"
             fadeDuration={0}
             accessibilityIgnoresInvertColors
             style={styles.maskedArtworkImage}
@@ -173,69 +113,6 @@ function ScenicLayer({ width, height }: { width: number; height: number }) {
           end={{ x: 1, y: 0.5 }}
           style={styles.pathReadabilityVeil}
         />
-        <LinearGradient
-          colors={[withAlpha(biome.base, 0.32), 'transparent'] as const}
-          style={[styles.biomeTopFeather, { height: transitionOverlap }]}
-        />
-        <LinearGradient
-          colors={['transparent', withAlpha(biome.base, 0.32)] as const}
-          style={[styles.biomeBottomFeather, { height: transitionOverlap }]}
-        />
-      </View>;
-    })}
-    {BIOMES.slice(1).map((biome, index) => {
-      const boundaryTop = (index + 1) * sectionHeight;
-      const previousBiome = BIOMES[index];
-      const previousScene = sceneMetrics[index];
-      const nextScene = sceneMetrics[index + 1];
-      const transitionTop = boundaryTop - transitionOverlap;
-      const transitionHeight = transitionOverlap * 2;
-      const previousContinuationTop = previousScene.frameTop + previousScene.lowerContinuationTop - previousScene.seamBlendHeight;
-      const nextContinuationTop = nextScene.frameTop + nextScene.artworkTop + nextScene.seamBlendHeight - nextScene.continuationHeight;
-      const previousTransitionArtworkHeight = Math.max(transitionHeight, previousScene.continuationHeight);
-      const nextTransitionArtworkHeight = Math.max(transitionHeight, nextScene.continuationHeight);
-      const previousTransitionArtworkTop = Math.max(transitionHeight - previousTransitionArtworkHeight, Math.min(0, previousContinuationTop - transitionTop));
-      const nextTransitionArtworkTop = Math.max(transitionHeight - nextTransitionArtworkHeight, Math.min(0, nextContinuationTop - transitionTop));
-      return <View
-        key={`${previousBiome.id}-${biome.id}-transition`}
-        style={[styles.biomeTransition, { top: transitionTop, height: transitionHeight }]}
-      >
-        <MaskedView
-          style={styles.transitionLayer}
-          maskElement={<LinearGradient
-            colors={['#000000', 'transparent'] as const}
-            locations={[0, 1] as const}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 0, y: 1 }}
-            style={styles.transitionMask}
-          />}
-        >
-          <Image
-            source={BIOME_BELOW_CONTINUATIONS[index]}
-            resizeMode="cover"
-            fadeDuration={0}
-            accessible={false}
-            style={[styles.transitionArtwork, { width, height: previousTransitionArtworkHeight, top: previousTransitionArtworkTop }]}
-          />
-        </MaskedView>
-        <MaskedView
-          style={styles.transitionLayer}
-          maskElement={<LinearGradient
-            colors={['transparent', '#000000'] as const}
-            locations={[0, 1] as const}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 0, y: 1 }}
-            style={styles.transitionMask}
-          />}
-        >
-          <Image
-            source={BIOME_ABOVE_CONTINUATIONS[index + 1]}
-            resizeMode="cover"
-            fadeDuration={0}
-            accessible={false}
-            style={[styles.transitionArtwork, { width, height: nextTransitionArtworkHeight, top: nextTransitionArtworkTop }]}
-          />
-        </MaskedView>
       </View>;
     })}
   </View>;
@@ -370,19 +247,10 @@ const styles = StyleSheet.create({
   environment: { position: 'absolute', top: 0, left: 0, backgroundColor: '#DDEEC7' },
   scenicLayer: { position: 'absolute', top: 0, left: 0, overflow: 'hidden' },
   biomeArtworkFrame: { position: 'absolute', left: 0, overflow: 'hidden' },
-  biomeContinuation: { position: 'absolute', left: 0, overflow: 'hidden' },
-  continuationArtwork: { position: 'absolute', left: 0 },
-  biomeArtwork: { position: 'absolute' },
   artworkMask: { flex: 1 },
   maskedArtworkImage: { width: '100%', height: '100%' },
   scenicSideVignette: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 },
   pathReadabilityVeil: { position: 'absolute', top: 0, right: '28%', bottom: 0, left: '28%' },
-  biomeTopFeather: { position: 'absolute', top: 0, right: 0, left: 0 },
-  biomeBottomFeather: { position: 'absolute', right: 0, bottom: 0, left: 0 },
-  biomeTransition: { position: 'absolute', right: 0, left: 0, overflow: 'hidden' },
-  transitionLayer: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 },
-  transitionMask: { flex: 1 },
-  transitionArtwork: { position: 'absolute', left: 0 },
   atmosphereLayer: { position: 'absolute', top: 0, left: 0 },
   motionSection: { position: 'absolute', left: 0, overflow: 'hidden' },
   cloudFar: { position: 'absolute', top: '9%', left: '5%' },

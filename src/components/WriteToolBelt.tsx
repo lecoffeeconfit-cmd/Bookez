@@ -59,7 +59,7 @@ const topTools: WriteToolDefinition[] = [
 
 const bottomTools: WriteToolDefinition[] = [
   { id: 'writing-stats', name: 'Writing Stats', shortName: 'Stats', belt: 'bottom', availableIn: ['bottom'], icon: '◷', color: '#827BE0', description: 'Keep words, sentences, paragraphs, letters, and writing time together.', howToUse: 'Open Writing Stats for one compact view of the current section and session.', example: 'Check your words and active time after a drafting block.' },
-  { id: 'writing-rhythm', name: 'Writing Rhythm', shortName: 'Rhythm', belt: 'bottom', availableIn: ['bottom'], icon: '◌', color: '#A69DCA', description: 'Shape a focused block with sprint, Pomodoro, custom, or flow sessions.', howToUse: 'Open Writing Rhythm to choose a session style and start, pause, or finish the timer.', example: 'Choose Pomodoro when a clear 25-minute container will help.' },
+  { id: 'writing-rhythm', name: 'Writing Rhythm', shortName: 'Rhythm', belt: 'bottom', availableIn: ['bottom'], icon: '⏱', color: '#A69DCA', description: 'Shape a focused block with sprint, Pomodoro, custom, or flow sessions.', howToUse: 'Open Writing Rhythm to choose a session style and start, pause, or finish the timer.', example: 'Choose Pomodoro when a clear 25-minute container will help.' },
   { id: 'focus-mode', name: 'Focus Mode', shortName: 'Focus mode', belt: 'bottom', availableIn: ['bottom'], icon: '☾', color: '#626EAE', description: 'Hide writing distractions and let the manuscript take the lead.', howToUse: 'Turn Focus Mode on for a quieter writing surface, then turn it off when you need the full cockpit again.', example: 'Use it during a first-draft sprint.' },
   { id: 'goal-meter', name: 'Goal Meter', shortName: 'Goal', belt: 'bottom', availableIn: ['bottom'], icon: '▰', color: '#599BC3', description: 'Keep session, day, section, and manuscript progress in view.', howToUse: 'Open Goal Meter to choose a useful target and see your progress toward it.', example: 'Set a 300-word session goal before drafting.' },
   { id: 'version-history', name: 'Version History', shortName: 'Versions', belt: 'bottom', availableIn: ['bottom'], icon: '◇', color: '#6D9AAB', description: 'Save checkpoints and compare earlier drafts before a major change.', howToUse: 'Save a version before rewriting, then open Version History to review or compare checkpoints.', example: 'Capture the original ending before trying a new one.' },
@@ -105,8 +105,20 @@ export function sanitizeWriteToolBeltConfig(value: unknown): WriteToolBeltConfig
 
 type ToolIconProps = { tool: WriteToolDefinition; size?: 'small' | 'large'; style?: StyleProp<ViewStyle> };
 
+function RhythmGlyph({ size }: { size: 'small' | 'large' }) {
+  const faceSize = size === 'large' ? 18 : 20;
+  return <View style={[styles.rhythmGlyph, { width: faceSize + 6, height: faceSize + 7 }]}>
+    <View style={[styles.rhythmGlyphButton, { width: faceSize * 0.28 }]} />
+    <View style={[styles.rhythmGlyphFace, { width: faceSize, height: faceSize, borderRadius: faceSize / 2 }]}>
+      <View style={[styles.rhythmGlyphHand, { height: faceSize * 0.36, top: faceSize * 0.17, transform: [{ rotate: '-18deg' }] }]} />
+      <View style={[styles.rhythmGlyphHand, { height: faceSize * 0.29, top: faceSize * 0.34, transform: [{ rotate: '56deg' }] }]} />
+      <View style={[styles.rhythmGlyphCenter, { width: faceSize * 0.16, height: faceSize * 0.16, borderRadius: faceSize * 0.08 }]} />
+    </View>
+  </View>;
+}
+
 function ToolIcon({ tool, size = 'large', style }: ToolIconProps) {
-  return <View style={[size === 'large' ? styles.toolIconLarge : styles.toolIconSmall, { backgroundColor: tool.color }, style]}><Text style={[size === 'large' ? styles.toolIconTextLarge : styles.toolIconTextSmall, tool.icon.length > 1 && styles.toolIconTextCompact]}>{tool.icon}</Text></View>;
+  return <View style={[size === 'large' ? styles.toolIconLarge : styles.toolIconSmall, { backgroundColor: tool.color }, style]}>{tool.id === 'writing-rhythm' ? <RhythmGlyph size={size} /> : <Text style={[size === 'large' ? styles.toolIconTextLarge : styles.toolIconTextSmall, tool.icon.length > 1 && styles.toolIconTextCompact]}>{tool.icon}</Text>}</View>;
 }
 
 function ToolTile({ tool, active, onPress, onLongPress }: { tool: WriteToolDefinition; active: boolean; onPress: () => void; onLongPress: () => void }) {
@@ -262,6 +274,11 @@ const styles = StyleSheet.create({
   toolIconTextLarge: { color: '#FFF', fontSize: 13, lineHeight: 16, fontWeight: '800' },
   toolIconTextSmall: { color: '#FFF', fontSize: 13, lineHeight: 16, fontWeight: '800' },
   toolIconTextCompact: { fontSize: 9 },
+  rhythmGlyph: { alignItems: 'center', justifyContent: 'flex-end' },
+  rhythmGlyphButton: { position: 'absolute', top: 0, height: 2, borderRadius: 1, backgroundColor: '#FFF' },
+  rhythmGlyphFace: { borderColor: '#FFF', borderWidth: 1.6, alignItems: 'center', justifyContent: 'center' },
+  rhythmGlyphHand: { position: 'absolute', left: '50%', width: 1.5, marginLeft: -0.75, borderRadius: 1, backgroundColor: '#FFF' },
+  rhythmGlyphCenter: { position: 'absolute', backgroundColor: '#FFF' },
   addToolTile: { width: 62, minHeight: 63, paddingVertical: 7, borderRadius: 13, borderWidth: 1, borderStyle: 'dashed', borderColor: '#C8C3E6', backgroundColor: '#F8F6FF', alignItems: 'center', justifyContent: 'center' },
   addToolIcon: { width: 29, height: 29, borderRadius: 10, backgroundColor: '#E9E5FF', alignItems: 'center', justifyContent: 'center' },
   addToolPlus: { color: '#6D68B8', fontSize: 18, lineHeight: 20 },

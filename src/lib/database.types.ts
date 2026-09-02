@@ -16,9 +16,9 @@ export type Database = {
         Relationships: [];
       };
       community_profiles: {
-        Row: { user_id: string; display_name: string; bio: string | null; avatar_initials: string | null; avatar_path: string | null; updated_at: string };
-        Insert: { user_id: string; display_name?: string; bio?: string | null; avatar_initials?: string | null; avatar_path?: string | null; updated_at?: string };
-        Update: { user_id?: string; display_name?: string; bio?: string | null; avatar_initials?: string | null; avatar_path?: string | null; updated_at?: string };
+        Row: { user_id: string; display_name: string; bio: string | null; avatar_initials: string | null; avatar_path: string | null; avatar_updated_at: string | null; avatar_moderation_notice_at: string | null; updated_at: string };
+        Insert: { user_id: string; display_name?: string; bio?: string | null; avatar_initials?: string | null; avatar_path?: string | null; avatar_updated_at?: string | null; avatar_moderation_notice_at?: string | null; updated_at?: string };
+        Update: { user_id?: string; display_name?: string; bio?: string | null; avatar_initials?: string | null; avatar_path?: string | null; avatar_updated_at?: string | null; avatar_moderation_notice_at?: string | null; updated_at?: string };
         Relationships: [];
       };
       community_projects: {
@@ -67,6 +67,12 @@ export type Database = {
         Row: { id: string; reporter_id: string; reported_user_id: string; project_id: string | null; reason: string; created_at: string };
         Insert: { id?: string; reporter_id: string; reported_user_id: string; project_id?: string | null; reason: string; created_at?: string };
         Update: { id?: string; reporter_id?: string; reported_user_id?: string; project_id?: string | null; reason?: string; created_at?: string };
+        Relationships: [];
+      };
+      community_follows: {
+        Row: { follower_id: string; following_id: string; created_at: string };
+        Insert: { follower_id: string; following_id: string; created_at?: string };
+        Update: { follower_id?: string; following_id?: string; created_at?: string };
         Relationships: [];
       };
       feedback_requests: {
@@ -171,6 +177,8 @@ export type Database = {
       get_community_project_preview: { Args: { p_project_id: string }; Returns: Json };
       record_community_project_view: { Args: { p_project_id: string }; Returns: boolean };
       get_community_project_engagement: { Args: { p_project_ids: string[] }; Returns: Json };
+      get_community_writer_profile: { Args: { p_user_id: string }; Returns: Json };
+      set_community_follow: { Args: { p_following_id: string; p_follow: boolean }; Returns: boolean };
       get_feedback_requests: { Args: { p_tab?: string; p_limit?: number; p_offset?: number }; Returns: Json };
       get_feedback_request: { Args: { p_request_id: string }; Returns: Database['bookez']['Tables']['feedback_requests']['Row'][] };
       increment_feedback_view: { Args: { p_request_id: string }; Returns: number };

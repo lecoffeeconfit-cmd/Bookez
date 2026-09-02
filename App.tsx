@@ -18,6 +18,7 @@ import * as Sentry from '@sentry/react-native';
 import { supabase } from './src/lib/supabase';
 import { bookezSecureStorage } from './src/lib/secure-storage';
 import Community, { type CommunityProject } from './src/components/Community';
+import { WriterProfileSummaryCard } from './src/components/CommunityWriterProfile';
 import { FeedbackRequestBuilder } from './src/components/CommunityFeedback';
 import DictationInput from './src/components/DictationInput';
 import AIWritingTools from './src/components/AIWritingTools';
@@ -25,8 +26,9 @@ import WriteToolBelt, { sanitizeWriteToolBeltConfig, WRITE_TOOL_BELT_STORAGE_KEY
 import JourneyEnvironment from './src/components/JourneyEnvironment';
 import type { AIWritingOperation } from './src/lib/ai-writing';
 import { AI_USAGE_POLICY, AI_USAGE_STORAGE_KEY, aiUsageCooldownLabel, aiUsageCooldownRemaining, aiUsageMonthKey, type AIUsageLedger } from './src/lib/ai-usage';
-import { deleteBookezData, ensureBookezProfile, handleBookezAuthUrl, isBookezPasswordValid, resendSignupConfirmation, sendPasswordReset, signInWithEmail, signOutBookez, signUpWithEmail, updateBookezPassword } from './src/lib/bookez-auth';
-import { uploadBookezFile, uploadBookezProfileAvatar } from './src/lib/bookez-storage';
+import { deleteBookezData, ensureBookezProfile, handleBookezAuthUrl, isBookezPasswordValid, markBookezOnboardingCompleted, resendSignupConfirmation, sendPasswordReset, signInWithEmail, signOutBookez, signUpWithEmail, updateBookezPassword } from './src/lib/bookez-auth';
+import { bookezImageModerationErrorMessage, pickModeratedBookezImage, type BookezImagePurpose } from './src/lib/bookez-image-moderation';
+import { moderateAndUploadBookezProfileAvatar, profileAvatarErrorMessage } from './src/lib/bookez-profile-avatar';
 import { BOOK_EXPORT_FORMATS, buildBookHtml, buildBookMarkdown, buildBookText, buildBookezBackup, buildDocx, buildEpub, bytesToBase64, type BookExportFormat, type BookExportLayout, type BookExportOptions } from './src/lib/bookez-export';
 import { clearBookezLocalSyncData, commitBookezProjectCursor, flushBookezQueue, getBookezStorageSummary, getBookezSyncSnapshot, keepBookezLocalConflict, loadBookezProjectChapters, pullBookezProjectSummaries, saveBookezChapter, saveBookezPlanSettings, saveBookezProject } from './src/lib/bookez-sync';
 import { requestBookezNotificationPermissions, syncBookezWritingNotifications, type BookezWritingReminder } from './src/lib/bookez-notifications';
@@ -1129,14 +1131,22 @@ const makeBookezImage = (project: Project, asset: ImagePicker.ImagePickerAsset, 
   };
 };
 
-const requestImage = async (project: Project, onPicked: (asset: ImagePicker.ImagePickerAsset) => void) => {
-  const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-  if (!permission.granted) {
-    Alert.alert('Photo access needed', 'Allow Bookez to access your photos so you can add visuals to this project.');
-    return;
-  }
-  const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], allowsEditing: true, quality: 0.85 });
-  if (!result.canceled && result.assets[0]) onPicked(result.assets[0]);
+const requestImage = (
+  project: Project,
+  userId: string | null,
+  purpose: BookezImagePurpose,
+  onPicked: (asset: ImagePicker.ImagePickerAsset, storagePath?: string) => void,
+) => {
+  void pickModeratedBookezImage({
+    userId,
+    purpose,
+    projectId: userId && project.cloudId ? project.cloudId : null,
+    permissionMessage: 'Allow Bookez to access your photos so you can add visuals to this project.',
+  }).then((result) => {
+    if (result) onPicked(result.asset, result.storagePath);
+  }).catch((caught) => {
+    Alert.alert(purpose === 'book-cover' ? 'Cover kept' : 'Could not add this image', bookezImageModerationErrorMessage(caught));
+  });
 };
 
 type ImageSystemCardProps = {
@@ -1598,6 +1608,7 @@ function Library({ projects, activeProject, userId, onPage, onSelectProject, onP
   })[0] ?? projects[0];
   const focusProject = projects.find((project) => project.title === focusProjectTitle && !project.archived) ?? closestProject;
   const focusSnapshot = focusProject ? getJourneySnapshot(focusProject) : null;
+  const focusCover = focusProject?.images?.find((image) => image.placement === 'cover');
   const focusIsManual = Boolean(focusProjectTitle && focusProject?.title === focusProjectTitle);
 
   const openFocusBook = (nextPage: Page) => {
@@ -1694,7 +1705,7 @@ const copy: Project = { ...project, cloudId: createLocalUuid(), cloudRevision: 0
   };
 
   return <><PageHeader page="Library" onPage={onPage} /><Text style={s.intro}>Pick up a thread, or begin a brand new little world.</Text>
-    <View style={s.focusCard}><LinearGradient colors={['#A6DDF7', '#8B8AE8']} style={StyleSheet.absoluteFill} /><Text style={s.focusShape}>◢</Text>
+    <View style={s.focusCard}><LinearGradient colors={['#A6DDF7', '#8B8AE8']} style={StyleSheet.absoluteFill} />{focusProject ? <View pointerEvents="none" style={s.focusCoverPeek} accessibilityLabel={`${focusProject.title} cover`}><View style={[s.focusCoverFallback, { backgroundColor: focusProject.color }]}>{focusCover?.uri ? <Image source={{ uri: focusCover.uri }} style={s.focusCoverImage} resizeMode="cover" accessibilityLabel={`${focusProject.title} cover image`} /> : <Text style={s.focusCoverFallbackText}>{focusProject.mark === '◌' ? '▣' : focusProject.mark}</Text>}</View><View style={s.focusCoverVeil} /></View> : null}<Text style={s.focusShape}>◢</Text>
       <View style={s.focusHeader}><Text style={s.focusEyebrow}>{focusIsManual ? 'YOUR FOCUS BOOK' : 'CLOSEST TO COMPLETION'}</Text><Pressable onPress={() => setFocusPickerOpen(true)} hitSlop={8} style={s.focusPickerButton} accessibilityRole="button" accessibilityLabel="Choose the book shown in the focus card"><Text style={s.focusPickerButtonText}>Switch</Text><Text style={s.focusPickerButtonArrow}>⌄</Text></Pressable></View>
       <Text style={s.focusTitle}>{focusProject?.title ?? activeProject}</Text><Text style={s.focusCopy}>Follow the thread from first idea to finished manuscript.</Text>{focusSnapshot && <Text style={s.focusProgress}>{focusSnapshot.progressPercent}% complete · {focusSnapshot.stage}</Text>}
       {focusProject && focusSnapshot && <LibraryWritingHome embedded project={focusProject} projects={activeBooks} snapshot={focusSnapshot} onUpdateProject={updateLibraryProject} onOpenWritingBook={onOpenWritingBook} onPage={(nextPage) => { onSelectProject(focusProject.title); onPage(nextPage); }} />}
@@ -4459,7 +4470,7 @@ function WriteSessionPanel({ panel, activePart, parts, pageStats, draftText, ses
   </View>;
 }
 
-function Write({ projects, activeProject, onOpenWritingBook, onUpdateProject }: { projects: Project[]; activeProject: string; onOpenWritingBook: (title: string) => void; onUpdateProject: (title: string, changes: Partial<Project>) => void }) {
+function Write({ projects, activeProject, userId, onOpenWritingBook, onUpdateProject }: { projects: Project[]; activeProject: string; userId: string | null; onOpenWritingBook: (title: string) => void; onUpdateProject: (title: string, changes: Partial<Project>) => void }) {
   const currentProject = projects.find((project) => project.title === activeProject) ?? projects[0];
   const { width: viewportWidth } = useWindowDimensions();
   const compactHero = viewportWidth < 560;
@@ -4603,7 +4614,7 @@ function Write({ projects, activeProject, onOpenWritingBook, onUpdateProject }: 
   } : undefined;
   const projectImages = currentProject.images ?? [];
   const activePartImages = activePart ? projectImages.filter((image) => image.connectedPartKey === activePart.key).sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || a.createdAt - b.createdAt) : [];
-  const addImage = () => { if (!activePart) return; requestImage(currentProject, (asset) => { const image = makeBookezImage(currentProject, asset, activePart.key); onUpdateProject(activeProject, { imageEnabled: true, images: [...projectImages, image] }); }); };
+  const addImage = () => { if (!activePart) return; requestImage(currentProject, userId, 'book-image', (asset, storagePath) => { const image = { ...makeBookezImage(currentProject, asset, activePart.key), ...(storagePath ? { storagePath } : {}) }; onUpdateProject(activeProject, { imageEnabled: true, images: [...projectImages, image] }); }); };
   const showVisualHint = () => {
     setVisualHintVisible(true);
     if (visualHintTimer.current) clearTimeout(visualHintTimer.current);
@@ -4615,7 +4626,7 @@ function Write({ projects, activeProject, onOpenWritingBook, onUpdateProject }: 
   useEffect(() => () => {
     if (visualHintTimer.current) clearTimeout(visualHintTimer.current);
   }, []);
-  const replaceImage = (image: BookezImage) => requestImage(currentProject, (asset) => onUpdateProject(activeProject, { images: projectImages.map((item) => item.id === image.id ? { ...item, ...makeBookezImage(currentProject, asset, item.connectedPartKey), id: item.id, title: item.title, caption: item.caption, captionRequested: item.captionRequested, altText: item.altText, credit: item.credit, placement: item.placement ?? 'inline', includeInExport: item.includeInExport, referenceOnly: item.referenceOnly, connectedPartKey: item.connectedPartKey, order: item.order, updatedAt: Date.now() } : item) }));
+  const replaceImage = (image: BookezImage) => requestImage(currentProject, userId, 'book-image', (asset, storagePath) => onUpdateProject(activeProject, { images: projectImages.map((item) => item.id === image.id ? { ...item, ...makeBookezImage(currentProject, asset, item.connectedPartKey), id: item.id, title: item.title, caption: item.caption, captionRequested: item.captionRequested, altText: item.altText, credit: item.credit, placement: item.placement ?? 'inline', includeInExport: item.includeInExport, storagePath, referenceOnly: item.referenceOnly, connectedPartKey: item.connectedPartKey, order: item.order, updatedAt: Date.now() } : item) }));
   const updateImage = (id: string, changes: Partial<BookezImage>) => onUpdateProject(activeProject, { images: projectImages.map((image) => image.id === id ? { ...image, ...changes, updatedAt: Date.now() } : image) });
   const removeImage = (id: string) => onUpdateProject(activeProject, { images: projectImages.filter((image) => image.id !== id) });
   const lastActivityAt = useRef(Date.now());
@@ -5589,18 +5600,16 @@ function BookStudio({ projects, project, userId, authorName: profileAuthorName, 
   const refreshPreview = () => updateStudio({ lastSection: section });
   const toggleIncluded = (group: 'frontMatterIncluded' | 'backMatterIncluded', id: string) => updateStudio({ [group]: { ...studio[group], [id]: !studio[group][id] } } as Partial<BookStudioState>);
   const updateText = (group: 'frontMatterText' | 'backMatterText', id: string, value: string) => updateStudio({ [group]: { ...studio[group], [id]: value } } as Partial<BookStudioState>);
-  const addStudioImage = () => requestImage(project, (asset) => onUpdateProject(project.title, { images: [...projectImages, makeBookezImage(project, asset)] }));
-  const addCoverImage = () => requestImage(project, (asset) => {
-    const image = { ...makeBookezImage(project, asset), title: `${project.title} cover`, placement: 'cover' as ImagePlacement, includeInExport: true, referenceOnly: false };
+  const addStudioImage = () => requestImage(project, userId, 'book-image', (asset, storagePath) => onUpdateProject(project.title, { images: [...projectImages, { ...makeBookezImage(project, asset), ...(storagePath ? { storagePath } : {}) }] }));
+  const addCoverImage = () => requestImage(project, userId, 'book-cover', (asset, storagePath) => {
+    const image = { ...makeBookezImage(project, asset), ...(storagePath ? { storagePath } : {}), title: `${project.title} cover`, placement: 'cover' as ImagePlacement, includeInExport: true, referenceOnly: false };
     onUpdateProject(project.title, { images: [...projectImages.filter((item) => item.placement !== 'cover'), image] });
-    if (userId && project.cloudId) void uploadBookezFile(userId, project.cloudId, asset.uri, `community-cover-${image.id}${asset.fileName?.match(/\.[^.]+$/)?.[0] ?? '.jpg'}`, asset.mimeType ?? 'image/jpeg').then(({ path }) => onUpdateProject(project.title, { images: [...projectImages.filter((item) => item.placement !== 'cover'), { ...image, storagePath: path }] })).catch(() => Alert.alert('Cover saved on this device', 'Bookez could not upload the cover for Community yet. It will still appear in your title-page preview.'));
   });
-  const replaceCoverImage = (image: BookezImage) => requestImage(project, (asset) => {
-    const replacement = { ...makeBookezImage(project, asset), id: image.id, storagePath: image.storagePath, title: image.title || `${project.title} cover`, placement: 'cover' as ImagePlacement, includeInExport: true, referenceOnly: false, updatedAt: Date.now() };
+  const replaceCoverImage = (image: BookezImage) => requestImage(project, userId, 'book-cover', (asset, storagePath) => {
+    const replacement = { ...makeBookezImage(project, asset), id: image.id, storagePath, title: image.title || `${project.title} cover`, placement: 'cover' as ImagePlacement, includeInExport: true, referenceOnly: false, updatedAt: Date.now() };
     onUpdateProject(project.title, { images: projectImages.map((item) => item.id === image.id ? replacement : item) });
-    if (userId && project.cloudId) void uploadBookezFile(userId, project.cloudId, asset.uri, `community-cover-${image.id}${asset.fileName?.match(/\.[^.]+$/)?.[0] ?? '.jpg'}`, asset.mimeType ?? 'image/jpeg').then(({ path }) => updateStudioImage(image.id, { storagePath: path })).catch(() => Alert.alert('Cover updated on this device', 'Bookez could not refresh the Community copy yet.'));
   });
-  const replaceStudioImage = (image: BookezImage) => requestImage(project, (asset) => onUpdateProject(project.title, { images: projectImages.map((item) => item.id === image.id ? { ...item, ...makeBookezImage(project, asset, item.connectedPartKey), id: item.id, title: item.title, caption: item.caption, altText: item.altText, credit: item.credit, placement: item.placement, includeInExport: item.includeInExport, referenceOnly: item.referenceOnly, connectedPartKey: item.connectedPartKey, updatedAt: Date.now() } : item) }));
+  const replaceStudioImage = (image: BookezImage) => requestImage(project, userId, 'book-image', (asset, storagePath) => onUpdateProject(project.title, { images: projectImages.map((item) => item.id === image.id ? { ...item, ...makeBookezImage(project, asset, item.connectedPartKey), id: item.id, title: item.title, caption: item.caption, altText: item.altText, credit: item.credit, placement: item.placement, includeInExport: item.includeInExport, storagePath, referenceOnly: item.referenceOnly, connectedPartKey: item.connectedPartKey, updatedAt: Date.now() } : item) }));
   const updateStudioImage = (id: string, changes: Partial<BookezImage>) => onUpdateProject(project.title, { images: projectImages.map((image) => image.id === id ? { ...image, ...changes, updatedAt: Date.now() } : image) });
   const removeStudioImage = (id: string) => { onUpdateProject(project.title, { images: projectImages.filter((image) => image.id !== id) }); setPreviewImageId(null); };
   const renderChapterVisuals = (chapter: AssembledChapter, group: 'all' | 'top' | 'inline' | 'bottom' | 'fullPage' = 'all') => {
@@ -5888,12 +5897,13 @@ type OnboardingSlide = {
 
 const onboardingSlides: OnboardingSlide[] = [
   { eyebrow: '01 / START HERE', title: 'Make room for the book.', body: 'Bookez keeps the whole process in one calm place, from the first idea to the finished manuscript.', icon: '✦', accent: '#F2EEFF', iconBackground: '#DDD6FF', steps: ['Library is your home base.', 'Create a project or pick up where you left off.', 'Use the selected book card to move through the app.'] },
-  { eyebrow: '02 / PLAN', title: 'Give the idea a shape.', body: 'Use Plan to find the thread, choose a structure, and turn a big project into smaller writing parts.', icon: '⌁', accent: '#EEF6FF', iconBackground: '#D8EBFF', steps: ['Capture the big idea and central thread.', 'Choose the parts your book needs.', 'Adjust goals and structure whenever the work changes.'] },
-  { eyebrow: '03 / WRITE WITH YOUR VOICE', title: 'Say it. Bookez will catch it.', body: 'You can write with the keyboard or tap a microphone to dictate directly into any writing field.', icon: '🎙', accent: '#F0EDFF', iconBackground: '#DCD7FF', steps: ['Tap the 🎙 button beside a writing field.', 'Bookez starts listening directly—no keyboard needed.', 'Tap the button again when you are done, then edit the words like any other draft.'] },
-  { eyebrow: '04 / WRITE', title: 'Make words at your pace.', body: 'Write one part at a time with keyboard or dictation, then let Bookez keep the progress visible.', icon: '✎', accent: '#FFF5E9', iconBackground: '#FFE2BC', steps: ['Open Write to draft the next part.', 'Use the focus tools when a gentle session helps.', 'Your words and writing rhythm are saved on this device.'] },
-  { eyebrow: '05 / WRITE WITH A LITTLE HELP', title: 'Your voice stays yours.', body: 'AI tools offer possibilities beside your draft. You stay in control: choose what to preview, then decide what belongs in your manuscript.', icon: '✦', accent: '#F1EEFF', iconBackground: '#DCD4FF', kind: 'ai', steps: ['Select a passage, then choose Improve, Continue, Rewrite, or Brainstorm.', 'Read the preview before anything changes.', 'Insert, replace, use an idea as a note, or close it—nothing is automatic.'] },
-  { eyebrow: '06 / NOTICE PROGRESS', title: 'Follow the path, not the pressure.', body: 'Journey turns progress into small checkpoints, while Stats helps you notice your rhythm over time.', icon: '◌', accent: '#EFF9F1', iconBackground: '#D7F0DC', steps: ['Tap Journey dots to see what each step means.', 'Use Stats for words, time, pages, and milestones.', 'Small completed steps add up to a finished manuscript.'] },
-  { eyebrow: '07 / SHARE & RETURN', title: 'Invite readers in thoughtfully.', body: 'Community is for sharing selected writing and asking focused questions. Profile keeps your settings, sync, help, and this tour close by.', icon: '♡', accent: '#FFF0F0', iconBackground: '#FFD9DC', steps: ['Ask for feedback on a specific part and question.', 'Read reactions and Reader responses from the community.', 'Open Profile anytime to review this tour or manage your account.'] },
+  { eyebrow: '02 / PLAN', title: 'Give the idea a shape.', body: 'Use Plan to find the thread, choose a structure, and turn a big project into smaller writing parts.', icon: '⌁', accent: '#EEF6FF', iconBackground: '#D8EBFF', steps: ['Capture the big idea, reader, or central thread.', 'Choose the parts, goals, and optional visuals your book needs.', 'Adjust the plan, pace, and reminders whenever the work changes.'] },
+  { eyebrow: '03 / WRITE', title: 'Make words at your pace.', body: 'Write one part at a time with the keyboard or dictation, then let Bookez keep your place and progress visible.', icon: '✎', accent: '#FFF5E9', iconBackground: '#FFE2BC', steps: ['Open Write to draft the next part.', 'Tap the microphone beside a writing field when speaking is easier.', 'Open the focus tools for goals, sessions, notes, checkpoints, and revision helpers.'] },
+  { eyebrow: '04 / NOTICE PROGRESS', title: 'Follow the path, not the pressure.', body: 'Journey turns progress into small checkpoints, while Stats helps you notice your rhythm over time.', icon: '◌', accent: '#EFF9F1', iconBackground: '#D7F0DC', steps: ['Tap Journey dots to see what each step means.', 'Use Stats for words, time, pages, sessions, and milestones.', 'Small completed steps add up to a finished manuscript.'] },
+  { eyebrow: '05 / BOOK STUDIO', title: 'See the book take shape.', body: 'When you are ready to step back from the draft, Book Studio brings the pieces together and helps you share the finished work.', icon: '▣', accent: '#FFF8EA', iconBackground: '#FFE5B7', steps: ['Assemble your title page, front matter, chapters, and visuals.', 'Read the book or listen with your chosen reading voice.', 'Preview and export to the format that fits your next step.'] },
+  { eyebrow: '06 / WRITE WITH A LITTLE HELP', title: 'Your voice stays yours.', body: 'AI tools and the writing tool belt offer possibilities beside your draft. You choose what to keep, change, or leave behind.', icon: '✦', accent: '#F1EEFF', iconBackground: '#DCD4FF', kind: 'ai', steps: ['Select a passage, then choose Continue, Improve, Brainstorm, or another tool.', 'Read the preview before anything changes.', 'Use the tool belt for goals, versions, research, outline, continuity, find, and private flags.'] },
+  { eyebrow: '07 / COMMUNITY', title: 'Invite readers in thoughtfully.', body: 'Community is for sharing selected writing and asking focused questions while keeping your drafts under your control.', icon: '♡', accent: '#FFF0F0', iconBackground: '#FFD9DC', steps: ['Share a project only when you are ready.', 'Ask for feedback on a specific part and question.', 'Read reactions and private Reader responses from other writers.'] },
+  { eyebrow: '08 / PROFILE', title: 'Keep the rest close by.', body: 'Profile is your home for the settings that make Bookez feel like yours—and the place to return to this tour whenever you need it.', icon: '◉', accent: '#EEF6FF', iconBackground: '#D8EBFF', steps: ['Manage cloud backup, account access, and local storage.', 'Set writing reminders and your reading voice.', 'Find help, privacy, feedback, and this tour anytime.'] },
 ];
 
 function AIOnboardingDemo() {
@@ -5932,6 +5942,7 @@ function BookezOnboarding({ visible, onFinish }: { visible: boolean; onFinish: (
   const [slideIndex, setSlideIndex] = useState(0);
   const slide = onboardingSlides[slideIndex];
   const isLast = slideIndex === onboardingSlides.length - 1;
+  const progressLabel = `${slideIndex + 1} of ${onboardingSlides.length}`;
 
   useEffect(() => {
     if (visible) setSlideIndex(0);
@@ -5951,8 +5962,8 @@ function BookezOnboarding({ visible, onFinish }: { visible: boolean; onFinish: (
         <Text style={onboardingS.title}>{slide.title}</Text>
         <Text style={onboardingS.body}>{slide.body}</Text>
         <View style={onboardingS.steps}>{slide.steps.map((step) => <View key={step} style={onboardingS.step}><View style={[onboardingS.stepDot, { backgroundColor: slide.iconBackground }]} /><Text style={onboardingS.stepText}>{step}</Text></View>)}</View>
-        <View style={onboardingS.progress}>{onboardingSlides.map((item, index) => <View key={item.eyebrow} style={[onboardingS.progressDot, index === slideIndex && { width: 22, backgroundColor: C.periwinkle }]} />)}</View>
-        <View style={onboardingS.footer}><Pressable onPress={slideIndex > 0 ? () => setSlideIndex((current) => current - 1) : onFinish} style={onboardingS.secondaryButton}><Text style={onboardingS.secondaryButtonText}>{slideIndex > 0 ? 'Back' : 'Skip tour'}</Text></Pressable><Pressable onPress={next} style={onboardingS.primaryButton}><Text style={onboardingS.primaryButtonText}>{isLast ? 'Start exploring' : 'Next'}</Text><Text style={onboardingS.primaryButtonArrow}>→</Text></Pressable></View>
+        <View style={onboardingS.progress} accessibilityLabel={`Tour step ${progressLabel}`}><View style={onboardingS.progressDots}>{onboardingSlides.map((item, index) => <View key={item.eyebrow} style={[onboardingS.progressDot, index === slideIndex && { width: 22, backgroundColor: C.periwinkle }]} />)}</View><Text style={onboardingS.progressLabel}>{progressLabel}</Text></View>
+        <View style={onboardingS.footer}><Pressable onPress={slideIndex > 0 ? () => setSlideIndex((current) => current - 1) : onFinish} style={onboardingS.secondaryButton} accessibilityRole="button" accessibilityLabel={slideIndex > 0 ? 'Go back in Bookez tour' : 'Skip Bookez tour'}><Text style={onboardingS.secondaryButtonText}>{slideIndex > 0 ? 'Back' : 'Skip tour'}</Text></Pressable><Pressable onPress={next} style={onboardingS.primaryButton} accessibilityRole="button" accessibilityLabel={isLast ? 'Finish Bookez tour' : `Go to tour step ${slideIndex + 2}`}><Text style={onboardingS.primaryButtonText}>{isLast ? 'Start exploring' : 'Next'}</Text><Text style={onboardingS.primaryButtonArrow}>→</Text></Pressable></View>
       </View>
     </View>
   </Modal>;
@@ -6011,11 +6022,12 @@ function Profile({ projects, reminders, onRemindersChange, smartReminders, onSma
   const [accountAction, setAccountAction] = useState<AccountAction | null>(null);
   const [authOpen, setAuthOpen] = useState(false);
   const [cloudEmail, setCloudEmail] = useState<string | null>(null);
-  const [cloudProfile, setCloudProfile] = useState<{ id: string; displayName: string; createdAt: string | null } | null>(null);
+  const [cloudProfile, setCloudProfile] = useState<{ id: string; displayName: string; bio: string | null; createdAt: string | null } | null>(null);
   const [profileAvatarUri, setProfileAvatarUri] = useState<string | null>(null);
   const [profileAvatarBusy, setProfileAvatarBusy] = useState(false);
   const [profileEditOpen, setProfileEditOpen] = useState(false);
   const [profileNameDraft, setProfileNameDraft] = useState('');
+  const [profileBioDraft, setProfileBioDraft] = useState('');
   const [profileSaveBusy, setProfileSaveBusy] = useState(false);
   const [profileSaveError, setProfileSaveError] = useState('');
   const [aboutOpen, setAboutOpen] = useState(false);
@@ -6041,10 +6053,10 @@ function Profile({ projects, reminders, onRemindersChange, smartReminders, onSma
     return { projects: activeProjects.length, chapters: drafts.length, words: drafts.reduce((total, draft) => total + countWords(draft), 0) };
   }, [projects]);
   useEffect(() => {
-    const applySession = (session: { user?: { id: string; email?: string | null; user_metadata?: { display_name?: string | null }; created_at?: string } } | null) => {
+    const applySession = (session: { user?: { id: string; email?: string | null; user_metadata?: { display_name?: string | null; bio?: string | null }; created_at?: string } } | null) => {
       const user = session?.user;
       setCloudEmail(user?.email ?? null);
-      setCloudProfile(user ? { id: user.id, displayName: user.user_metadata?.display_name?.trim() ?? '', createdAt: user.created_at ?? null } : null);
+      setCloudProfile(user ? { id: user.id, displayName: user.user_metadata?.display_name?.trim() ?? '', bio: user.user_metadata?.bio?.trim() ?? null, createdAt: user.created_at ?? null } : null);
     };
     supabase.auth.getSession().then(({ data: { session } }) => applySession(session));
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => applySession(session));
@@ -6057,7 +6069,8 @@ function Profile({ projects, reminders, onRemindersChange, smartReminders, onSma
     let active = true;
     void (async () => {
       try {
-        const { data } = await supabase.from('community_profiles').select('avatar_path').eq('user_id', userId).maybeSingle();
+        const { data } = await supabase.from('community_profiles').select('avatar_path,bio').eq('user_id', userId).maybeSingle();
+        if (active && data?.bio !== undefined) setCloudProfile((current) => current?.id === userId ? { ...current, bio: data.bio } : current);
         const avatarPath = data?.avatar_path ?? null;
         if (!active) return;
         if (!avatarPath) { setProfileAvatarUri(null); return; }
@@ -6081,6 +6094,7 @@ function Profile({ projects, reminders, onRemindersChange, smartReminders, onSma
   const openProfileEditor = () => {
     if (!cloudProfile) { setAuthOpen(true); return; }
     setProfileNameDraft(cloudProfile.displayName);
+    setProfileBioDraft(cloudProfile.bio ?? '');
     setProfileSaveError('');
     setProfileEditOpen(true);
   };
@@ -6093,7 +6107,9 @@ function Profile({ projects, reminders, onRemindersChange, smartReminders, onSma
       if (authResult.error) throw authResult.error;
       const profileResult = await supabase.from('profiles').update({ display_name: displayName || null }).eq('user_id', cloudProfile.id);
       if (profileResult.error) throw profileResult.error;
-      setCloudProfile({ ...cloudProfile, displayName });
+      const communityProfileResult = await supabase.from('community_profiles').upsert({ user_id: cloudProfile.id, display_name: displayName || 'Bookez writer', bio: profileBioDraft.trim() || null }, { onConflict: 'user_id' });
+      if (communityProfileResult.error) throw communityProfileResult.error;
+      setCloudProfile({ ...cloudProfile, displayName, bio: profileBioDraft.trim() || null });
       setProfileEditOpen(false);
     } catch (caught) {
       setProfileSaveError(caught instanceof Error ? caught.message : 'We could not save your profile right now.');
@@ -6104,20 +6120,14 @@ function Profile({ projects, reminders, onRemindersChange, smartReminders, onSma
 
   const chooseProfileAvatar = async () => {
     if (!cloudProfile) { setAuthOpen(true); return; }
-    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!permission.granted) { Alert.alert('Photo access needed', 'Allow Bookez to access your photos so you can choose a profile picture.'); return; }
-    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], allowsEditing: true, aspect: [1, 1], quality: 0.8 });
-    if (result.canceled || !result.assets[0]) return;
     setProfileAvatarBusy(true);
     try {
-      const asset = result.assets[0];
-      const { path } = await uploadBookezProfileAvatar(cloudProfile.id, asset.uri, asset.mimeType ?? 'image/jpeg');
-      const { error } = await supabase.from('community_profiles').upsert({ user_id: cloudProfile.id, avatar_path: path }, { onConflict: 'user_id' });
-      if (error) throw error;
-      const { data: signed } = await supabase.storage.from('bookez-files').createSignedUrl(path, 60 * 60);
-      setProfileAvatarUri(signed?.signedUrl ?? asset.uri);
+      const result = await moderateAndUploadBookezProfileAvatar(cloudProfile.id);
+      if (!result) return;
+      const { data: signed } = await supabase.storage.from('bookez-files').createSignedUrl(result.path, 60 * 60);
+      setProfileAvatarUri(signed?.signedUrl ?? result.previewUri);
     } catch (caught) {
-      Alert.alert('Could not save your profile picture', caught instanceof Error ? caught.message : 'Please try again.');
+      Alert.alert('Could not save your profile picture', profileAvatarErrorMessage(caught));
     } finally {
       setProfileAvatarBusy(false);
     }
@@ -6242,6 +6252,13 @@ function Profile({ projects, reminders, onRemindersChange, smartReminders, onSma
               : 'Synced securely';
 
   return <><View style={s.profileHero}><View style={s.profileHeroIdentity}><Pressable onPress={() => void chooseProfileAvatar()} disabled={profileAvatarBusy} style={[s.profileAvatar, s.profileAvatarCompact]} accessibilityRole="button" accessibilityLabel={cloudProfile ? 'Choose profile picture' : 'Sign in to choose a profile picture'}>{profileAvatarUri ? <Image source={{ uri: profileAvatarUri }} style={s.profileAvatarImage} resizeMode="cover" /> : <Text style={[s.profileAvatarText, s.profileAvatarTextCompact]}>{profileInitials}</Text>}<View style={[s.profileHalo, s.profileHaloCompact]} />{cloudProfile ? <View style={s.profileAvatarEditBadge}><Text style={s.profileAvatarEditBadgeText}>{profileAvatarBusy ? '…' : '✎'}</Text></View> : null}</Pressable><View style={s.profileHeroCopy}><Text style={s.profileOverline}>BOOKEZ WRITER</Text><Text numberOfLines={1} style={[s.profileName, s.profileNameInHero]}>{profileDisplayName}</Text><Text numberOfLines={2} style={s.profileEmail}>{cloudEmail ?? 'Sign in to sync your writing across devices'}</Text><Text style={s.profileMemberSince}>{memberSince}</Text></View></View><Pressable onPress={openProfileEditor} style={s.profileEditButton} accessibilityRole="button" accessibilityLabel={cloudProfile ? 'Edit profile' : 'Sign in to sync your writing'}><Text style={s.profileEditButtonText}>{cloudProfile ? 'Edit profile' : 'Sign in to sync'}</Text></Pressable></View>
+    <WriterProfileSummaryCard userId={cloudProfile?.id ?? null} refreshKey={`${projects.length}:${projects.map((project) => project.cloudId).join(',')}`} onEdit={cloudProfile ? openProfileEditor : undefined} />
+    <Text style={s.preferenceTitle}>Getting started</Text>
+    <View style={s.onboardingProfileCard}>
+      <View style={s.onboardingProfileGlow} />
+      <View style={s.onboardingProfileHeader}><View style={s.onboardingProfileIcon}><Text style={s.onboardingProfileIconText}>✦</Text></View><View style={s.onboardingProfileCopy}><Text style={s.onboardingProfileKicker}>YOUR BOOKEZ MAP</Text><Text style={s.onboardingProfileTitle}>Find your way around.</Text><Text style={s.onboardingProfileSub}>A quick, visual tour of every part of the writing space.</Text></View></View>
+      <Pressable onPress={onOpenOnboarding} style={s.onboardingProfileButton} accessibilityRole="button" accessibilityLabel="Review the Bookez quick tour"><Text style={s.onboardingProfileButtonText}>Review the tour</Text><Text style={s.onboardingProfileButtonArrow}>→</Text></Pressable>
+    </View>
     <Text style={s.preferenceTitle}>Cloud Sync</Text>
     <View style={syncS.dropdown}>
       <Pressable onPress={() => setCloudSyncPanelOpen((current) => !current)} style={syncS.dropdownHeader} accessibilityRole="button" accessibilityState={{ expanded: cloudSyncPanelOpen }} accessibilityLabel={cloudSyncPanelOpen ? 'Collapse cloud sync controls' : 'Expand cloud sync controls'}>
@@ -6288,10 +6305,6 @@ function Profile({ projects, reminders, onRemindersChange, smartReminders, onSma
         <Pressable onPress={closeSpeechVoicePicker} style={s.voiceDoneButton}><Text style={s.voiceDoneButtonText}>Done</Text></Pressable>
       </View></View>
     </Modal>
-    <Text style={s.preferenceTitle}>Getting started</Text>
-    <View style={s.settingsCard}>
-      <Pressable onPress={onOpenOnboarding} style={[s.settingsRow, { alignItems: 'center' }]} accessibilityRole="button" accessibilityLabel="Review the Bookez quick tour"><View style={s.settingsRowCopy}><View style={[s.settingsIcon, s.settingsIconBlue]}><Text style={s.settingsIconText}>✦</Text></View><View style={{ flex: 1, minWidth: 0, marginRight: 10 }}><Text style={s.settingsText}>Review the Bookez tour</Text><Text style={s.settingsSub}>See how Library, Plan, Write, Journey, Stats, and Community fit together</Text></View></View><Text style={s.chevron}>›</Text></Pressable>
-    </View>
     <Text style={s.preferenceTitle}>Help & information</Text>
     <View style={s.settingsCard}>
       <Pressable onPress={() => openSupport('help')} style={s.settingsRow} accessibilityRole="button"><View style={s.settingsRowCopy}><View style={[s.settingsIcon, s.settingsIconBlue]}><Text style={s.settingsIconText}>?</Text></View><View><Text style={s.settingsText}>Help with Bookez</Text><Text style={s.settingsSub}>Find your way around planning, writing, and sync</Text></View></View><Text style={s.chevron}>›</Text></Pressable>
@@ -6335,7 +6348,7 @@ function Profile({ projects, reminders, onRemindersChange, smartReminders, onSma
     </Modal>
 
     <Modal animationType="slide" visible={profileEditOpen} transparent onRequestClose={() => setProfileEditOpen(false)}>
-      <View style={s.profileModalShade}><Pressable style={s.profileModalDismiss} onPress={() => setProfileEditOpen(false)} /><View style={s.profileEditSheet}><View style={s.sheetHandle} /><Text style={s.legalOverline}>YOUR BOOKEZ PROFILE</Text><Text style={s.profileEditTitle}>Make it yours.</Text><Text style={s.profileEditCopy}>Your display name appears on this device and in your Bookez cloud profile.</Text><TextInput value={profileNameDraft} onChangeText={setProfileNameDraft} placeholder="Display name" placeholderTextColor="#9A9DB7" style={s.profileEditInput} autoCapitalize="words" accessibilityLabel="Display name" />{profileSaveError ? <Text style={s.profileEditError}>{profileSaveError}</Text> : null}<Pressable onPress={saveProfileName} disabled={profileSaveBusy} style={[s.confirmButton, profileSaveBusy && s.profileSaveDisabled]}><Text style={s.confirmButtonText}>{profileSaveBusy ? 'Saving…' : 'Save profile'}</Text></Pressable><Pressable onPress={() => setProfileEditOpen(false)} style={s.cancelButton}><Text style={s.cancelButtonText}>Cancel</Text></Pressable></View></View>
+      <View style={s.profileModalShade}><Pressable style={s.profileModalDismiss} onPress={() => setProfileEditOpen(false)} /><View style={s.profileEditSheet}><View style={s.sheetHandle} /><Text style={s.legalOverline}>YOUR BOOKEZ PROFILE</Text><Text style={s.profileEditTitle}>Make it yours.</Text><Text style={s.profileEditCopy}>Your display name and short bio appear on your public writer profile when you share a book.</Text><TextInput value={profileNameDraft} onChangeText={setProfileNameDraft} placeholder="Display name" placeholderTextColor="#9A9DB7" style={s.profileEditInput} autoCapitalize="words" accessibilityLabel="Display name" /><TextInput value={profileBioDraft} onChangeText={setProfileBioDraft} placeholder="A short bio (optional)" placeholderTextColor="#9A9DB7" style={[s.profileEditInput, { minHeight: 74, paddingTop: 12, paddingBottom: 12 }]} multiline maxLength={180} textAlignVertical="top" accessibilityLabel="Profile bio" />{profileSaveError ? <Text style={s.profileEditError}>{profileSaveError}</Text> : null}<Pressable onPress={saveProfileName} disabled={profileSaveBusy} style={[s.confirmButton, profileSaveBusy && s.profileSaveDisabled]}><Text style={s.confirmButtonText}>{profileSaveBusy ? 'Saving…' : 'Save profile'}</Text></Pressable><Pressable onPress={() => setProfileEditOpen(false)} style={s.cancelButton}><Text style={s.cancelButtonText}>Cancel</Text></Pressable></View></View>
     </Modal>
 
     <Modal animationType="fade" visible={aboutOpen} transparent onRequestClose={() => setAboutOpen(false)}>
@@ -6970,17 +6983,32 @@ export default Sentry.wrap(function App() {
     if (!authReady || !storageReady || !onboardingOwner) return;
     let mounted = true;
     setOnboardingOwnerChecked(null);
-    bookezSecureStorage.getItem(onboardingStorageKey(onboardingOwner)).then((seenVersion) => {
-      if (!mounted) return;
-      setOnboardingOwnerChecked(onboardingOwner);
-      setOnboardingVisible(seenVersion !== onboardingVersion);
-    }).catch(() => {
-      if (!mounted) return;
-      setOnboardingOwnerChecked(onboardingOwner);
-      setOnboardingVisible(true);
-    });
+    const loadOnboardingState = async () => {
+      try {
+        const localMarker = await bookezSecureStorage.getItem(onboardingStorageKey(onboardingOwner));
+        let remoteCompleted = false;
+        if (cloudUserId) {
+          const { data, error } = await supabase.from('profiles').select('onboarding_completed').eq('user_id', cloudUserId).maybeSingle();
+          if (error) throw error;
+          remoteCompleted = data?.onboarding_completed === true;
+        }
+        const completed = Boolean(localMarker) || remoteCompleted;
+        if (completed && !localMarker) void bookezSecureStorage.setItem(onboardingStorageKey(onboardingOwner), onboardingVersion);
+        if (!mounted) return;
+        setOnboardingOwnerChecked(onboardingOwner);
+        setOnboardingVisible(!completed);
+      } catch {
+        // If storage or the profile check is temporarily unavailable, preserve a
+        // local completion marker and fail closed for returning users.
+        const localMarker = await bookezSecureStorage.getItem(onboardingStorageKey(onboardingOwner)).catch(() => null);
+        if (!mounted) return;
+        setOnboardingOwnerChecked(onboardingOwner);
+        setOnboardingVisible(!localMarker);
+      }
+    };
+    void loadOnboardingState();
     return () => { mounted = false; };
-  }, [authReady, onboardingOwner, storageReady]);
+  }, [authReady, cloudUserId, onboardingOwner, storageReady]);
   useEffect(() => {
     if (storageReady && cloudUserId && cloudMigrationReady && cloudBackupEnabled) void runBookezSync();
   }, [cloudUserId, storageReady, cloudMigrationReady, cloudBackupEnabled]);
@@ -7128,8 +7156,11 @@ export default Sentry.wrap(function App() {
     }
   };
   const completeOnboarding = () => {
+    const completedOwner = onboardingOwner;
     setOnboardingVisible(false);
-    if (onboardingOwner) void bookezSecureStorage.setItem(onboardingStorageKey(onboardingOwner), onboardingVersion);
+    if (!completedOwner) return;
+    void bookezSecureStorage.setItem(onboardingStorageKey(completedOwner), onboardingVersion);
+    if (cloudUserId) void markBookezOnboardingCompleted(cloudUserId).catch(() => undefined);
   };
   const openBookStudio = (title: string, section: StudioSection) => { setActiveProject(title); setStudioRoute({ title, section }); setPage('BookStudio'); };
   const openWritingBook = (title: string) => { setActiveProject(title); setPage('Write'); };
@@ -7165,7 +7196,7 @@ export default Sentry.wrap(function App() {
   const renderPage = () => {
     if (page === 'Library') return <Library projects={projects} activeProject={activeProject} userId={cloudUserId} onPage={setPage} onSelectProject={setActiveProject} onProjectsChange={setProjects} onOpenBookStudio={openBookStudio} onOpenWritingBook={openWritingBook} />;
     if (page === 'Plan') return <Plan projects={projects} activeProject={activeProject} onSelectProject={setActiveProject} onUpdateProject={updateProject} onPage={setPage} onOpenWritingBook={openWritingBook} />;
-    if (page === 'Write') return <Write projects={projects} activeProject={activeProject} onOpenWritingBook={openWritingBook} onUpdateProject={updateProject} />;
+    if (page === 'Write') return <Write projects={projects} activeProject={activeProject} userId={cloudUserId} onOpenWritingBook={openWritingBook} onUpdateProject={updateProject} />;
     if (page === 'Journey') {
       const journeyProject = projects.find((project) => project.title === activeProject) ?? projects[0];
       return journeyProject ? <Journey projects={projects} activeProject={activeProject} onSelectProject={setActiveProject} onUpdateProject={updateProject} onPage={setPage} onBack={() => setPage('Library')} onOpenBookStudio={openBookStudio} onOpenWritingBook={openWritingBook} scrollY={journeyScrollY} /> : <JourneyEmptyState onBack={() => setPage('Library')} onPage={setPage} />;
@@ -7725,8 +7756,10 @@ const onboardingS = StyleSheet.create({
   step: { flexDirection: 'row', alignItems: 'flex-start' },
   stepDot: { width: 8, height: 8, borderRadius: 4, marginTop: 4, marginRight: 9 },
   stepText: { flex: 1, color: '#565E80', fontSize: 10, lineHeight: 15 },
-  progress: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, marginTop: 20 },
+  progress: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 9, marginTop: 20 },
+  progressDots: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5 },
   progressDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: '#DCD9E9' },
+  progressLabel: { color: '#9A9CB1', fontSize: 8, fontWeight: '700', letterSpacing: 0.3 },
   footer: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 18 },
   secondaryButton: { minHeight: 45, justifyContent: 'center', paddingHorizontal: 8 },
   secondaryButtonText: { color: C.muted, fontSize: 10, fontWeight: '700' },
@@ -7831,6 +7864,11 @@ const s: any = Object.assign(StyleSheet.create({
   coverSetupHeader: { flexDirection: 'row', alignItems: 'flex-start' }, coverSetupIcon: { width: 36, height: 36, borderRadius: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFF1D0' }, coverSetupIconText: { color: '#A97819', fontSize: 17 }, coverSetupCopy: { flex: 1, marginLeft: 10 }, coverSetupTitle: { color: C.ink, fontSize: 15, fontWeight: '700', marginTop: 3 }, coverSetupHint: { color: C.muted, fontSize: 9, lineHeight: 13, marginTop: 4 }, coverSetupEmpty: { marginTop: 12, minHeight: 62, paddingHorizontal: 10, borderRadius: 15, backgroundColor: '#FFF8EA', flexDirection: 'row', alignItems: 'center' }, coverSetupEmptyIcon: { width: 31, height: 31, borderRadius: 11, backgroundColor: '#FFF', color: '#A97819', fontSize: 21, lineHeight: 29, textAlign: 'center', marginRight: 9 }, coverSetupEmptyTitle: { color: C.ink, fontSize: 10, fontWeight: '700' }, coverSetupEmptyHint: { color: C.muted, fontSize: 8, marginTop: 3 }, coverSetupEmptyArrow: { color: '#A97819', fontSize: 20, marginLeft: 'auto' }, coverSetupPreviewRow: { marginTop: 12, padding: 9, borderRadius: 15, backgroundColor: '#FFF8EA', flexDirection: 'row', alignItems: 'center' }, coverSetupPreview: { width: 62, height: 81, borderRadius: 9, backgroundColor: '#E8E6F4' }, coverSetupPreviewCopy: { flex: 1, marginLeft: 10 }, coverSetupImageTitle: { color: C.ink, fontSize: 10, fontWeight: '700' }, coverSetupImageMeta: { color: C.muted, fontSize: 8, lineHeight: 12, marginTop: 4 }, coverSetupActions: { flexDirection: 'row', gap: 6, marginTop: 8 }, coverSetupSecondary: { minHeight: 27, paddingHorizontal: 9, borderRadius: 9, backgroundColor: '#F0EDFF', alignItems: 'center', justifyContent: 'center' }, coverSetupSecondaryText: { color: C.periwinkle, fontSize: 8, fontWeight: '700' }, coverSetupRemove: { minHeight: 27, paddingHorizontal: 9, borderRadius: 9, backgroundColor: '#FFF0EC', alignItems: 'center', justifyContent: 'center' }, coverSetupRemoveText: { color: '#C96567', fontSize: 8, fontWeight: '700' },
   coverImage: { width: '100%', height: '100%', borderRadius: 11 },
 }));
+
+Object.assign(s, {
+  focusTitle: [s.focusTitle, { maxWidth: '70%' }], focusCopy: [s.focusCopy, { maxWidth: '70%' }], focusProgress: [s.focusProgress, { maxWidth: '70%' }], focusCoverPeek: { position: 'absolute', top: 54, right: 17, width: 54, height: 76, borderRadius: 11, overflow: 'hidden', borderWidth: 2, borderColor: 'rgba(255,255,255,0.8)', shadowColor: '#3D3A75', shadowOpacity: 0.2, shadowRadius: 9, shadowOffset: { width: 0, height: 5 }, elevation: 4, opacity: 0.86 }, focusCoverFallback: { flex: 1, alignItems: 'center', justifyContent: 'center' }, focusCoverFallbackText: { color: '#FFF', fontSize: 25, fontWeight: '800' }, focusCoverImage: { width: '100%', height: '100%' }, focusCoverVeil: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, backgroundColor: 'rgba(32,41,84,0.12)' },
+  onboardingProfileCard: { marginTop: 0, padding: 15, borderRadius: 22, backgroundColor: '#F0EDFF', borderWidth: 1, borderColor: '#DCD5FC', overflow: 'hidden' }, onboardingProfileGlow: { position: 'absolute', width: 190, height: 190, borderRadius: 95, right: -68, top: -100, backgroundColor: 'rgba(255,255,255,0.5)' }, onboardingProfileHeader: { flexDirection: 'row', alignItems: 'center' }, onboardingProfileIcon: { width: 43, height: 43, borderRadius: 16, alignItems: 'center', justifyContent: 'center', backgroundColor: C.periwinkle }, onboardingProfileIconText: { color: '#FFF', fontSize: 21 }, onboardingProfileCopy: { flex: 1, minWidth: 0, marginLeft: 11 }, onboardingProfileKicker: { color: '#7771B7', fontSize: 7, letterSpacing: 0.85, fontWeight: '800' }, onboardingProfileTitle: { color: C.ink, fontSize: 16, fontWeight: '800', marginTop: 3 }, onboardingProfileSub: { color: '#6E6B8E', fontSize: 9, lineHeight: 13, marginTop: 3 }, onboardingProfileButton: { minHeight: 39, marginTop: 13, paddingHorizontal: 12, borderRadius: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#FFF' }, onboardingProfileButtonText: { color: C.ink, fontSize: 10, fontWeight: '800' }, onboardingProfileButtonArrow: { color: C.periwinkle, fontSize: 18 },
+});
 
 Object.assign(s, {
   writeEditorActionGroup: { flexDirection: 'row', alignItems: 'center', gap: 5 },

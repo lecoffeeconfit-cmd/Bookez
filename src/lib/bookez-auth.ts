@@ -156,3 +156,8 @@ export async function ensureBookezProfile(userId: string, displayName?: string) 
   }
   return inserted.data;
 }
+
+export async function markBookezOnboardingCompleted(userId: string) {
+  const { error } = await supabase.from('profiles').update({ onboarding_completed: true }).eq('user_id', userId);
+  if (error) throw error;
+}
