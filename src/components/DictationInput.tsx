@@ -1,6 +1,10 @@
 import { requireOptionalNativeModule } from 'expo';
+import { LinearGradient } from 'expo-linear-gradient';
 import { forwardRef, useEffect, useRef, useState, type ReactNode } from 'react';
-import { Alert, Pressable, StyleSheet, Text, TextInput, type TextInputProps, View } from 'react-native';
+import { Alert, Animated, Easing, Pressable, StyleSheet, Text, TextInput, type TextInputProps, View } from 'react-native';
+import { bookezColors } from '../theme/bookez';
+import { useBookezReduceMotion } from './BookezUI';
+import { BookezBookmark, BookezManuscript } from './bookez-art';
 
 type SpeechRecognitionPackage = typeof import('expo-speech-recognition');
 
@@ -12,6 +16,7 @@ type InputMode = 'dictation' | 'writing';
 
 type DictationInputProps = TextInputProps & {
   grow?: boolean;
+  editorial?: boolean;
   trailingAccessory?: ReactNode;
   trailingAccessoryWidth?: number;
   onInputMode?: (mode: InputMode) => void;
@@ -21,10 +26,45 @@ type DictationInputProps = TextInputProps & {
 let nextDictationInputId = 0;
 let activeDictationInputId: string | null = null;
 
-const KeyboardDictationInput = forwardRef<TextInput, DictationInputProps>(function KeyboardDictationInput({ style, accessibilityLabel, grow = false, trailingAccessory, trailingAccessoryWidth = 76, onInputMode, onDictationState, onKeyPress, ...props }, ref) {
+function ManuscriptSurface({ pulseKey }: { pulseKey: string }) {
+  const reduceMotion = useBookezReduceMotion();
+  const pull = useRef(new Animated.Value(0)).current;
+  const previousPulseKey = useRef(pulseKey);
+
+  useEffect(() => {
+    if (previousPulseKey.current === pulseKey) return;
+    previousPulseKey.current = pulseKey;
+    pull.stopAnimation();
+    pull.setValue(0);
+    if (reduceMotion) return;
+    const timer = setTimeout(() => {
+      Animated.sequence([
+        Animated.timing(pull, { toValue: 1, duration: 150, easing: Easing.out(Easing.quad), useNativeDriver: true, isInteraction: false }),
+        Animated.timing(pull, { toValue: 0, duration: 310, easing: Easing.out(Easing.cubic), useNativeDriver: true, isInteraction: false }),
+      ]).start();
+    }, 850);
+    return () => clearTimeout(timer);
+  }, [pull, pulseKey, reduceMotion]);
+
+  return <>
+    <View pointerEvents="none" style={s.manuscriptPageStack} />
+    <LinearGradient pointerEvents="none" colors={['#FBF6EC', '#F5EBDD', '#FAF3E7']} start={{ x: 0.05, y: 0 }} end={{ x: 0.92, y: 1 }} style={s.manuscriptPaper} />
+    <LinearGradient pointerEvents="none" colors={['rgba(133,96,55,0.16)', 'rgba(133,96,55,0.035)', 'rgba(133,96,55,0)']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={s.manuscriptEdgeLeft} />
+    <LinearGradient pointerEvents="none" colors={['rgba(133,96,55,0)', 'rgba(133,96,55,0.03)', 'rgba(133,96,55,0.14)']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={s.manuscriptEdgeRight} />
+    <LinearGradient pointerEvents="none" colors={['rgba(133,96,55,0)', 'rgba(133,96,55,0.11)']} start={{ x: 0, y: 0 }} end={{ x: 0, y: 1 }} style={s.manuscriptEdgeBottom} />
+    <View pointerEvents="none" style={s.manuscriptPatinaOne} />
+    <View pointerEvents="none" style={s.manuscriptPatinaTwo} />
+    <View pointerEvents="none" style={s.manuscriptPatinaThree} />
+    <Animated.View pointerEvents="none" style={[s.manuscriptBookmark, { transform: [{ translateY: pull.interpolate({ inputRange: [0, 1], outputRange: [0, 4] }) }, { rotate: pull.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '1.5deg'] }) }, { scale: pull.interpolate({ inputRange: [0, 1], outputRange: [1, 1.02] }) }] }]}><BookezBookmark width={22} height={35} color={bookezColors.secondaryAccent} /></Animated.View>
+    <View pointerEvents="none" style={s.manuscriptRule}><BookezManuscript width={155} height={18} color={bookezColors.textPrimary} accent={bookezColors.manuscriptEdge} /></View>
+  </>;
+}
+
+const KeyboardDictationInput = forwardRef<TextInput, DictationInputProps>(function KeyboardDictationInput({ style, accessibilityLabel, grow = false, editorial = false, trailingAccessory, trailingAccessoryWidth = 76, onInputMode, onDictationState, onKeyPress, ...props }, ref) {
   const inputRef = useRef<TextInput>(null);
   const keyboardDictationRef = useRef(false);
   const fieldName = accessibilityLabel ? ` for ${accessibilityLabel}` : '';
+  const manuscript = editorial && accessibilityLabel?.toLowerCase().endsWith('manuscript');
   const endKeyboardDictation = () => {
     if (!keyboardDictationRef.current) return;
     keyboardDictationRef.current = false;
@@ -38,18 +78,18 @@ const KeyboardDictationInput = forwardRef<TextInput, DictationInputProps>(functi
     inputRef.current?.focus();
   };
 
-  return <View style={[s.field, grow && s.fieldGrow]}>
-    <TextInput ref={(instance) => { inputRef.current = instance; if (typeof ref === 'function') ref(instance); else if (ref) ref.current = instance; }} {...props} showSoftInputOnFocus onKeyPress={(event) => { onKeyPress?.(event); onInputMode?.('writing'); endKeyboardDictation(); }} accessibilityLabel={accessibilityLabel} style={[style, s.input, trailingAccessory ? { paddingRight: trailingAccessoryWidth } : null]} />
-    <View style={s.actionRail}>
+  return <View style={[s.field, manuscript && s.manuscriptField, grow && s.fieldGrow]}>{manuscript && <ManuscriptSurface pulseKey={`${accessibilityLabel ?? ''}:${typeof props.value === 'string' ? props.value : ''}`} />}
+    <TextInput ref={(instance) => { inputRef.current = instance; if (typeof ref === 'function') ref(instance); else if (ref) ref.current = instance; }} {...props} showSoftInputOnFocus onKeyPress={(event) => { onKeyPress?.(event); onInputMode?.('writing'); endKeyboardDictation(); }} accessibilityLabel={accessibilityLabel} style={[style, s.input, manuscript && s.manuscriptInput, trailingAccessory ? { paddingRight: trailingAccessoryWidth } : null]} />
+    <View style={[s.actionRail, manuscript && s.manuscriptActionRail]}>
       {trailingAccessory}
-      <Pressable onPress={openKeyboardForDictation} hitSlop={8} style={s.button} accessibilityRole="button" accessibilityLabel={`Open keyboard dictation${fieldName}`} accessibilityHint="Opens the keyboard. Tap the keyboard microphone to dictate.">
-        <Text style={s.icon}>🎙</Text>
+      <Pressable onPress={openKeyboardForDictation} hitSlop={8} style={[s.button, editorial && s.buttonEditorial]} accessibilityRole="button" accessibilityLabel={`Open keyboard dictation${fieldName}`} accessibilityHint="Opens the keyboard. Tap the keyboard microphone to dictate.">
+        <Text style={[s.icon, editorial && s.iconEditorial]}>◉</Text>
       </Pressable>
     </View>
   </View>;
 });
 
-const NativeDictationInput = forwardRef<TextInput, DictationInputProps>(function NativeDictationInput({ style, accessibilityLabel, grow = false, trailingAccessory, trailingAccessoryWidth = 76, onInputMode, onDictationState, onChangeText, onKeyPress, value, ...props }, ref) {
+const NativeDictationInput = forwardRef<TextInput, DictationInputProps>(function NativeDictationInput({ style, accessibilityLabel, grow = false, editorial = false, trailingAccessory, trailingAccessoryWidth = 76, onInputMode, onDictationState, onChangeText, onKeyPress, value, ...props }, ref) {
   const { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent } = speechRecognition!;
   const [isDictating, setIsDictating] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
@@ -148,12 +188,13 @@ const NativeDictationInput = forwardRef<TextInput, DictationInputProps>(function
 
   const dictating = isDictating || isStarting;
   const fieldName = accessibilityLabel ? ` for ${accessibilityLabel}` : '';
-  return <View style={[s.field, grow && s.fieldGrow]}>
-    <TextInput ref={ref} {...props} value={value} onChangeText={onChangeText} onKeyPress={(event) => { onKeyPress?.(event); onInputMode?.('writing'); onDictationStateRef.current?.(false); }} accessibilityLabel={accessibilityLabel} style={[style, s.input, trailingAccessory ? { paddingRight: trailingAccessoryWidth } : null]} />
-    <View style={s.actionRail}>
+  const manuscript = editorial && accessibilityLabel?.toLowerCase().endsWith('manuscript');
+  return <View style={[s.field, manuscript && s.manuscriptField, grow && s.fieldGrow]}>{manuscript && <ManuscriptSurface pulseKey={`${accessibilityLabel ?? ''}:${typeof value === 'string' ? value : ''}`} />}
+    <TextInput ref={ref} {...props} value={value} onChangeText={onChangeText} onKeyPress={(event) => { onKeyPress?.(event); onInputMode?.('writing'); onDictationStateRef.current?.(false); }} accessibilityLabel={accessibilityLabel} style={[style, s.input, manuscript && s.manuscriptInput, trailingAccessory ? { paddingRight: trailingAccessoryWidth } : null]} />
+    <View style={[s.actionRail, manuscript && s.manuscriptActionRail]}>
       {trailingAccessory}
-      <Pressable onPress={() => void startDictation()} disabled={isStarting} hitSlop={8} style={[s.button, dictating && s.buttonListening]} accessibilityRole="button" accessibilityState={{ busy: isStarting, selected: isDictating }} accessibilityLabel={`${dictating ? 'Stop' : 'Start'} dictation${fieldName}`} accessibilityHint={dictating ? 'Stops dictation and keeps the transcribed text.' : 'Starts dictation directly. The keyboard stays closed.'}>
-        <Text style={s.icon}>{dictating ? '■' : '🎙'}</Text>
+      <Pressable onPress={() => void startDictation()} disabled={isStarting} hitSlop={8} style={[s.button, editorial && s.buttonEditorial, dictating && (editorial ? s.buttonListeningEditorial : s.buttonListening)]} accessibilityRole="button" accessibilityState={{ busy: isStarting, selected: isDictating }} accessibilityLabel={`${dictating ? 'Stop' : 'Start'} dictation${fieldName}`} accessibilityHint={dictating ? 'Stops dictation and keeps the transcribed text.' : 'Starts dictation directly. The keyboard stays closed.'}>
+        <Text style={[s.icon, editorial && s.iconEditorial, dictating && editorial && s.iconListeningEditorial]}>{dictating ? '■' : '◉'}</Text>
       </Pressable>
     </View>
   </View>;
@@ -168,10 +209,27 @@ export default DictationInput;
 const s = StyleSheet.create({
   field: { position: 'relative' },
   fieldGrow: { flex: 1, minWidth: 0 },
+  manuscriptField: { paddingRight: 5, paddingBottom: 6, shadowColor: '#493F35', shadowOpacity: 0.16, shadowRadius: 13, shadowOffset: { width: 0, height: 7 }, elevation: 4 },
+  manuscriptPageStack: { position: 'absolute', top: 5, right: 0, bottom: 0, left: 8, borderRadius: 5, backgroundColor: '#E4D7C3', borderWidth: 1, borderColor: '#D3C1A6', transform: [{ rotate: '0.25deg' }] },
+  manuscriptPaper: { position: 'absolute', top: 0, right: 5, bottom: 6, left: 0, borderRadius: 5, borderWidth: 1, borderColor: bookezColors.manuscriptEdge, overflow: 'hidden' },
+  manuscriptEdgeLeft: { position: 'absolute', top: 4, bottom: 10, left: 1, width: 11, zIndex: 3, opacity: 0.7 },
+  manuscriptEdgeRight: { position: 'absolute', top: 4, right: 6, bottom: 10, width: 10, zIndex: 3, opacity: 0.68 },
+  manuscriptEdgeBottom: { position: 'absolute', right: 9, bottom: 7, left: 4, height: 11, zIndex: 3, opacity: 0.72 },
+  manuscriptPatinaOne: { position: 'absolute', top: 34, left: 15, width: 92, height: 46, borderRadius: 46, backgroundColor: 'rgba(166,126,75,0.026)', zIndex: 3, transform: [{ rotate: '-8deg' }] },
+  manuscriptPatinaTwo: { position: 'absolute', top: 124, right: 25, width: 76, height: 110, borderRadius: 48, backgroundColor: 'rgba(120,92,62,0.018)', zIndex: 3, transform: [{ rotate: '12deg' }] },
+  manuscriptPatinaThree: { position: 'absolute', bottom: 34, left: 42, width: 142, height: 35, borderRadius: 50, backgroundColor: 'rgba(177,138,82,0.022)', zIndex: 3, transform: [{ rotate: '3deg' }] },
+  manuscriptBookmark: { position: 'absolute', top: 7, right: 24, zIndex: 5, opacity: 0.75 },
+  manuscriptRule: { position: 'absolute', top: -2, left: 18, zIndex: 3, opacity: 0.13 },
   input: { paddingRight: 38 },
+  manuscriptInput: { marginRight: 5, marginBottom: 6, zIndex: 4, backgroundColor: 'transparent', borderWidth: 0, borderColor: 'transparent', borderRadius: 5, shadowOpacity: 0, elevation: 0 },
   inputWithAccessory: { paddingRight: 76 },
   actionRail: { position: 'absolute', right: 5, bottom: 8, flexDirection: 'row', alignItems: 'center', gap: 5 },
+  manuscriptActionRail: { right: 11, bottom: 14, zIndex: 6 },
   button: { width: 31, height: 31, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F3F1FC', borderWidth: 1, borderColor: '#DED9EF' },
   buttonListening: { backgroundColor: '#FEE8E8', borderColor: '#F3B5B5' },
+  buttonEditorial: { backgroundColor: bookezColors.accentSoft, borderColor: '#D7AEB9' },
+  buttonListeningEditorial: { backgroundColor: bookezColors.accentStrong, borderColor: bookezColors.accentStrong },
   icon: { color: '#7068C9', fontSize: 13, lineHeight: 16 },
+  iconEditorial: { color: bookezColors.accent },
+  iconListeningEditorial: { color: bookezColors.textOnAccent },
 });

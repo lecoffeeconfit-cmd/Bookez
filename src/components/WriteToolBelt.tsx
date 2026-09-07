@@ -1,5 +1,7 @@
 import { useMemo, useRef, useState } from 'react';
 import { Alert, Animated, Modal, PanResponder, Pressable, ScrollView, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
+import { bookezColors, bookezRadii, bookezShadows, bookezSpacing } from '../theme/bookez';
+import { BookezMysticIcon, BookezQuill } from './bookez-art';
 
 export type WriteToolBeltId = 'top' | 'bottom';
 
@@ -103,29 +105,17 @@ export function sanitizeWriteToolBeltConfig(value: unknown): WriteToolBeltConfig
   return { top, bottom };
 }
 
-type ToolIconProps = { tool: WriteToolDefinition; size?: 'small' | 'large'; style?: StyleProp<ViewStyle> };
+type ToolIconProps = { tool: WriteToolDefinition; size?: 'small' | 'large'; animated?: boolean; style?: StyleProp<ViewStyle> };
 
-function RhythmGlyph({ size }: { size: 'small' | 'large' }) {
-  const faceSize = size === 'large' ? 18 : 20;
-  return <View style={[styles.rhythmGlyph, { width: faceSize + 6, height: faceSize + 7 }]}>
-    <View style={[styles.rhythmGlyphButton, { width: faceSize * 0.28 }]} />
-    <View style={[styles.rhythmGlyphFace, { width: faceSize, height: faceSize, borderRadius: faceSize / 2 }]}>
-      <View style={[styles.rhythmGlyphHand, { height: faceSize * 0.36, top: faceSize * 0.17, transform: [{ rotate: '-18deg' }] }]} />
-      <View style={[styles.rhythmGlyphHand, { height: faceSize * 0.29, top: faceSize * 0.34, transform: [{ rotate: '56deg' }] }]} />
-      <View style={[styles.rhythmGlyphCenter, { width: faceSize * 0.16, height: faceSize * 0.16, borderRadius: faceSize * 0.08 }]} />
-    </View>
-  </View>;
+function ToolIcon({ tool, size = 'large', animated = false, style }: ToolIconProps) {
+  return <BookezMysticIcon name={tool.id} size={size === 'large' ? 31 : 34} surface="jewel" animated={animated} style={style} />;
 }
 
-function ToolIcon({ tool, size = 'large', style }: ToolIconProps) {
-  return <View style={[size === 'large' ? styles.toolIconLarge : styles.toolIconSmall, { backgroundColor: tool.color }, style]}>{tool.id === 'writing-rhythm' ? <RhythmGlyph size={size} /> : <Text style={[size === 'large' ? styles.toolIconTextLarge : styles.toolIconTextSmall, tool.icon.length > 1 && styles.toolIconTextCompact]}>{tool.icon}</Text>}</View>;
-}
-
-function ToolTile({ tool, active, onPress, onLongPress }: { tool: WriteToolDefinition; active: boolean; onPress: () => void; onLongPress: () => void }) {
+function ToolTile({ tool, active, onPress, onLongPress, editorial = false }: { tool: WriteToolDefinition; active: boolean; onPress: () => void; onLongPress: () => void; editorial?: boolean }) {
   const scale = useRef(new Animated.Value(1)).current;
   const animate = (toValue: number) => Animated.spring(scale, { toValue, useNativeDriver: true, speed: 22, bounciness: 3 }).start();
-  return <Pressable onPress={onPress} onLongPress={onLongPress} delayLongPress={480} onPressIn={() => animate(0.95)} onPressOut={() => animate(1)} style={[styles.toolTile, active && styles.toolTileActive]} accessibilityRole="button" accessibilityLabel={tool.name} accessibilityHint={`${tool.description} Long press to customize tool order.`}>
-    <Animated.View style={{ transform: [{ scale }] }}><ToolIcon tool={tool} /></Animated.View>
+  return <Pressable onPress={onPress} onLongPress={onLongPress} delayLongPress={480} onPressIn={() => animate(0.95)} onPressOut={() => animate(1)} style={[styles.toolTile, editorial && editorialStyles.toolTile, active && styles.toolTileActive, active && editorial && editorialStyles.toolTileActive]} accessibilityRole="button" accessibilityLabel={tool.name} accessibilityHint={`${tool.description} Long press to customize tool order.`}>
+    <Animated.View style={{ transform: [{ scale }] }}><ToolIcon tool={tool} animated={active} /></Animated.View>
     <Text numberOfLines={2} style={[styles.toolTileText, active && styles.toolTileTextActive]}>{tool.shortName}</Text>
   </Pressable>;
 }
@@ -158,9 +148,10 @@ type WriteToolBeltProps = {
   onConfigChange: (config: WriteToolBeltConfig) => void;
   activeToolIds?: string[];
   onToolPress: (tool: WriteToolDefinition) => void;
+  editorial?: boolean;
 };
 
-export default function WriteToolBelt({ belt, config, onConfigChange, activeToolIds = [], onToolPress }: WriteToolBeltProps) {
+export default function WriteToolBelt({ belt, config, onConfigChange, activeToolIds = [], onToolPress, editorial = false }: WriteToolBeltProps) {
   const [manageBelt, setManageBelt] = useState<WriteToolBeltId | null>(null);
   const [editing, setEditing] = useState(false);
   const [replaceIndex, setReplaceIndex] = useState<number | null>(null);
@@ -217,19 +208,20 @@ export default function WriteToolBelt({ belt, config, onConfigChange, activeTool
   const restoreDefaults = () => { onConfigChange({ top: [...WRITE_TOOL_DEFAULTS.top], bottom: [...WRITE_TOOL_DEFAULTS.bottom] }); setEditing(false); setReplaceIndex(null); };
   const renderBelt = (nextBelt: WriteToolBeltId, title: string, subtitle: string) => {
     const tools = config[nextBelt].map(findTool).filter((tool): tool is WriteToolDefinition => Boolean(tool));
-    return <View style={styles.beltSection}>
-      <View style={styles.beltHeader}><View style={styles.beltHeaderCopy}><Text style={styles.beltKicker}>{title}</Text><Text style={styles.beltSubtitle}>{subtitle}</Text></View><Pressable onPress={() => openManager(nextBelt)} style={styles.beltManageLink} accessibilityRole="button" accessibilityLabel={`Customize ${title}`}><Text style={styles.beltManageLinkText}>Customize</Text></Pressable></View>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.beltRail}>
-        {tools.map((tool) => <ToolTile key={tool.id} tool={tool} active={activeToolIds.includes(tool.id)} onPress={() => onToolPress(tool)} onLongPress={() => openManager(nextBelt, true)} />)}
-        <Pressable onPress={() => openManager(nextBelt)} style={styles.addToolTile} accessibilityRole="button" accessibilityLabel={`Add or manage ${title}`} accessibilityHint="Open the Customize Tool Belt library"><View style={styles.addToolIcon}><Text style={styles.addToolPlus}>＋</Text></View><Text style={styles.addToolText}>Add</Text></Pressable>
+    return <View style={[styles.beltSection, editorial && editorialStyles.beltSection]}>
+      <View style={styles.beltHeader}><View style={styles.beltHeaderCopy}><Text style={[styles.beltKicker, editorial && editorialStyles.beltKicker]}>{title}</Text><Text style={[styles.beltSubtitle, editorial && editorialStyles.beltSubtitle]}>{subtitle}</Text></View><Pressable onPress={() => openManager(nextBelt)} style={[styles.beltManageLink, editorial && editorialStyles.beltManageLink]} accessibilityRole="button" accessibilityLabel={`Customize ${title}`}><Text style={[styles.beltManageLinkText, editorial && editorialStyles.beltManageLinkText]}>Customize</Text></Pressable></View>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={[styles.beltRail, editorial && editorialStyles.beltRail]}>
+        {tools.map((tool) => <ToolTile key={tool.id} tool={tool} active={activeToolIds.includes(tool.id)} onPress={() => onToolPress(tool)} onLongPress={() => openManager(nextBelt, true)} editorial={editorial} />)}
+        <Pressable onPress={() => openManager(nextBelt)} style={[styles.addToolTile, editorial && editorialStyles.addToolTile]} accessibilityRole="button" accessibilityLabel={`Add or manage ${title}`} accessibilityHint="Open the Customize Tool Belt library"><BookezMysticIcon name="add-tool" size={31} surface="parchment" /><Text style={[styles.addToolText, editorial && editorialStyles.addToolText]}>Add</Text></Pressable>
       </ScrollView>
     </View>;
   };
 
-  return <View style={styles.container}>
+  return <View style={[styles.container, editorial && editorialStyles.container]}>
+    {belt === 'bottom' && editorial && <View pointerEvents="none" style={editorialStyles.signatureQuill}><BookezQuill width={30} height={36} color={bookezColors.accent} accent={bookezColors.secondaryAccent} /></View>}
     {renderBelt(belt, belt === 'top' ? 'WRITING TOOLS' : 'SESSION TOOLS', belt === 'top' ? 'Pin your favorite writing helpers' : 'Pin your focus and progress tools')}
     <Modal animationType="slide" transparent visible={Boolean(manageBelt)} onRequestClose={closeManager}>
-      <View style={styles.modalShade}><Pressable onPress={closeManager} style={styles.modalDismiss} /><View style={styles.sheet}>
+      <View style={[styles.modalShade, editorial && editorialStyles.modalShade]}><Pressable onPress={closeManager} style={styles.modalDismiss} /><View style={[styles.sheet, editorial && editorialStyles.sheet]}>
         <View style={styles.handle} />
         <View style={styles.sheetHeader}><View style={styles.sheetHeaderCopy}><Text style={styles.sheetKicker}>PERSONALIZE YOUR WRITING COCKPIT</Text><Text style={styles.sheetTitle}>Customize Tool Belt</Text><Text style={styles.sheetHint}>Only pinned tools appear on the Write page. You can keep up to six in each belt.</Text></View><Pressable onPress={closeManager} style={styles.closeButton} accessibilityRole="button" accessibilityLabel="Close tool belt customization"><Text style={styles.closeButtonText}>×</Text></Pressable></View>
         <View style={styles.beltTabs}><Pressable onPress={() => { setManageBelt('top'); setReplaceIndex(null); setDetailId(null); }} style={[styles.beltTab, manageBelt === 'top' && styles.beltTabActive]} accessibilityRole="tab" accessibilityState={{ selected: manageBelt === 'top' }}><Text style={[styles.beltTabText, manageBelt === 'top' && styles.beltTabTextActive]}>Writing Tools</Text><Text style={styles.beltTabCount}>{config.top.length}/6</Text></Pressable><Pressable onPress={() => { setManageBelt('bottom'); setReplaceIndex(null); setDetailId(null); }} style={[styles.beltTab, manageBelt === 'bottom' && styles.beltTabActive]} accessibilityRole="tab" accessibilityState={{ selected: manageBelt === 'bottom' }}><Text style={[styles.beltTabText, manageBelt === 'bottom' && styles.beltTabTextActive]}>Session Tools</Text><Text style={styles.beltTabCount}>{config.bottom.length}/6</Text></Pressable></View>
@@ -351,4 +343,23 @@ const styles = StyleSheet.create({
   resetButtonText: { color: '#987326', fontSize: 8, fontWeight: '800', textAlign: 'center' },
   editButton: { flex: 1, minHeight: 38, paddingHorizontal: 9, borderRadius: 11, backgroundColor: '#F0EEFF', alignItems: 'center', justifyContent: 'center' },
   editButtonText: { color: '#625EAB', fontSize: 8, fontWeight: '800', textAlign: 'center' },
+});
+
+const editorialStyles = StyleSheet.create({
+  container: { marginTop: bookezSpacing.md },
+  beltSection: { backgroundColor: bookezColors.surface, borderColor: bookezColors.border, borderRadius: bookezRadii.card },
+  beltKicker: { color: bookezColors.secondaryAccent, letterSpacing: 1.05 },
+  beltSubtitle: { color: bookezColors.textSecondary },
+  beltManageLink: { backgroundColor: bookezColors.accentSoft, borderWidth: 1, borderColor: '#E5C9D0' },
+  beltManageLinkText: { color: bookezColors.accent },
+  beltRail: { paddingTop: 10 },
+  toolTile: { backgroundColor: bookezColors.surfaceRaised, borderColor: bookezColors.border },
+  toolTileActive: { backgroundColor: bookezColors.accentSoft, borderColor: '#D7AEB9' },
+  addToolTile: { backgroundColor: bookezColors.surfaceMuted, borderColor: bookezColors.manuscriptEdge },
+  addToolIcon: { backgroundColor: bookezColors.accentSoft },
+  addToolPlus: { color: bookezColors.accent },
+  addToolText: { color: bookezColors.accent },
+  modalShade: { backgroundColor: 'rgba(26,43,67,0.28)' },
+  sheet: { backgroundColor: bookezColors.surface, borderTopLeftRadius: bookezRadii.sheet, borderTopRightRadius: bookezRadii.sheet, ...bookezShadows.lifted },
+  signatureQuill: { alignSelf: 'flex-end', marginRight: 20, marginBottom: -21, zIndex: 2 },
 });

@@ -7,6 +7,9 @@ project_id = "cedyrwcnyoytrnjgjxus"
 [functions.bookez-ai-writing]
 verify_jwt = true
 
+[functions.delete-bookez-account]
+verify_jwt = true
+
 [api]
 enabled = true
 # Port to use for the API URL.

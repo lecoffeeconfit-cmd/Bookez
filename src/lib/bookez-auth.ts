@@ -108,6 +108,29 @@ export async function deleteBookezData() {
   if (profileDeleteError) throw profileDeleteError;
 }
 
+/**
+ * Permanently deletes the signed-in Supabase Auth user and every Bookez file
+ * owned by that user. The service-role operation stays inside the protected
+ * Edge Function; the app sends only the current user's access token.
+ */
+export async function deleteBookezAccount() {
+  const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+  if (sessionError) throw sessionError;
+  if (!session) throw new Error('Sign in before deleting your Bookez account.');
+
+  const { data, error } = await supabase.functions.invoke<{ deleted?: boolean }>('delete-bookez-account', {
+    body: { confirmation: 'DELETE' },
+    headers: { Authorization: `Bearer ${session.access_token}` },
+  });
+  if (error || data?.deleted !== true) {
+    throw new Error('Bookez could not delete your account. Your account is still active; please try again.');
+  }
+
+  // The server has invalidated the user. Clear the persisted device session
+  // locally as well without depending on another authenticated request.
+  await supabase.auth.signOut({ scope: 'local' });
+}
+
 export async function sendPasswordReset(email: string) {
   const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), { redirectTo: bookezRedirectUrl });
   if (error) throw error;

@@ -4,8 +4,11 @@ import { ActivityIndicator, Alert, Image, Modal, Pressable, RefreshControl, Scro
 import { LinearGradient } from 'expo-linear-gradient';
 import { supabase } from '../lib/supabase';
 import { loadBookezSpeechVoice } from '../lib/speech-preferences';
+import { bookezColors, bookezRadii, bookezShadows, bookezSpacing, bookezType } from '../theme/bookez';
 import { FeedbackHub, FeedbackRequestBuilder, FeedbackRequestDetail, type FeedbackRequest } from './CommunityFeedback';
 import { WriterProfileSheet, type CommunityWriterFallback } from './CommunityWriterProfile';
+import { BookezInkReveal } from './BookezUI';
+import { BookezCommunityMark } from './bookez-art';
 
 type ReactionType = 'keep_going' | 'great_progress' | 'congrats';
 
@@ -73,7 +76,7 @@ type CommunityItem = {
 
 export type CommunityProps = { userId: string | null; activeProject?: CommunityProject; projects?: CommunityProject[]; onSelectProject?: (title: string) => void; initialFeedbackProjectTitle?: string | null; onFeedbackOpened?: () => void };
 
-const C = { ink: '#2E3152', muted: '#797C9B', periwinkle: '#7068C9', lavender: '#BDB7EA', green: '#6DAD79', gold: '#B78736', coral: '#D77E86', cream: '#FBFAFF' };
+const C = { ink: bookezColors.textPrimary, muted: bookezColors.textSecondary, periwinkle: bookezColors.accent, lavender: bookezColors.manuscriptEdge, green: bookezColors.success, gold: bookezColors.secondaryAccent, coral: bookezColors.destructive, cream: bookezColors.background };
 const reactionOptions: Array<{ key: ReactionType; label: string; icon: string }> = [
   { key: 'keep_going', label: 'Keep Going', icon: '↗' },
   { key: 'great_progress', label: 'Great Progress', icon: '✦' },
@@ -473,9 +476,9 @@ export default function Community({ userId, activeProject, projects = [], onSele
   }, [initialFeedbackProjectTitle, onFeedbackOpened, projects, userId]);
   return <View style={s.page}>
     <ScrollView refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { void loadFeed(true); void loadFeedbackRequestFeed(); }} tintColor={C.periwinkle} />} showsVerticalScrollIndicator={false} contentContainerStyle={s.content}>
-      <View style={s.header}><View style={s.headerCopy}><Text style={s.overline}>BOOKEZ / WRITING ROOM</Text><Text style={s.title}>Community</Text><Text style={s.subtitle}>See what other writers are creating.</Text></View><View style={s.headerActions}><Pressable onPress={() => setSearchOpen((value) => !value)} style={s.iconButton} accessibilityLabel="Search Community"><Text style={s.iconButtonText}>⌕</Text></Pressable><Pressable onPress={() => setPrivacyOpen(true)} style={s.iconButton} accessibilityLabel="Community sharing settings"><Text style={s.iconButtonText}>⚙</Text></Pressable></View></View>
+      <BookezInkReveal triggerKey={`Community-${activeProject?.title ?? 'room'}`} style={s.header}><View style={s.headerCopy}><Text style={s.overline}>WRITE TOGETHER</Text><Text style={s.title}>Community</Text><Text style={s.subtitle}>Share progress. Find support. Grow together.</Text></View><View style={s.headerActions}><Pressable onPress={() => setSearchOpen((value) => !value)} style={s.iconButton} accessibilityLabel="Search Community"><Text style={s.iconButtonText}>⌕</Text></Pressable><Pressable onPress={() => setPrivacyOpen(true)} style={s.iconButton} accessibilityLabel="Community sharing settings"><Text style={s.iconButtonText}>⚙</Text></Pressable></View></BookezInkReveal>
       {searchOpen && <View style={s.searchBox}><TextInput value={query} onChangeText={setQuery} autoFocus placeholder="Search writers, books, or genres" placeholderTextColor="#A0A3BB" style={s.searchInput} /><Pressable onPress={() => { setQuery(''); setSearchOpen(false); }}><Text style={s.clearSearch}>×</Text></Pressable></View>}
-      <View style={s.introCard}><View style={s.introCopy}><Text style={s.introEyebrow}>A QUIET WRITING ROOM</Text><Text style={s.introTitle}>Progress is better together.</Text><Text style={s.introText}>Browse public writing progress, discover books taking shape, and leave a little encouragement.</Text></View><View style={s.introSeal}><Text style={s.introSealMark}>✦</Text><Text style={s.introSealText}>{visibleItems.length} writers</Text></View></View>
+      <View style={s.introCard}><View style={s.introCopy}><Text style={s.introEyebrow}>A QUIET WRITING ROOM</Text><Text style={s.introTitle}>Progress is better together.</Text><Text style={s.introText}>Browse public writing progress, discover books taking shape, and leave a little encouragement.</Text></View><BookezInkReveal triggerKey={`Community-mark-${activeProject?.title ?? 'room'}`} delay={110} style={s.introSeal}><BookezCommunityMark width={56} height={42} color={bookezColors.accent} accent={bookezColors.secondaryAccent} /><Text style={s.introSealText}>{visibleItems.length} writers</Text></BookezInkReveal></View>
       <View style={s.toolbar}><Text style={s.toolbarText}>{usingDemo ? 'Previewing the writing room' : 'Public progress from Bookez writers'}</Text><Pressable onPress={() => setFilterOpen(true)} style={s.filterButton}><Text style={s.filterButtonText}>{writingOnly || stageFilter !== 'All stages' || typeFilter !== 'All types' ? 'Filtered' : 'Filter'} · ≡</Text></Pressable></View>
       {offline && <View style={s.offline}><Text style={s.offlineText}>Community is offline right now. Your private writing is safe.</Text><Pressable onPress={() => void loadFeed(true)}><Text style={s.retry}>Retry</Text></Pressable></View>}
       {loading ? <View style={s.loading}><ActivityIndicator color={C.periwinkle} /><Text style={s.loadingText}>Opening the writing room…</Text></View> : sections.map((section) => <View key={section.key} style={s.section}><View style={s.sectionHeader}><View><Text style={s.sectionTitle}>{section.title}</Text><Text style={s.sectionHint}>{section.hint}</Text></View><Pressable onPress={() => setBrowseSection(section.key)}><Text style={s.seeAll}>See all</Text></Pressable></View>{section.items.length ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.cardRail}>{section.items.map((item) => <ProjectCard key={`${section.key}-${item.id}`} item={item} onPress={() => openCommunityItem(item)} onReact={react} onOpenProfile={() => openWriterProfile(item)} />)}</ScrollView> : <EmptyState icon={section.empty[0]} title={section.empty[1]} copy={section.empty[2]} />}</View>)}
@@ -577,4 +580,162 @@ Object.assign(s, {
   readerEmptyIcon: { color: C.lavender, fontSize: 29 },
   readerEmptyTitle: { color: C.ink, fontSize: 13, fontWeight: '800', marginTop: 8 },
   readerEmptyCopy: { maxWidth: 270, color: C.muted, fontSize: 9, lineHeight: 14, textAlign: 'center', marginTop: 5 },
+});
+
+// Community keeps its existing sections, cards, and interaction model, while
+// adopting the shared Bookez Studio editorial language for this screen.
+const communityEditorialS = StyleSheet.create({
+  page: { backgroundColor: bookezColors.background },
+  content: { paddingHorizontal: bookezSpacing.page, paddingTop: bookezSpacing.lg, paddingBottom: bookezSpacing.xxl },
+  header: { minHeight: 58 },
+  overline: { color: bookezColors.secondaryAccent, fontFamily: bookezType.label.fontFamily, fontSize: 9, letterSpacing: 1.25, lineHeight: 13, fontWeight: '800' },
+  title: { color: bookezColors.textPrimary, fontFamily: bookezType.display.fontFamily, fontSize: 30, lineHeight: 36, fontWeight: '600', letterSpacing: -0.5, marginTop: 4 },
+  subtitle: { color: bookezColors.textSecondary, fontFamily: bookezType.bodySecondary.fontFamily, fontSize: 13, lineHeight: 19, marginTop: 4 },
+  headerActions: { gap: bookezSpacing.xs, paddingTop: 2 },
+  iconButton: { width: 38, height: 38, borderRadius: bookezRadii.control, backgroundColor: bookezColors.surface, borderWidth: 1, borderColor: bookezColors.border, ...bookezShadows.subtle },
+  iconButtonText: { color: bookezColors.accent, fontSize: 18 },
+  searchBox: { marginTop: bookezSpacing.sm, minHeight: 46, borderRadius: bookezRadii.control, paddingHorizontal: bookezSpacing.sm, backgroundColor: bookezColors.surfaceRaised, borderWidth: 1, borderColor: bookezColors.border, ...bookezShadows.subtle },
+  searchInput: { color: bookezColors.textPrimary, fontFamily: bookezType.bodySecondary.fontFamily, fontSize: 13 },
+  clearSearch: { color: bookezColors.textMuted, fontSize: 20, paddingLeft: bookezSpacing.xs },
+  introCard: { marginTop: 20, padding: bookezSpacing.md, borderRadius: bookezRadii.cardLarge, backgroundColor: bookezColors.manuscript, borderWidth: 1, borderColor: bookezColors.manuscriptEdge, ...bookezShadows.subtle },
+  introCopy: { paddingRight: bookezSpacing.xs },
+  introEyebrow: { color: bookezColors.secondaryAccent, fontFamily: bookezType.label.fontFamily, fontSize: 9, letterSpacing: 1.05, lineHeight: 13 },
+  introTitle: { color: bookezColors.textPrimary, fontFamily: bookezType.sectionTitle.fontFamily, fontSize: 21, lineHeight: 26, fontWeight: '600', marginTop: 5 },
+  introText: { color: bookezColors.textSecondary, fontFamily: bookezType.bodySecondary.fontFamily, fontSize: 13, lineHeight: 19, marginTop: 7 },
+  introSeal: { width: 66, height: 66, borderRadius: bookezRadii.card, backgroundColor: bookezColors.accentSoft, borderWidth: 1, borderColor: '#E5C9D0' },
+  introSealMark: { color: bookezColors.accent, fontSize: 22 },
+  introSealText: { color: bookezColors.textSecondary, fontFamily: bookezType.metadata.fontFamily, fontSize: 10, lineHeight: 14, fontWeight: '600', marginTop: 2 },
+  toolbar: { marginTop: 20 },
+  toolbarText: { color: bookezColors.textMuted, fontFamily: bookezType.metadata.fontFamily, fontSize: 11, lineHeight: 15 },
+  filterButton: { minHeight: 32, paddingHorizontal: bookezSpacing.sm, borderRadius: bookezRadii.control, backgroundColor: bookezColors.accentSoft, borderWidth: 1, borderColor: '#E5C9D0' },
+  filterButtonText: { color: bookezColors.accent, fontFamily: bookezType.button.fontFamily, fontSize: 11, lineHeight: 16 },
+  offline: { marginTop: bookezSpacing.sm, padding: bookezSpacing.sm, borderRadius: bookezRadii.control, backgroundColor: bookezColors.warningSoft, borderColor: '#EBD7B1' },
+  offlineText: { color: bookezColors.warning, fontFamily: bookezType.caption.fontFamily, fontSize: 11, lineHeight: 15 },
+  retry: { color: bookezColors.warning, fontFamily: bookezType.button.fontFamily, fontSize: 11, lineHeight: 16, marginLeft: bookezSpacing.xs },
+  loadingText: { color: bookezColors.textSecondary, fontFamily: bookezType.bodySecondary.fontFamily, fontSize: 13, lineHeight: 19, marginTop: bookezSpacing.sm },
+  section: { marginTop: 28 },
+  sectionHeader: { minHeight: 47 },
+  sectionTitle: { color: bookezColors.textPrimary, fontFamily: bookezType.sectionTitle.fontFamily, fontSize: 19, lineHeight: 24, fontWeight: '600' },
+  sectionHint: { color: bookezColors.textSecondary, fontFamily: bookezType.caption.fontFamily, fontSize: 11, lineHeight: 15, marginTop: 4 },
+  seeAll: { color: bookezColors.accent, fontFamily: bookezType.button.fontFamily, fontSize: 11, lineHeight: 16 },
+  cardRail: { paddingTop: bookezSpacing.xs, paddingBottom: bookezSpacing.xs, paddingRight: bookezSpacing.xs, gap: bookezSpacing.sm },
+  card: { width: 278, padding: bookezSpacing.sm, borderRadius: bookezRadii.card, backgroundColor: bookezColors.surface, borderWidth: 1, borderColor: bookezColors.border, ...bookezShadows.subtle },
+  cover: { width: 68, height: 90, borderRadius: bookezRadii.control },
+  coverLarge: { width: 86, height: 116, borderRadius: bookezRadii.card },
+  coverMark: { color: bookezColors.textOnAccent },
+  coverLabel: { color: 'rgba(255,255,255,0.86)' },
+  avatarText: { color: bookezColors.textPrimary, fontFamily: bookezType.metadata.fontFamily },
+  writerName: { color: bookezColors.textSecondary, fontFamily: bookezType.metadata.fontFamily, fontSize: 11, lineHeight: 15, fontWeight: '600' },
+  writingPill: { paddingVertical: 2, paddingRight: bookezSpacing.xs, paddingLeft: bookezSpacing.xs, borderRadius: bookezRadii.pill, backgroundColor: bookezColors.successSoft },
+  liveDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: bookezColors.success },
+  writingPillText: { color: bookezColors.success, fontFamily: bookezType.metadata.fontFamily, fontSize: 10, lineHeight: 14, fontWeight: '700' },
+  projectTitle: { color: bookezColors.textPrimary, fontFamily: bookezType.cardTitle.fontFamily, fontSize: 16, lineHeight: 21, fontWeight: '700', marginTop: 9 },
+  projectMeta: { color: bookezColors.textSecondary, fontFamily: bookezType.caption.fontFamily, fontSize: 11, lineHeight: 15, marginTop: 4 },
+  feedbackBadge: { color: bookezColors.success, fontFamily: bookezType.metadata.fontFamily, fontSize: 10, lineHeight: 14, fontWeight: '600', marginTop: 4 },
+  previewBadge: { color: bookezColors.accent, fontFamily: bookezType.metadata.fontFamily, fontSize: 10, lineHeight: 14, fontWeight: '600', marginTop: 4 },
+  publicStatus: { color: bookezColors.accent, fontFamily: bookezType.caption.fontFamily, fontSize: 11, lineHeight: 15, marginTop: 4 },
+  progressTrack: { height: 5, marginTop: 10, borderRadius: 3, backgroundColor: bookezColors.manuscriptEdge },
+  progressText: { color: bookezColors.textMuted, fontFamily: bookezType.caption.fontFamily, fontSize: 10, lineHeight: 14, marginTop: 4 },
+  cardArrow: { color: bookezColors.accent, fontSize: 22, marginLeft: 6 },
+  cardFooter: { marginTop: 10, paddingTop: 10, borderTopColor: bookezColors.divider },
+  reactionTotals: { color: bookezColors.textMuted, fontFamily: bookezType.caption.fontFamily, fontSize: 10, lineHeight: 14 },
+  feedbackCardAction: { color: bookezColors.accent, fontFamily: bookezType.button.fontFamily, fontSize: 11, lineHeight: 16 },
+  reactionButton: { minWidth: 32, height: 28, paddingHorizontal: bookezSpacing.xs, borderRadius: bookezRadii.control, backgroundColor: bookezColors.surfaceMuted, borderWidth: 1, borderColor: bookezColors.border },
+  reactionButtonActive: { backgroundColor: bookezColors.accentSoft, borderColor: '#E5C9D0' },
+  reactionIcon: { color: bookezColors.textSecondary, fontSize: 11 },
+  reactionIconActive: { color: bookezColors.accent },
+  reactionCount: { color: bookezColors.textSecondary, fontFamily: bookezType.metadata.fontFamily, fontSize: 10, lineHeight: 14 },
+  empty: { marginTop: bookezSpacing.xs, padding: bookezSpacing.lg, borderRadius: bookezRadii.card, backgroundColor: bookezColors.surface, borderColor: bookezColors.border, ...bookezShadows.subtle },
+  emptyIcon: { color: bookezColors.manuscriptEdge, fontSize: 24 },
+  emptyTitle: { color: bookezColors.textPrimary, fontFamily: bookezType.cardTitle.fontFamily, fontSize: 14, lineHeight: 19, fontWeight: '700', marginTop: 6 },
+  emptyCopy: { color: bookezColors.textSecondary, fontFamily: bookezType.caption.fontFamily, fontSize: 11, lineHeight: 15, marginTop: 4 },
+  signInNote: { marginTop: 24, padding: bookezSpacing.md, borderRadius: bookezRadii.card, backgroundColor: bookezColors.secondaryAccentSoft, borderColor: '#E8D8B8', ...bookezShadows.subtle },
+  signInTitle: { color: bookezColors.textPrimary, fontFamily: bookezType.cardTitle.fontFamily, fontSize: 14, lineHeight: 19, fontWeight: '700' },
+  signInCopy: { color: bookezColors.textSecondary, fontFamily: bookezType.caption.fontFamily, fontSize: 11, lineHeight: 15, marginTop: 4 },
+  modalShade: { backgroundColor: 'rgba(26,43,67,0.28)' },
+  detailSheet: { padding: bookezSpacing.lg, paddingBottom: bookezSpacing.xxl, borderTopLeftRadius: bookezRadii.sheet, borderTopRightRadius: bookezRadii.sheet, backgroundColor: bookezColors.surface, ...bookezShadows.lifted },
+  browseSheet: { padding: bookezSpacing.lg, paddingBottom: bookezSpacing.xxl, borderTopLeftRadius: bookezRadii.sheet, borderTopRightRadius: bookezRadii.sheet, backgroundColor: bookezColors.surface, ...bookezShadows.lifted },
+  smallSheet: { padding: bookezSpacing.lg, paddingBottom: bookezSpacing.xxl, borderTopLeftRadius: bookezRadii.sheet, borderTopRightRadius: bookezRadii.sheet, backgroundColor: bookezColors.surface, ...bookezShadows.lifted },
+  readerSheet: { padding: bookezSpacing.lg, paddingBottom: bookezSpacing.xl, borderTopLeftRadius: bookezRadii.sheet, borderTopRightRadius: bookezRadii.sheet, backgroundColor: bookezColors.surface, ...bookezShadows.lifted },
+  sheetHandle: { backgroundColor: bookezColors.manuscriptEdge },
+  sheetTitle: { color: bookezColors.textPrimary, fontFamily: bookezType.pageTitle.fontFamily, fontSize: 26, lineHeight: 32, fontWeight: '600', marginTop: 5 },
+  sheetHint: { color: bookezColors.textSecondary, fontFamily: bookezType.bodySecondary.fontFamily, fontSize: 13, lineHeight: 19, marginTop: 5 },
+  closeText: { color: bookezColors.textPrimary, fontSize: 24 },
+  detailTitle: { color: bookezColors.textPrimary, fontFamily: bookezType.sectionTitle.fontFamily, fontSize: 21, lineHeight: 26, fontWeight: '600', marginTop: 11 },
+  detailBio: { color: bookezColors.textSecondary, fontFamily: bookezType.bodySecondary.fontFamily, fontSize: 13, lineHeight: 19, marginTop: 17 },
+  detailProgress: { marginTop: 18, padding: bookezSpacing.sm, borderRadius: bookezRadii.control, backgroundColor: bookezColors.manuscript, borderWidth: 1, borderColor: bookezColors.manuscriptEdge },
+  detailProgressLabel: { color: bookezColors.textSecondary, fontFamily: bookezType.label.fontFamily },
+  detailProgressValue: { color: bookezColors.accent, fontFamily: bookezType.sectionTitle.fontFamily, fontSize: 16, lineHeight: 21, fontWeight: '600' },
+  detailStage: { color: bookezColors.textSecondary, fontFamily: bookezType.caption.fontFamily, fontSize: 11, lineHeight: 15, marginTop: 7 },
+  detailSectionTitle: { color: bookezColors.textPrimary, fontFamily: bookezType.sectionTitle.fontFamily, fontSize: 19, lineHeight: 24, fontWeight: '600', marginTop: 19 },
+  detailReaction: { borderRadius: bookezRadii.control, backgroundColor: bookezColors.surfaceMuted, borderWidth: 1, borderColor: bookezColors.border },
+  detailReactionActive: { backgroundColor: bookezColors.accentSoft, borderColor: '#E5C9D0' },
+  detailReactionIcon: { color: bookezColors.textSecondary },
+  detailReactionText: { color: bookezColors.textSecondary, fontFamily: bookezType.metadata.fontFamily, fontSize: 10, lineHeight: 14 },
+  detailReactionTextActive: { color: bookezColors.accent },
+  detailSignIn: { color: bookezColors.textMuted, fontFamily: bookezType.caption.fontFamily, fontSize: 11, lineHeight: 15, marginTop: 10 },
+  detailActionText: { color: bookezColors.textMuted, fontFamily: bookezType.caption.fontFamily, fontSize: 11, lineHeight: 15 },
+  closeButton: { minHeight: 46, marginTop: 14, borderRadius: bookezRadii.control, backgroundColor: bookezColors.accentStrong },
+  closeButtonText: { color: bookezColors.textOnAccent, fontFamily: bookezType.button.fontFamily, fontSize: 13, lineHeight: 18 },
+  fieldLabel: { color: bookezColors.textSecondary, fontFamily: bookezType.label.fontFamily, fontSize: 10, lineHeight: 14, letterSpacing: 1.1 },
+  pill: { minHeight: 34, paddingHorizontal: bookezSpacing.sm, borderRadius: bookezRadii.pill, backgroundColor: bookezColors.surfaceMuted, borderColor: bookezColors.border },
+  pillActive: { backgroundColor: bookezColors.accentSoft, borderColor: '#E5C9D0' },
+  pillText: { color: bookezColors.textSecondary, fontFamily: bookezType.metadata.fontFamily, fontSize: 11, lineHeight: 15 },
+  pillTextActive: { color: bookezColors.accent },
+  filterRow: { minHeight: 62, marginTop: 17, paddingHorizontal: bookezSpacing.sm, borderRadius: bookezRadii.control, backgroundColor: bookezColors.surfaceRaised, borderColor: bookezColors.border },
+  filterRowTitle: { color: bookezColors.textPrimary, fontFamily: bookezType.cardTitle.fontFamily, fontSize: 13, lineHeight: 18, fontWeight: '700' },
+  filterRowHint: { color: bookezColors.textSecondary, fontFamily: bookezType.caption.fontFamily, fontSize: 11, lineHeight: 15, marginTop: 3 },
+  toggle: { backgroundColor: bookezColors.manuscriptEdge },
+  toggleOn: { backgroundColor: bookezColors.accent },
+  privacyRow: { minHeight: 58, marginTop: 7, paddingHorizontal: bookezSpacing.sm, borderRadius: bookezRadii.control, backgroundColor: bookezColors.surfaceRaised, borderColor: bookezColors.border },
+  privacyTitle: { color: bookezColors.textPrimary, fontFamily: bookezType.cardTitle.fontFamily, fontSize: 13, lineHeight: 18, fontWeight: '700' },
+  privacyHint: { color: bookezColors.textSecondary, fontFamily: bookezType.caption.fontFamily, fontSize: 11, lineHeight: 15, marginTop: 2 },
+  primaryButton: { minHeight: 46, marginTop: 17, borderRadius: bookezRadii.control, backgroundColor: bookezColors.accentStrong },
+  primaryButtonText: { color: bookezColors.textOnAccent, fontFamily: bookezType.button.fontFamily, fontSize: 13, lineHeight: 18 },
+  writerNameLink: { textDecorationColor: bookezColors.accentSoft },
+  feedbackProjectSummary: { marginTop: 16, padding: bookezSpacing.sm, borderRadius: bookezRadii.control, backgroundColor: bookezColors.manuscript, borderColor: bookezColors.manuscriptEdge },
+  feedbackProjectTitle: { color: bookezColors.textPrimary, fontFamily: bookezType.cardTitle.fontFamily, fontSize: 14, lineHeight: 19, fontWeight: '700' },
+  feedbackProjectMeta: { color: bookezColors.textSecondary, fontFamily: bookezType.caption.fontFamily, fontSize: 11, lineHeight: 15, marginTop: 4 },
+  feedbackInput: { minHeight: 80, marginTop: 8, paddingHorizontal: bookezSpacing.sm, paddingVertical: 10, borderRadius: bookezRadii.control, backgroundColor: bookezColors.surfaceRaised, borderColor: bookezColors.border, color: bookezColors.textPrimary, fontFamily: bookezType.bodySecondary.fontFamily, fontSize: 13 },
+  previewReadButton: { minHeight: 46, borderRadius: bookezRadii.control, backgroundColor: bookezColors.accentStrong },
+  previewReadButtonText: { color: bookezColors.textOnAccent, fontFamily: bookezType.button.fontFamily, fontSize: 13, lineHeight: 18 },
+  previewReadButtonArrow: { color: bookezColors.textOnAccent },
+  previewListenButton: { minHeight: 46, borderRadius: bookezRadii.control, backgroundColor: bookezColors.secondaryAccentSoft, borderWidth: 1, borderColor: '#E8D8B8' },
+  previewListenButtonText: { color: bookezColors.warning, fontFamily: bookezType.button.fontFamily, fontSize: 13, lineHeight: 18 },
+  previewListenButtonIcon: { color: bookezColors.warning },
+  previewUnavailable: { color: bookezColors.textMuted, fontFamily: bookezType.caption.fontFamily, fontSize: 11, lineHeight: 15, marginTop: 14 },
+  readerTitle: { color: bookezColors.textPrimary, fontFamily: bookezType.pageTitle.fontFamily, fontSize: 24, lineHeight: 30, fontWeight: '600', marginTop: 5 },
+  readerMeta: { color: bookezColors.textSecondary, fontFamily: bookezType.caption.fontFamily, fontSize: 11, lineHeight: 15, marginTop: 4 },
+  readerNotice: { marginTop: 14, padding: bookezSpacing.sm, borderRadius: bookezRadii.control, backgroundColor: bookezColors.manuscript, borderColor: bookezColors.manuscriptEdge },
+  readerNoticeIcon: { color: bookezColors.secondaryAccent },
+  readerNoticeTitle: { color: bookezColors.textPrimary, fontFamily: bookezType.cardTitle.fontFamily, fontSize: 13, lineHeight: 18, fontWeight: '700' },
+  readerNoticeText: { color: bookezColors.textSecondary, fontFamily: bookezType.caption.fontFamily, fontSize: 11, lineHeight: 15, marginTop: 3 },
+  readerListenBar: { marginTop: 10, padding: bookezSpacing.sm, borderRadius: bookezRadii.control, backgroundColor: bookezColors.surfaceRaised, borderColor: bookezColors.border },
+  readerListenLabel: { color: bookezColors.textPrimary, fontFamily: bookezType.cardTitle.fontFamily, fontSize: 13, lineHeight: 18, fontWeight: '700' },
+  readerListenHint: { color: bookezColors.textSecondary, fontFamily: bookezType.caption.fontFamily, fontSize: 11, lineHeight: 15, marginTop: 3 },
+  readerListenButton: { minHeight: 36, paddingHorizontal: bookezSpacing.sm, borderRadius: bookezRadii.control, backgroundColor: bookezColors.secondaryAccentSoft },
+  readerListenButtonActive: { backgroundColor: bookezColors.warningSoft },
+  readerListenText: { color: bookezColors.warning, fontFamily: bookezType.button.fontFamily, fontSize: 11, lineHeight: 16 },
+  readerListenTextActive: { color: bookezColors.warning },
+  readerPartPill: { minHeight: 37, paddingHorizontal: bookezSpacing.sm, borderRadius: bookezRadii.pill, backgroundColor: bookezColors.surfaceMuted, borderColor: bookezColors.border },
+  readerPartPillActive: { backgroundColor: bookezColors.accentSoft, borderColor: '#E5C9D0' },
+  readerPartNumber: { color: bookezColors.textMuted, fontFamily: bookezType.metadata.fontFamily },
+  readerPartNumberActive: { color: bookezColors.accent },
+  readerPartLabel: { color: bookezColors.textSecondary, fontFamily: bookezType.metadata.fontFamily },
+  readerPartLabelActive: { color: bookezColors.accent },
+  readerContent: { paddingTop: 22 },
+  readerPartKicker: { color: bookezColors.secondaryAccent, fontFamily: bookezType.label.fontFamily, fontSize: 10, lineHeight: 14, letterSpacing: 1.1 },
+  readerPartTitle: { color: bookezColors.textPrimary, fontFamily: bookezType.pageTitle.fontFamily, fontSize: 27, lineHeight: 34, fontWeight: '600', marginTop: 7, marginBottom: 15 },
+  readerParagraph: { color: bookezColors.textPrimary, fontFamily: bookezType.editorial.fontFamily, fontSize: 17, lineHeight: 27, marginBottom: 15 },
+  readerNavigation: { borderTopColor: bookezColors.divider },
+  readerNavButton: { minHeight: 38, paddingHorizontal: bookezSpacing.sm, borderRadius: bookezRadii.control, backgroundColor: bookezColors.accentSoft },
+  readerNavText: { color: bookezColors.accent, fontFamily: bookezType.button.fontFamily, fontSize: 11, lineHeight: 16 },
+  readerLoadingText: { color: bookezColors.textSecondary, fontFamily: bookezType.bodySecondary.fontFamily, fontSize: 13, lineHeight: 19, marginTop: bookezSpacing.sm },
+  readerEmptyIcon: { color: bookezColors.manuscriptEdge },
+  readerEmptyTitle: { color: bookezColors.textPrimary, fontFamily: bookezType.cardTitle.fontFamily, fontSize: 16, lineHeight: 21, fontWeight: '700', marginTop: 8 },
+  readerEmptyCopy: { maxWidth: 270, color: bookezColors.textSecondary, fontFamily: bookezType.caption.fontFamily, fontSize: 11, lineHeight: 15, textAlign: 'center', marginTop: 5 },
+});
+
+Object.entries(communityEditorialS).forEach(([key, style]) => {
+  s[key] = [s[key], style];
 });

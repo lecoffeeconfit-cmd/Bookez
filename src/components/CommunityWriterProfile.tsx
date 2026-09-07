@@ -1,8 +1,16 @@
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, Image, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { supabase } from '../lib/supabase';
+import { bookezColors } from '../theme/bookez';
 
-const C = { ink: '#2E3152', muted: '#797C9B', periwinkle: '#7068C9', lavender: '#BDB7EA', gold: '#B78736', cream: '#FBFAFF' };
+const C = {
+  ink: bookezColors.textPrimary,
+  muted: bookezColors.textSecondary,
+  periwinkle: bookezColors.accent,
+  lavender: bookezColors.accentSoft,
+  gold: bookezColors.secondaryAccent,
+  cream: bookezColors.surface,
+};
 
 export type CommunityWriterBook = {
   id: string;
@@ -264,22 +272,22 @@ export function WriterProfileSheet({ visible, userId, viewerId, fallback, onClos
 }
 
 const wS = StyleSheet.create({
-  summaryCard: { marginTop: 13, padding: 15, borderRadius: 22, backgroundColor: '#F4F2FF', borderWidth: 1, borderColor: '#E5E1FA' },
+  summaryCard: { marginTop: 13, padding: 15, borderRadius: 18, backgroundColor: bookezColors.manuscript, borderWidth: 1, borderColor: bookezColors.manuscriptEdge },
   summaryHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 },
   summaryHeaderCopy: { flex: 1, minWidth: 0 },
   overline: { color: C.periwinkle, fontSize: 7, letterSpacing: 0.9, fontWeight: '800' },
   summaryTitle: { color: C.ink, fontSize: 16, fontWeight: '800', marginTop: 4 },
-  editButton: { minHeight: 28, paddingHorizontal: 10, borderRadius: 9, backgroundColor: '#FFF', justifyContent: 'center' },
+  editButton: { minHeight: 28, paddingHorizontal: 10, borderRadius: 9, backgroundColor: bookezColors.surface, borderWidth: 1, borderColor: bookezColors.border, justifyContent: 'center' },
   editButtonText: { color: C.periwinkle, fontSize: 8, fontWeight: '800' },
   summaryBio: { color: C.muted, fontSize: 9, lineHeight: 14, marginTop: 10 },
-  joined: { color: '#9A9CB1', fontSize: 8, marginTop: 6 },
+  joined: { color: bookezColors.textMuted, fontSize: 8, marginTop: 6 },
   statsRow: { marginTop: 13, flexDirection: 'row', gap: 7 },
-  stat: { flex: 1, minWidth: 0, padding: 9, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.75)' },
+  stat: { flex: 1, minWidth: 0, padding: 9, borderRadius: 12, backgroundColor: bookezColors.surface, borderWidth: 1, borderColor: bookezColors.border },
   statValue: { color: C.ink, fontSize: 14, fontWeight: '800' },
   statLabel: { color: C.muted, fontSize: 6, letterSpacing: 0.5, fontWeight: '800', marginTop: 4 },
   summaryStatLine: { color: C.muted, fontSize: 8, textAlign: 'center', marginTop: 8 },
   bookRail: { paddingTop: 12, paddingBottom: 2, gap: 8 },
-  bookCard: { width: 174, padding: 9, borderRadius: 15, backgroundColor: '#FFF', borderWidth: 1, borderColor: '#E9E5F5' },
+  bookCard: { width: 174, padding: 9, borderRadius: 15, backgroundColor: bookezColors.surface, borderWidth: 1, borderColor: bookezColors.border },
   bookCardCompact: { width: 145, padding: 8 },
   bookCover: { width: 72, height: 94, borderRadius: 12, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
   bookCoverCompact: { width: 58, height: 76, borderRadius: 10 },
@@ -289,19 +297,19 @@ const wS = StyleSheet.create({
   bookTitle: { color: C.ink, fontSize: 11, lineHeight: 14, fontWeight: '800', marginTop: 8 },
   bookTitleCompact: { fontSize: 9, lineHeight: 12, marginTop: 6 },
   bookMeta: { color: C.muted, fontSize: 7, marginTop: 3 },
-  bookProgressTrack: { height: 4, marginTop: 8, borderRadius: 2, backgroundColor: '#ECEAF6', overflow: 'hidden' },
+  bookProgressTrack: { height: 4, marginTop: 8, borderRadius: 2, backgroundColor: bookezColors.manuscriptEdge, overflow: 'hidden' },
   bookProgressFill: { height: '100%', borderRadius: 2 },
-  bookProgressText: { color: '#9194AC', fontSize: 7, marginTop: 4 },
+  bookProgressText: { color: bookezColors.textMuted, fontSize: 7, marginTop: 4 },
   summaryLoading: { minHeight: 70, alignItems: 'center', justifyContent: 'center' },
   summaryLoadingText: { color: C.muted, fontSize: 8, marginTop: 7 },
   summaryError: { color: C.muted, fontSize: 9, lineHeight: 14, marginTop: 10 },
-  empty: { marginTop: 11, padding: 11, borderRadius: 13, backgroundColor: 'rgba(255,255,255,0.6)' },
+  empty: { marginTop: 11, padding: 11, borderRadius: 13, backgroundColor: bookezColors.surface, borderWidth: 1, borderColor: bookezColors.border },
   emptyTitle: { color: C.ink, fontSize: 9, fontWeight: '800' },
   emptyCopy: { color: C.muted, fontSize: 8, lineHeight: 12, marginTop: 4 },
   shade: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(32,41,84,0.28)' },
   dismiss: { ...StyleSheet.absoluteFill },
   sheet: { maxHeight: '92%', padding: 20, paddingBottom: 24, borderTopLeftRadius: 29, borderTopRightRadius: 29, backgroundColor: C.cream },
-  handle: { alignSelf: 'center', width: 36, height: 4, borderRadius: 2, backgroundColor: '#D8D7E4', marginBottom: 13 },
+  handle: { alignSelf: 'center', width: 36, height: 4, borderRadius: 2, backgroundColor: bookezColors.manuscriptEdge, marginBottom: 13 },
   sheetHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' },
   sheetKicker: { color: C.ink, fontSize: 17, fontWeight: '800', marginTop: 4 },
   closeButton: { padding: 3, marginLeft: 8 },
@@ -309,7 +317,7 @@ const wS = StyleSheet.create({
   sheetContent: { paddingTop: 18, paddingBottom: 18 },
   identity: { flexDirection: 'row', alignItems: 'center' },
   identityCopy: { flex: 1, minWidth: 0, marginLeft: 13 },
-  avatar: { width: 42, height: 42, borderRadius: 15, backgroundColor: '#D6C8F4', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
+  avatar: { width: 42, height: 42, borderRadius: 15, backgroundColor: bookezColors.surfaceAccent, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
   avatarLarge: { width: 66, height: 66, borderRadius: 24 },
   avatarImage: { width: '100%', height: '100%' },
   avatarText: { color: C.ink, fontSize: 13, fontWeight: '800' },
@@ -317,11 +325,11 @@ const wS = StyleSheet.create({
   name: { color: C.ink, fontSize: 21, lineHeight: 25, fontWeight: '800' },
   bio: { color: C.muted, fontSize: 10, lineHeight: 15, marginTop: 15 },
   followButton: { minHeight: 42, marginTop: 15, borderRadius: 13, backgroundColor: C.periwinkle, alignItems: 'center', justifyContent: 'center' },
-  followingButton: { backgroundColor: '#EEECFA', borderWidth: 1, borderColor: '#D7D1F4' },
+  followingButton: { backgroundColor: bookezColors.surface, borderWidth: 1, borderColor: bookezColors.border },
   disabledButton: { opacity: 0.65 },
   followButtonText: { color: '#FFF', fontSize: 9, fontWeight: '800' },
   followingButtonText: { color: C.periwinkle },
-  selfPill: { minHeight: 35, marginTop: 15, borderRadius: 11, backgroundColor: '#F0EDFF', alignItems: 'center', justifyContent: 'center' },
+  selfPill: { minHeight: 35, marginTop: 15, borderRadius: 11, backgroundColor: bookezColors.secondaryAccentSoft, borderWidth: 1, borderColor: bookezColors.manuscriptEdge, alignItems: 'center', justifyContent: 'center' },
   selfPillText: { color: C.periwinkle, fontSize: 8, fontWeight: '800' },
   statsPanel: { marginTop: 14, flexDirection: 'row', gap: 7 },
   statLine: { paddingTop: 9, alignItems: 'center' },
