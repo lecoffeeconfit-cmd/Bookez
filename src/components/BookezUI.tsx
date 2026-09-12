@@ -30,25 +30,39 @@ type BookezInkRevealProps = {
 export function BookezInkReveal({ children, triggerKey, delay = 30, style }: BookezInkRevealProps) {
   const reduceMotion = useBookezReduceMotion();
   const reveal = useRef(new Animated.Value(reduceMotion ? 1 : 0)).current;
+  const settle = useRef(new Animated.Value(reduceMotion ? 1 : 0)).current;
 
   useEffect(() => {
     reveal.stopAnimation();
+    settle.stopAnimation();
     if (reduceMotion) {
       reveal.setValue(1);
+      settle.setValue(1);
       return;
     }
     reveal.setValue(0);
-    const animation = Animated.timing(reveal, {
-      toValue: 1,
-      delay,
-      duration: 460,
-      easing: Easing.out(Easing.cubic),
-      useNativeDriver: true,
-      isInteraction: false,
-    });
+    settle.setValue(0);
+    const animation = Animated.parallel([
+      Animated.timing(reveal, {
+        toValue: 1,
+        delay,
+        duration: 360,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+        isInteraction: false,
+      }),
+      Animated.spring(settle, {
+        toValue: 1,
+        delay,
+        speed: 14,
+        bounciness: 3,
+        useNativeDriver: true,
+        isInteraction: false,
+      }),
+    ]);
     animation.start();
     return () => animation.stop();
-  }, [delay, reduceMotion, reveal, triggerKey]);
+  }, [delay, reduceMotion, reveal, settle, triggerKey]);
 
   return (
     <Animated.View
@@ -57,8 +71,10 @@ export function BookezInkReveal({ children, triggerKey, delay = 30, style }: Boo
         {
           opacity: reveal,
           transform: [
-            { translateY: reveal.interpolate({ inputRange: [0, 1], outputRange: [5, 0] }) },
-            { scale: reveal.interpolate({ inputRange: [0, 1], outputRange: [0.993, 1] }) },
+            { perspective: 900 },
+            { translateY: settle.interpolate({ inputRange: [0, 1], outputRange: [7, 0] }) },
+            { rotateX: settle.interpolate({ inputRange: [0, 1], outputRange: ['1.2deg', '0deg'] }) },
+            { scale: settle.interpolate({ inputRange: [0, 0.76, 1], outputRange: [0.989, 1.003, 1] }) },
           ],
         },
       ]}

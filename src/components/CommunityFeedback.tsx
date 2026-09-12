@@ -3,6 +3,7 @@ import { Alert, Image, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput
 import * as Speech from 'expo-speech';
 import { supabase } from '../lib/supabase';
 import { loadBookezSpeechVoice } from '../lib/speech-preferences';
+import { bookezColors } from '../theme/bookez';
 import type { CommunityProject } from './Community';
 import DictationInput from './DictationInput';
 
@@ -60,7 +61,7 @@ type FeedbackResponse = {
 type FeedbackReply = { id: string; request_id: string; response_id: string; author_id: string; body: string; created_at: string; updated_at: string };
 type ReaderResponse = { id: string; request_id: string; response_id: string; responder_id: string; anonymous: boolean; body: string; created_at: string; updated_at: string };
 
-const C = { ink: '#2E3152', muted: '#797C9B', purple: '#7068C9', lavender: '#F0EDFF', border: '#E4E2EF', paper: '#FBFAFF', green: '#6DAD79' };
+const C = { ink: bookezColors.textPrimary, muted: bookezColors.textSecondary, purple: bookezColors.accent, lavender: bookezColors.accentSoft, border: bookezColors.border, paper: bookezColors.surface, green: bookezColors.success };
 const quickReactionOptions = [
   { key: 'would_keep_reading', label: 'Would keep reading' },
   { key: 'strong_opening', label: 'Strong opening' },
@@ -402,4 +403,52 @@ Object.assign(s, {
   audiobookTitle: { color: C.ink, fontSize: 9, fontWeight: '800' },
   audiobookHint: { color: C.muted, fontSize: 7, lineHeight: 11, marginTop: 2 },
   audiobookArrow: { color: C.purple, fontSize: 21, marginLeft: 8 },
+});
+
+// Feedback sheets are shared by Community and can be opened from several
+// entry points. Keep their existing geometry while bringing every surface and
+// control into the same dark, artifact-inspired register as the main screens.
+Object.entries({
+  readerResponse: { backgroundColor: bookezColors.surfaceRaised },
+  publicReaderCard: { backgroundColor: bookezColors.surfaceRaised, borderColor: bookezColors.border },
+  authorReply: { backgroundColor: bookezColors.surfaceRaised },
+  shade: { backgroundColor: 'rgba(4,10,9,0.72)' },
+  sheet: { backgroundColor: bookezColors.surface },
+  handle: { backgroundColor: bookezColors.manuscriptEdge },
+  option: { backgroundColor: bookezColors.surfaceRaised, borderColor: bookezColors.border },
+  optionActive: { backgroundColor: bookezColors.accentSoft, borderColor: bookezColors.secondaryAccent },
+  outline: { backgroundColor: bookezColors.surfaceRaised, borderColor: bookezColors.border },
+  outlineRow: { borderBottomColor: bookezColors.divider },
+  checkbox: { borderColor: bookezColors.manuscriptEdge },
+  checkboxOn: { backgroundColor: bookezColors.accent, borderColor: bookezColors.secondaryAccent },
+  stats: { backgroundColor: bookezColors.surfaceMuted },
+  primary: { backgroundColor: bookezColors.accentStrong },
+  primarySmall: { backgroundColor: bookezColors.accentStrong },
+  secondary: { backgroundColor: bookezColors.surfaceMuted, borderWidth: 1, borderColor: bookezColors.border },
+  secondarySmall: { backgroundColor: bookezColors.surfaceMuted, borderWidth: 1, borderColor: bookezColors.border },
+  pill: { backgroundColor: bookezColors.surfaceMuted, borderColor: bookezColors.border },
+  pillActive: { backgroundColor: bookezColors.accentSoft, borderColor: bookezColors.secondaryAccent },
+  dictationButton: { backgroundColor: bookezColors.accentSoft, borderColor: bookezColors.border },
+  input: { backgroundColor: bookezColors.surfaceRaised, borderColor: bookezColors.border },
+  toggleRow: { backgroundColor: bookezColors.surfaceRaised, borderColor: bookezColors.border },
+  switch: { backgroundColor: bookezColors.surfaceMuted },
+  switchOn: { backgroundColor: bookezColors.accent },
+  switchThumb: { backgroundColor: bookezColors.textOnAccent },
+  tab: { backgroundColor: bookezColors.surfaceMuted },
+  tabActive: { backgroundColor: bookezColors.accentSoft },
+  requestCard: { backgroundColor: bookezColors.surfaceRaised, borderColor: bookezColors.border },
+  miniPill: { backgroundColor: bookezColors.accentSoft },
+  requestFooter: { borderTopColor: bookezColors.divider },
+  questionBox: { backgroundColor: bookezColors.warningSoft, borderColor: bookezColors.manuscriptEdge },
+  dangerButton: { backgroundColor: bookezColors.destructiveSoft },
+  responseCard: { backgroundColor: bookezColors.surfaceRaised, borderColor: bookezColors.border },
+  emptyInline: { backgroundColor: bookezColors.surfaceMuted },
+  toolButton: { backgroundColor: bookezColors.surfaceMuted },
+  playerCard: { backgroundColor: bookezColors.accentSoft },
+  playerProgress: { backgroundColor: bookezColors.surfaceMuted },
+  readerText: { backgroundColor: bookezColors.manuscript, borderColor: bookezColors.manuscriptEdge },
+  readerBodyDark: { backgroundColor: bookezColors.surfaceAccent },
+  audiobookButton: { backgroundColor: bookezColors.accentSoft, borderColor: bookezColors.border },
+}).forEach(([key, override]) => {
+  s[key] = [s[key], override];
 });

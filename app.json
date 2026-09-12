@@ -11,6 +11,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.lecoffeeconfit.bookme",
+      "usesAppleSignIn": true,
       "infoPlist": {
         "NSMicrophoneUsageDescription": "Bookez uses your microphone to turn your spoken words into written text when you use dictation."
       },
@@ -58,7 +59,9 @@
       ],
       "expo-secure-store",
       "expo-sharing",
-      "expo-mail-composer"
+      "expo-mail-composer",
+      "expo-apple-authentication",
+      "expo-web-browser"
     ],
     "android": {
       "package": "com.lecoffeeconfit.bookme",

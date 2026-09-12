@@ -1,5 +1,6 @@
-import Svg, { Circle, G, Path } from 'react-native-svg';
+import Svg, { Circle, Defs, Ellipse, G, LinearGradient as SvgLinearGradient, Path, Stop } from 'react-native-svg';
 import type { StyleProp, ViewStyle } from 'react-native';
+import { bookezColors, bookezWithAlpha } from '../../theme/bookez';
 
 type ArtProps = {
   width?: number;
@@ -18,14 +19,25 @@ const artDefaults = {
 
 export function BookezWritingDesk({ width = 160, height = 96, color = artDefaults.color, accent = artDefaults.accent, strokeWidth = artDefaults.strokeWidth, style }: ArtProps) {
   return <Svg width={width} height={height} viewBox="0 0 160 96" style={style} accessible={false}>
+    <Defs>
+      <SvgLinearGradient id="bookezDeskPaper" x1="0" y1="0" x2="1" y2="1">
+        <Stop offset="0" stopColor={bookezColors.surfaceRaised} />
+        <Stop offset="0.64" stopColor={bookezColors.manuscript} />
+        <Stop offset="1" stopColor={bookezColors.surfaceMuted} />
+      </SvgLinearGradient>
+    </Defs>
+    <Ellipse cx="80" cy="83" rx="66" ry="5" fill={bookezWithAlpha(color, 0.09)} />
     <G fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
-      <Path d="M12 70h132M27 70v13m106-13v13M20 63h123l-5 7H25z" />
-      <Path d="M39 57c5-7 12-11 21-13 10-2 20 0 29 6l-3 13H39z" fill={accent} fillOpacity={0.12} />
+      <Path d="M12 70h132M27 70v13m106-13v13M20 63h123l-5 7H25z" fill={bookezColors.surfaceMuted} />
+      <Path d="M39 57c5-7 12-11 21-13 10-2 20 0 29 6l-3 13H39z" fill="url(#bookezDeskPaper)" />
+      <Path d="M42 60c7-5 14-8 22-8 8 0 15 2 22 7l-1 4H41z" stroke={accent} strokeWidth={strokeWidth * 0.62} strokeOpacity={0.64} />
       <Path d="M45 57c5-5 12-8 19-9 8-1 16 1 23 5M51 52l-5 11m15-15-2 16m14-15 4 15" />
-      <Path d="M108 48c8-6 16-7 24-3l4 18h-29z" />
+      <Path d="M108 48c8-6 16-7 24-3l4 18h-29z" fill="url(#bookezDeskPaper)" />
       <Path d="M111 52h21m-20 6h21m-19 5h19" />
       <Path d="M32 63c1-7 5-13 11-17m-4 7 8-4m-11 10 10-4" stroke={accent} />
       <Path d="M118 39c7-8 13-13 23-17-5 10-11 16-20 20m-2-3 15-10" stroke={accent} />
+      <Path d="M92 53h10l2 10H90zM93 53c1-4 7-4 8 0" fill={accent} fillOpacity={0.16} />
+      <Path d="M28 68c18 2 35 2 52 0m18 0c13 2 26 2 39 0" stroke={accent} strokeWidth={strokeWidth * 0.58} strokeDasharray="1 3" strokeOpacity={0.58} />
       <Path d="M15 75c9 2 18 2 27 0m76 0c11 2 20 2 29 0" stroke={accent} strokeOpacity={0.7} />
     </G>
   </Svg>;
@@ -41,6 +53,100 @@ export function BookezOpenBook({ width = 154, height = 94, color = artDefaults.c
       <Path d="M25 70c19-4 35-1 52 8 17-9 33-12 52-8M22 18l-5-5m115 5 5-5" stroke={accent} />
       <Path d="M107 11c7-6 15-8 24-8-5 8-11 13-20 15m-4-7 18-5m-18 5 2 67" stroke={accent} />
       <Path d="m109 77-3 8 7-6" stroke={accent} />
+    </G>
+  </Svg>;
+}
+
+export function BookezPlanningFolio({ width = 154, height = 94, color = artDefaults.color, accent = artDefaults.accent, strokeWidth = artDefaults.strokeWidth, style }: ArtProps) {
+  return <Svg width={width} height={height} viewBox="0 0 160 100" style={style} accessible={false}>
+    <Defs>
+      <SvgLinearGradient id="bookezPlanningPaper" x1="0" y1="0" x2="1" y2="1">
+        <Stop offset="0" stopColor={bookezColors.surfaceRaised} />
+        <Stop offset="0.58" stopColor={bookezColors.manuscript} />
+        <Stop offset="1" stopColor={bookezColors.surfaceMuted} />
+      </SvgLinearGradient>
+      <SvgLinearGradient id="bookezPlanningHardware" x1="0" y1="0" x2="1" y2="1">
+        <Stop offset="0" stopColor={bookezColors.secondaryAccentSoft} />
+        <Stop offset="0.45" stopColor={accent} />
+        <Stop offset="1" stopColor="#765128" />
+      </SvgLinearGradient>
+    </Defs>
+
+    <Ellipse cx="81" cy="87" rx="62" ry="6" fill={bookezWithAlpha(color, 0.1)} />
+    <Path d="M25 25 132 18l6 60-106 9z" fill={bookezColors.surfaceMuted} stroke={bookezColors.manuscriptEdge} strokeWidth={strokeWidth * 0.72} />
+    <Path d="M20 29 127 14l7 59L28 88z" fill={bookezColors.manuscript} stroke={accent} strokeOpacity={0.62} strokeWidth={strokeWidth * 0.78} />
+    <Path d="M79 28C63 20 44 19 20 26l4 53c20-6 39-3 55 7z" fill="url(#bookezPlanningPaper)" stroke={color} strokeWidth={strokeWidth} strokeLinejoin="round" />
+    <Path d="M79 28c18-9 37-11 61-6l-4 54c-21-5-39-1-57 10z" fill="url(#bookezPlanningPaper)" stroke={color} strokeWidth={strokeWidth} strokeLinejoin="round" />
+    <Path d="M79 28v58" fill="none" stroke={accent} strokeWidth={strokeWidth * 0.78} strokeOpacity={0.82} />
+    <Path d="M75 30c2 17 2 36 0 52M83 29c-2 18-2 37 0 53" fill="none" stroke={bookezColors.manuscriptEdge} strokeWidth={strokeWidth * 0.58} strokeOpacity={0.74} />
+
+    <G fill="none" stroke={color} strokeLinecap="round" strokeWidth={strokeWidth * 0.72} strokeOpacity={0.72}>
+      <Path d="M29 37c14-3 27-2 40 2M29 45c12-2 24-1 37 2M30 53c13-2 24-1 36 2M31 62c10-2 20-1 29 1" />
+      <Path d="M90 36c14-4 27-5 40-2M90 44c13-3 25-4 38-2M90 52c12-3 23-3 34-1M90 61c14-4 26-4 36-2" />
+    </G>
+    <G fill="none" stroke={accent} strokeLinecap="round" strokeWidth={strokeWidth * 0.62} strokeOpacity={0.7}>
+      <Path d="m32 69 9-7 7 3 11-7 9 3M91 69c8-5 16-6 23-4 6 2 11 1 16-2" />
+      <Path d="M20 27c20-7 40-4 59 3M140 23c-22-5-42-2-61 7" strokeDasharray="1.2 3.2" />
+    </G>
+
+    <Path d="m20 26 10 1-9 9zM140 22l-10 2 9 8z" fill={bookezColors.secondaryAccentSoft} stroke={accent} strokeWidth={strokeWidth * 0.52} strokeOpacity={0.7} />
+    <Path d="M82 8v21" stroke="#765128" strokeWidth={strokeWidth * 0.85} strokeLinecap="round" />
+    <Ellipse cx="84" cy="10" rx="8" ry="4" fill={bookezWithAlpha(color, 0.14)} />
+    <Ellipse cx="82" cy="8" rx="7" ry="4" fill="url(#bookezPlanningHardware)" stroke="#765128" strokeWidth={strokeWidth * 0.65} />
+    <Circle cx="80" cy="6.8" r="1.25" fill={bookezColors.surfaceRaised} fillOpacity={0.72} />
+  </Svg>;
+}
+
+export function BookezPlanningLeaf({ width = 70, height = 68, color = artDefaults.color, accent = artDefaults.accent, strokeWidth = artDefaults.strokeWidth, style }: ArtProps) {
+  return <Svg width={width} height={height} viewBox="0 0 70 68" style={style} accessible={false}>
+    <Path d="M3 6c24-6 44-5 64 2l-4 53c-23-5-42-2-59 4z" fill={bookezColors.surfaceRaised} stroke={color} strokeWidth={strokeWidth * 0.72} strokeLinejoin="round" />
+    <Path d="M10 18c16-3 31-2 46 2M10 27c14-3 28-2 42 1M10 36c16-3 30-2 44 2M10 45c12-2 23-1 34 1" fill="none" stroke={color} strokeWidth={strokeWidth * 0.52} strokeLinecap="round" strokeOpacity={0.52} />
+    <Path d="M4 7c20-6 41-5 62 2M12 55c13-3 27-2 41 1" fill="none" stroke={accent} strokeWidth={strokeWidth * 0.52} strokeLinecap="round" strokeDasharray="1 3" strokeOpacity={0.66} />
+  </Svg>;
+}
+
+export function BookezManuscriptFolio({ width = 176, height = 106, color = '#F2E5CE', accent = '#B78A4B', strokeWidth = artDefaults.strokeWidth, style }: ArtProps) {
+  return <Svg width={width} height={height} viewBox="0 0 176 106" style={style} accessible={false}>
+    <Defs>
+      <SvgLinearGradient id="bookezManuscriptPaper" x1="0" y1="0" x2="1" y2="1">
+        <Stop offset="0" stopColor="#F7E9CB" />
+        <Stop offset="0.58" stopColor="#DFC293" />
+        <Stop offset="1" stopColor="#B98F5E" />
+      </SvgLinearGradient>
+      <SvgLinearGradient id="bookezManuscriptPin" x1="0" y1="0" x2="1" y2="1">
+        <Stop offset="0" stopColor="#F0CB77" />
+        <Stop offset="0.5" stopColor={accent} />
+        <Stop offset="1" stopColor="#69431F" />
+      </SvgLinearGradient>
+      <SvgLinearGradient id="bookezManuscriptFeather" x1="0" y1="0" x2="1" y2="1">
+        <Stop offset="0" stopColor="#FFF7E7" />
+        <Stop offset="0.56" stopColor="#D8C6A5" />
+        <Stop offset="1" stopColor={accent} />
+      </SvgLinearGradient>
+    </Defs>
+
+    <Ellipse cx="91" cy="94" rx="69" ry="7" fill="#050B11" fillOpacity={0.34} />
+    <Path d="M29 34 139 26l7 59-110 8z" fill="#A87945" stroke="#65451F" strokeWidth={strokeWidth * 0.78} strokeLinejoin="round" />
+    <Path d="m25 28 112 3-2 58-113-3z" fill="#C69B62" stroke="#76522C" strokeWidth={strokeWidth * 0.82} strokeLinejoin="round" />
+    <Path d="m34 23 108 8-7 57L27 80z" fill="#D3AE78" stroke="#76522C" strokeWidth={strokeWidth * 0.74} strokeLinejoin="round" />
+    <Path d="M31 31c34-6 70-5 108 2l-4 53c-35-5-70-4-105 3z" fill="url(#bookezManuscriptPaper)" stroke="#72502B" strokeWidth={strokeWidth} strokeLinejoin="round" />
+
+    <G fill="none" stroke="#735737" strokeLinecap="round" strokeOpacity={0.54} strokeWidth={strokeWidth * 0.58}>
+      <Path d="M39 46c27-3 56-2 87 1M38 55c29-3 59-2 89 1M37 64c21-2 45-2 70 0M37 73c31-3 60-2 89 1" />
+      <Path d="M74 40v41M112 42v41" strokeOpacity={0.28} />
+    </G>
+    <Path d="M68 39c10-2 22-2 34 0" fill="none" stroke="#7D572C" strokeLinecap="round" strokeWidth={strokeWidth * 0.72} strokeOpacity={0.72} />
+    <Path d="M42 52c8-3 15-2 22 1m-20 9c7-2 14-2 21 0m53-8c4-1 8-1 12 0m-14 9c5-1 10-1 15 0" fill="none" stroke="#8E6942" strokeLinecap="round" strokeWidth={strokeWidth * 0.74} strokeOpacity={0.68} />
+
+    <Path d="M91 15v21" stroke="#6B461F" strokeWidth={strokeWidth * 0.95} strokeLinecap="round" />
+    <Ellipse cx="94" cy="19" rx="9" ry="4.6" fill="#0B1117" fillOpacity={0.3} />
+    <Ellipse cx="91" cy="15" rx="8" ry="4.8" fill="url(#bookezManuscriptPin)" stroke="#563719" strokeWidth={strokeWidth * 0.72} />
+    <Circle cx="89" cy="13.8" r="1.4" fill="#FFF2C8" fillOpacity={0.7} />
+
+    <G fill="none" strokeLinecap="round" strokeLinejoin="round">
+      <Path d="M127 70c10-19 18-38 30-60 7 13 5 26-5 38-7 9-15 16-25 22z" fill="url(#bookezManuscriptFeather)" fillOpacity={0.92} stroke={color} strokeWidth={strokeWidth} />
+      <Path d="M127 70c11-20 20-42 30-60M132 61c9-7 16-14 22-23m-18 16 12-2m-8-5 13-4m-9-4 12-5m-8-3 10-6" stroke="#6F5D47" strokeWidth={strokeWidth * 0.72} />
+      <Path d="m127 70-9 19m9-19 8 8" stroke={accent} strokeWidth={strokeWidth * 0.9} />
     </G>
   </Svg>;
 }

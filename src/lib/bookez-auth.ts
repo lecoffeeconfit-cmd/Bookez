@@ -1,7 +1,37 @@
 import * as Linking from 'expo-linking';
+import * as AppleAuthentication from 'expo-apple-authentication';
+import * as Crypto from 'expo-crypto';
+import * as WebBrowser from 'expo-web-browser';
+import { Platform } from 'react-native';
+import type { EmailOtpType, Provider } from '@supabase/supabase-js';
 import { supabase, bookezEmailConfirmationRedirectUrl, bookezRedirectUrl } from './supabase';
 
 export const getBookezAuthRedirect = () => bookezRedirectUrl;
+
+export const normalizeBookezEmail = (email: string) => email.trim().toLowerCase();
+
+export function bookezAuthCallbackErrorMessage(caught: unknown) {
+  const message = caught instanceof Error ? caught.message.toLowerCase() : '';
+  if (message.includes('expired') || message.includes('invalid') || message.includes('used')) {
+    return 'This confirmation link may have expired or already been used. Request a new link and try again.';
+  }
+  return 'This confirmation link could not be completed. Request a new link and try again.';
+}
+
+export function isBookezEmailValid(email: string) {
+  const normalized = normalizeBookezEmail(email);
+  return normalized.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(normalized);
+}
+
+export async function requestBookezEmailChange(email: string) {
+  const normalizedEmail = normalizeBookezEmail(email);
+  const result = await supabase.auth.updateUser(
+    { email: normalizedEmail },
+    { emailRedirectTo: bookezRedirectUrl },
+  );
+  if (result.error) throw result.error;
+  return result.data.user;
+}
 
 const minimumPasswordLength = 10;
 
@@ -60,6 +90,83 @@ export async function signInWithEmail(email: string, password: string) {
   }
   if (result.data.user) await ensureBookezProfile(result.data.user.id, result.data.user.user_metadata?.display_name);
   return result.data;
+}
+
+/**
+ * Starts a Supabase OAuth flow and completes the PKCE callback inside the
+ * native auth browser. The app's existing auth-state listener then hydrates
+ * the Bookez profile and cloud sync state.
+ */
+export async function signInWithOAuthProvider(provider: Provider) {
+  const { data, error } = await supabase.auth.signInWithOAuth({
+    provider,
+    options: {
+      redirectTo: bookezRedirectUrl,
+      skipBrowserRedirect: Platform.OS !== 'web',
+    },
+  });
+  if (error) throw error;
+
+  if (Platform.OS === 'web') return true;
+  if (!data.url) throw new Error(`${provider} sign-in did not return an authorization URL.`);
+
+  const result = await WebBrowser.openAuthSessionAsync(data.url, bookezRedirectUrl);
+  if (result.type !== 'success' || !result.url) return false;
+
+  await handleBookezAuthUrl(result.url);
+  const sessionResult = await supabase.auth.getSession();
+  if (sessionResult.error) throw sessionResult.error;
+  if (sessionResult.data.session?.user) {
+    await ensureBookezProfile(sessionResult.data.session.user.id, sessionResult.data.session.user.user_metadata?.display_name);
+  }
+  return Boolean(sessionResult.data.session?.user);
+}
+
+/**
+ * Uses Apple's native iOS sheet and exchanges its identity token for a
+ * Supabase session. The hashed nonce is sent to Apple while Supabase receives
+ * the original nonce, matching the OIDC replay-protection flow.
+ */
+export async function signInWithApple() {
+  if (Platform.OS !== 'ios') throw new Error('Native Apple sign-in is only available on iOS.');
+  if (!(await AppleAuthentication.isAvailableAsync())) {
+    throw new Error('Sign in with Apple is not available on this device.');
+  }
+
+  const rawNonceBytes = await Crypto.getRandomBytesAsync(32);
+  const rawNonce = Array.from(rawNonceBytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+  const hashedNonce = await Crypto.digestStringAsync(
+    Crypto.CryptoDigestAlgorithm.SHA256,
+    rawNonce,
+    { encoding: Crypto.CryptoEncoding.HEX },
+  );
+
+  let credential: AppleAuthentication.AppleAuthenticationCredential;
+  try {
+    credential = await AppleAuthentication.signInAsync({
+      nonce: hashedNonce,
+      requestedScopes: [
+        AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
+        AppleAuthentication.AppleAuthenticationScope.EMAIL,
+      ],
+    });
+  } catch (caught) {
+    if (caught && typeof caught === 'object' && 'code' in caught && caught.code === 'ERR_REQUEST_CANCELED') return false;
+    throw caught;
+  }
+
+  if (!credential.identityToken) throw new Error('Apple sign-in did not return an identity token.');
+  const { data, error } = await supabase.auth.signInWithIdToken({
+    provider: 'apple',
+    token: credential.identityToken,
+    nonce: rawNonce,
+  });
+  if (error) throw error;
+  if (!data.session?.user) throw new Error('Apple sign-in did not return a Bookez session.');
+
+  const displayName = credential.fullName ? AppleAuthentication.formatFullName(credential.fullName).trim() : undefined;
+  await ensureBookezProfile(data.session.user.id, displayName);
+  return true;
 }
 
 export async function signOutBookez() {
@@ -144,27 +251,28 @@ export async function updateBookezPassword(password: string) {
   if (error) throw error;
 }
 
-export async function handleBookezAuthUrl(url: string): Promise<{ type?: 'recovery' } | undefined> {
+export async function handleBookezAuthUrl(url: string): Promise<{ type?: 'recovery' | 'email_change' } | undefined> {
   if (!isTrustedBookezAuthCallback(url)) return;
   const parsed = Linking.parse(url);
   const query = parsed.queryParams ?? {};
-  const code = typeof query.code === 'string' ? query.code : undefined;
   const hash = new URL(url).hash.replace(/^#/, '');
   const hashParams = hash ? new URLSearchParams(hash) : null;
-  const hashType = hashParams?.get('type') ?? null;
-  const callbackType = typeof query.type === 'string' ? query.type : hashType;
+  const getParam = (name: string) => {
+    const queryValue = query[name];
+    if (typeof queryValue === 'string') return queryValue;
+    return hashParams?.get(name) ?? null;
+  };
+  const code = getParam('code');
+  const tokenHash = getParam('token_hash');
+  const callbackType = getParam('type');
   if (code) {
     const { error } = await supabase.auth.exchangeCodeForSession(code);
     if (error) throw error;
-  } else if (hashParams) {
-    const accessToken = hashParams.get('access_token');
-    const refreshToken = hashParams.get('refresh_token');
-    if (accessToken && refreshToken) {
-      const { error } = await supabase.auth.setSession({ access_token: accessToken, refresh_token: refreshToken });
-      if (error) throw error;
-    }
+  } else if (tokenHash && callbackType) {
+    const { error } = await supabase.auth.verifyOtp({ token_hash: tokenHash, type: callbackType as EmailOtpType });
+    if (error) throw error;
   }
-  return callbackType === 'recovery' ? { type: 'recovery' } : {};
+  return callbackType === 'recovery' || callbackType === 'email_change' ? { type: callbackType } : {};
 }
 
 export async function ensureBookezProfile(userId: string, displayName?: string) {

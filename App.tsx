@@ -20,15 +20,17 @@ import { bookezSecureStorage } from './src/lib/secure-storage';
 import Community, { type CommunityProject } from './src/components/Community';
 import { WriterProfileSummaryCard } from './src/components/CommunityWriterProfile';
 import { FeedbackRequestBuilder } from './src/components/CommunityFeedback';
+import ChangeEmailSheet from './src/components/ChangeEmailSheet';
 import DictationInput from './src/components/DictationInput';
 import AIWritingTools from './src/components/AIWritingTools';
 import WriteToolBelt, { sanitizeWriteToolBeltConfig, WRITE_TOOL_BELT_STORAGE_KEY, WRITE_TOOL_DEFAULTS, type WriteToolBeltConfig, type WriteToolDefinition } from './src/components/WriteToolBelt';
 import { BookezButton, BookezIcon, BookezInkReveal, useBookezReduceMotion } from './src/components/BookezUI';
-import { BookezAchievementSeal, BookezBookmark, BookezCommunityMark, BookezDefaultCover, BookezFlourish, BookezJourneyMarker, BookezManuscript, BookezMysticIcon, BookezOpenBook, BookezPublishingBook, BookezQuill, BookezWritingDesk } from './src/components/bookez-art';
+import { BookezAchievementSeal, BookezBookmark, BookezCommunityMark, BookezDefaultCover, BookezFlourish, BookezJourneyMarker, BookezManuscript, BookezManuscriptFolio, BookezMysticIcon, BookezOpenBook, BookezPlanningFolio, BookezPlanningLeaf, BookezPublishingBook, BookezQuill, BookezWritingDesk } from './src/components/bookez-art';
 import JourneyEnvironment from './src/components/JourneyEnvironment';
 import type { AIWritingOperation } from './src/lib/ai-writing';
 import { AI_USAGE_POLICY, AI_USAGE_STORAGE_KEY, aiUsageCooldownLabel, aiUsageCooldownRemaining, aiUsageMonthKey, type AIUsageLedger } from './src/lib/ai-usage';
-import { deleteBookezAccount, ensureBookezProfile, handleBookezAuthUrl, isBookezPasswordValid, markBookezOnboardingCompleted, resendSignupConfirmation, sendPasswordReset, signInWithEmail, signOutBookez, signUpWithEmail, updateBookezPassword } from './src/lib/bookez-auth';
+import { bookezAuthCallbackErrorMessage, deleteBookezAccount, ensureBookezProfile, handleBookezAuthUrl, isBookezPasswordValid, markBookezOnboardingCompleted, resendSignupConfirmation, sendPasswordReset, signInWithApple, signInWithEmail, signInWithOAuthProvider, signOutBookez, signUpWithEmail, updateBookezPassword } from './src/lib/bookez-auth';
+import type { Provider } from '@supabase/supabase-js';
 import { bookezImageModerationErrorMessage, pickModeratedBookezImage, type BookezImagePurpose } from './src/lib/bookez-image-moderation';
 import { moderateAndUploadBookezProfileAvatar, profileAvatarErrorMessage } from './src/lib/bookez-profile-avatar';
 import { BOOK_EXPORT_FORMATS, buildBookHtml, buildBookMarkdown, buildBookText, buildBookezBackup, buildDocx, buildEpub, bytesToBase64, type BookExportFormat, type BookExportLayout, type BookExportOptions } from './src/lib/bookez-export';
@@ -36,7 +38,7 @@ import { clearBookezLocalSyncData, commitBookezProjectCursor, flushBookezQueue, 
 import { requestBookezNotificationPermissions, syncBookezWritingNotifications, type BookezWritingReminder } from './src/lib/bookez-notifications';
 import { getBookezReminderInsight, type BookezReminderInsight } from './src/lib/bookez-reminders';
 import { loadBookezSpeechVoice, saveBookezSpeechVoice, type BookezSpeechVoice } from './src/lib/speech-preferences';
-import { bookezColors, bookezLegacyColors, bookezRadii, bookezShadows, bookezSpacing, bookezType } from './src/theme/bookez';
+import { bookezColors, bookezLegacyColors, bookezRadii, bookezShadows, bookezSpacing, bookezType, bookezWithAlpha } from './src/theme/bookez';
 
 const sentryEnvironment = __DEV__ ? 'development' : 'production';
 const sentryDsn = process.env.EXPO_PUBLIC_SENTRY_DSN ?? 'https://497d40f44bc1b5561701ddc89e23fa99@o4511657628008448.ingest.us.sentry.io/4511850507075584';
@@ -77,6 +79,26 @@ type InputMode = 'dictation' | 'writing';
 type Page = 'Library' | 'Plan' | 'Write' | 'Journey' | 'Community' | 'Profile' | 'Stats' | 'BookStudio';
 
 const C = bookezLegacyColors;
+
+const ancientGameColors = {
+  night: '#081112',
+  nightRaised: '#111A19',
+  panel: '#17201E',
+  panelSoft: '#202824',
+  brassDark: '#76572D',
+  brass: '#A97C3E',
+  gold: '#D7B46B',
+  goldPale: '#E8D19A',
+  parchment: '#C7A66A',
+  parchmentLight: '#D9C08B',
+  parchmentInk: '#2A2116',
+  bone: '#E4D8BA',
+  muted: '#A99D80',
+  moss: '#263126',
+  rust: '#352620',
+  teal: '#20302E',
+  danger: '#B87867',
+} as const;
 
 type SwitchProps = {
   value: boolean;
@@ -135,7 +157,7 @@ const syncS = StyleSheet.create({
   accountButton: { flex: 1, minHeight: 38, paddingHorizontal: 12, borderRadius: 12, backgroundColor: '#F1F0FC', flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
   accountButtonText: { color: C.ink, fontSize: 10, fontWeight: '700' },
   accountArrow: { color: C.periwinkle, fontSize: 17, marginLeft: 7 },
-  modalShade: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(32,41,84,0.25)' },
+  modalShade: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(4,10,9,0.72)' },
   modalDismiss: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 },
   storageSheet: { maxHeight: '86%', padding: 20, paddingBottom: 28, borderTopLeftRadius: 29, borderTopRightRadius: 29, backgroundColor: '#FBFAFF' },
   storageHeader: { flexDirection: 'row', alignItems: 'flex-start' },
@@ -1265,7 +1287,7 @@ function ImagePreview({ image, config, placeholderLabel, onPress }: { image?: Bo
   return <Pressable onPress={onPress} style={[imageS.preview, !image && imageS.previewPlaceholder]} accessibilityRole="button">{content}</Pressable>;
 }
 
-function Ambient({ children, editorial = false }: { children: React.ReactNode; editorial?: boolean }) {
+function Ambient({ children, editorial = false, ancient = false }: { children: React.ReactNode; editorial?: boolean; ancient?: boolean }) {
   const reduceMotion = useBookezReduceMotion();
   const drift = useRef(new Animated.Value(0)).current;
 
@@ -1287,10 +1309,10 @@ function Ambient({ children, editorial = false }: { children: React.ReactNode; e
   const secondOrbMotion = editorial && !reduceMotion ? { transform: [{ translateX: drift.interpolate({ inputRange: [0, 1], outputRange: [0, -6] }) }, { translateY: drift.interpolate({ inputRange: [0, 1], outputRange: [0, 7] }) }, { scale: drift.interpolate({ inputRange: [0, 1], outputRange: [1.015, 0.985] }) }] } : undefined;
   const thirdOrbMotion = editorial && !reduceMotion ? { transform: [{ translateX: drift.interpolate({ inputRange: [0, 1], outputRange: [0, 5] }) }, { translateY: drift.interpolate({ inputRange: [0, 1], outputRange: [0, -8] }) }] } : undefined;
 
-  return <View style={s.page}>
-    <LinearGradient colors={editorial ? [bookezColors.background, bookezColors.surfaceRaised, bookezColors.manuscript] : ['#EAF0FF', '#FAF7FF', '#FFF9F1']} style={StyleSheet.absoluteFill} />
-    <Animated.View style={[s.orb, s.orbOne, editorial && libraryEditorialS.orb, firstOrbMotion]} /><Animated.View style={[s.orb, s.orbTwo, editorial && libraryEditorialS.orb, secondOrbMotion]} /><Animated.View style={[s.orb, s.orbThree, editorial && libraryEditorialS.orb, thirdOrbMotion]} />
-    {editorial && <><Animated.View pointerEvents="none" style={[s.ambientMagicMark, s.ambientMagicMarkTop, { opacity: reduceMotion ? 0.1 : drift.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0.08, 0.16, 0.1] }), transform: reduceMotion ? undefined : [{ translateY: drift.interpolate({ inputRange: [0, 1], outputRange: [2, -4] }) }, { rotate: drift.interpolate({ inputRange: [0, 1], outputRange: ['-2deg', '2deg'] }) }] }]}><BookezMysticIcon name="constellation" size={28} surface="bare" tone={bookezColors.secondaryAccent} /></Animated.View><Animated.View pointerEvents="none" style={[s.ambientMagicMark, s.ambientMagicMarkBottom, { opacity: reduceMotion ? 0.08 : drift.interpolate({ inputRange: [0, 0.58, 1], outputRange: [0.06, 0.13, 0.08] }), transform: reduceMotion ? undefined : [{ translateY: drift.interpolate({ inputRange: [0, 1], outputRange: [-3, 4] }) }, { rotate: drift.interpolate({ inputRange: [0, 1], outputRange: ['2deg', '-2deg'] }) }] }]}><BookezMysticIcon name="quill" size={31} surface="bare" tone={bookezColors.accent} /></Animated.View></>}
+  return <View style={[s.page, ancient && ancientChromeS.page]}>
+    <LinearGradient colors={ancient ? [ancientGameColors.night, '#111A19', '#080E0F'] : editorial ? [bookezColors.background, bookezColors.surfaceRaised, bookezColors.manuscript] : ['#EAF0FF', '#FAF7FF', '#FFF9F1']} style={StyleSheet.absoluteFill} />
+    <Animated.View style={[s.orb, s.orbOne, editorial && libraryEditorialS.orb, ancient && ancientChromeS.orb, firstOrbMotion]} /><Animated.View style={[s.orb, s.orbTwo, editorial && libraryEditorialS.orb, ancient && ancientChromeS.orb, secondOrbMotion]} /><Animated.View style={[s.orb, s.orbThree, editorial && libraryEditorialS.orb, ancient && ancientChromeS.orb, thirdOrbMotion]} />
+    {editorial && <><Animated.View pointerEvents="none" style={[s.ambientMagicMark, s.ambientMagicMarkTop, { opacity: reduceMotion ? 0.1 : drift.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0.08, 0.16, 0.1] }), transform: reduceMotion ? undefined : [{ translateY: drift.interpolate({ inputRange: [0, 1], outputRange: [2, -4] }) }, { rotate: drift.interpolate({ inputRange: [0, 1], outputRange: ['-2deg', '2deg'] }) }] }]}><BookezMysticIcon name="constellation" size={28} surface="bare" tone={ancient ? ancientGameColors.gold : bookezColors.secondaryAccent} /></Animated.View><Animated.View pointerEvents="none" style={[s.ambientMagicMark, s.ambientMagicMarkBottom, { opacity: reduceMotion ? 0.08 : drift.interpolate({ inputRange: [0, 0.58, 1], outputRange: [0.06, 0.13, 0.08] }), transform: reduceMotion ? undefined : [{ translateY: drift.interpolate({ inputRange: [0, 1], outputRange: [-3, 4] }) }, { rotate: drift.interpolate({ inputRange: [0, 1], outputRange: ['2deg', '-2deg'] }) }] }]}><BookezMysticIcon name="quill" size={31} surface="bare" tone={ancient ? ancientGameColors.brass : bookezColors.accent} /></Animated.View></>}
     {children}
   </View>;
 }
@@ -1317,7 +1339,7 @@ const libraryHomeS = StyleSheet.create({
   embeddedHeaderCopy: { flex: 1, minWidth: 0 },
   embeddedHeaderLabel: { color: bookezColors.accent, fontSize: 8, letterSpacing: 1.15, fontWeight: '800' },
   embeddedHeaderHint: { color: bookezColors.textSecondary, fontSize: 8, marginTop: 3 },
-  embeddedStreak: { minHeight: 25, paddingHorizontal: 9, borderRadius: 10, flexDirection: 'row', alignItems: 'center', backgroundColor: bookezColors.secondaryAccentSoft, borderWidth: 1, borderColor: '#E8D8B6' },
+  embeddedStreak: { minHeight: 25, paddingHorizontal: 9, borderRadius: 10, flexDirection: 'row', alignItems: 'center', backgroundColor: bookezColors.secondaryAccentSoft, borderWidth: 1, borderColor: bookezColors.border },
   embeddedStreakIcon: { color: bookezColors.secondaryAccent, fontSize: 11, marginRight: 4 },
   embeddedStreakText: { color: bookezColors.textPrimary, fontSize: 8, fontWeight: '800' },
   embeddedGoalsButton: { minHeight: 25, marginLeft: 6, paddingHorizontal: 8, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: bookezColors.surfaceRaised, borderWidth: 1, borderColor: bookezColors.border },
@@ -1342,14 +1364,14 @@ const libraryHomeS = StyleSheet.create({
   embeddedProgressValue: { color: bookezColors.accent, fontSize: 8, fontWeight: '800' },
   embeddedProgressTrack: { height: 5, marginTop: 5, borderRadius: 3, overflow: 'hidden', backgroundColor: bookezColors.surfaceMuted },
   embeddedProgressFill: { height: '100%', minWidth: 3, borderRadius: 3, backgroundColor: bookezColors.accent },
-  embeddedStepCard: { marginTop: 9, padding: 10, borderRadius: 16, flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.17)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.28)' },
-  embeddedStepIcon: { width: 30, height: 30, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.24)' },
-  embeddedStepIconText: { color: '#FFFFFF', fontSize: 14 },
+  embeddedStepCard: { marginTop: 9, padding: 10, borderRadius: 16, flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(42,33,22,0.18)', borderWidth: 1, borderColor: 'rgba(42,33,22,0.28)' },
+  embeddedStepIcon: { width: 30, height: 30, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(42,33,22,0.24)' },
+  embeddedStepIconText: { color: bookezColors.parchmentInk, fontSize: 14 },
   embeddedStepCopy: { flex: 1, minWidth: 0, marginLeft: 9 },
-  embeddedStepLabel: { color: '#E9EDFF', fontSize: 7, letterSpacing: 0.8, fontWeight: '800' },
-  embeddedStepTitle: { color: '#FFFFFF', fontSize: 13, lineHeight: 17, fontWeight: '800', marginTop: 2 },
-  embeddedStepDetail: { color: '#E6E9FB', fontSize: 7, lineHeight: 11, marginTop: 2 },
-  embeddedStepArrow: { color: '#FFFFFF', fontSize: 20, marginLeft: 7 },
+  embeddedStepLabel: { color: bookezColors.parchmentInk, fontSize: 7, letterSpacing: 0.8, fontWeight: '800' },
+  embeddedStepTitle: { color: bookezColors.parchmentInk, fontSize: 13, lineHeight: 17, fontWeight: '800', marginTop: 2 },
+  embeddedStepDetail: { color: '#493B27', fontSize: 7, lineHeight: 11, marginTop: 2 },
+  embeddedStepArrow: { color: bookezColors.parchmentInk, fontSize: 20, marginLeft: 7 },
   embeddedGoalRow: { marginTop: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   embeddedGoalText: { flex: 1, color: bookezColors.textSecondary, fontSize: 7, lineHeight: 11, paddingRight: 8 },
   embeddedCheckIn: { minHeight: 26, paddingHorizontal: 9, borderRadius: 9, alignItems: 'center', justifyContent: 'center', backgroundColor: bookezColors.accentSoft, borderWidth: 1, borderColor: '#E5C9D0' },
@@ -1361,17 +1383,17 @@ const libraryHomeS = StyleSheet.create({
   kicker: { color: C.periwinkle, fontSize: 8, letterSpacing: 1.1, fontWeight: '800' },
   title: { color: C.ink, fontSize: 25, lineHeight: 29, fontWeight: '800', letterSpacing: -0.6, marginTop: 5 },
   subtitle: { color: C.muted, fontSize: 10, lineHeight: 15, marginTop: 7 },
-  streakBadge: { width: 79, minHeight: 82, paddingVertical: 10, borderRadius: 19, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFF3E9', borderWidth: 1, borderColor: '#F6D8C4' },
-  streakIcon: { color: '#D8896A', fontSize: 16, lineHeight: 19 },
+  streakBadge: { width: 79, minHeight: 82, paddingVertical: 10, borderRadius: 19, alignItems: 'center', justifyContent: 'center', backgroundColor: bookezColors.surfaceRaised, borderWidth: 1, borderColor: bookezColors.border },
+  streakIcon: { color: bookezColors.secondaryAccent, fontSize: 16, lineHeight: 19 },
   streakValue: { color: C.ink, fontSize: 23, lineHeight: 25, fontWeight: '800', marginTop: 2 },
-  streakLabel: { color: '#A97869', fontSize: 6, letterSpacing: 0.8, fontWeight: '800', marginTop: 3 },
-  dailyCard: { marginTop: 16, padding: 16, borderRadius: 23, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E8E6F2', shadowColor: '#5D5881', shadowOpacity: 0.08, shadowRadius: 13, shadowOffset: { width: 0, height: 5 }, elevation: 2 },
-  dailyCardComplete: { backgroundColor: '#F4FBF3', borderColor: '#D6ECD5' },
+  streakLabel: { color: bookezColors.secondaryAccent, fontSize: 6, letterSpacing: 0.8, fontWeight: '800', marginTop: 3 },
+  dailyCard: { marginTop: 16, padding: 16, borderRadius: 23, backgroundColor: bookezColors.surface, borderWidth: 1, borderColor: bookezColors.border, shadowColor: '#000', shadowOpacity: 0.24, shadowRadius: 13, shadowOffset: { width: 0, height: 5 }, elevation: 2 },
+  dailyCardComplete: { backgroundColor: bookezColors.successSoft, borderColor: bookezColors.success },
   dailyTop: { flexDirection: 'row', alignItems: 'flex-start' },
-  dailyIcon: { width: 37, height: 37, borderRadius: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: '#EEEAFE' },
-  dailyIconComplete: { backgroundColor: '#DDF1DE' },
+  dailyIcon: { width: 37, height: 37, borderRadius: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: bookezColors.accentSoft },
+  dailyIconComplete: { backgroundColor: bookezColors.successSoft },
   dailyIconText: { color: C.periwinkle, fontSize: 17 },
-  dailyIconTextComplete: { color: '#5C9A67' },
+  dailyIconTextComplete: { color: bookezColors.success },
   dailyCopy: { flex: 1, minWidth: 0, marginLeft: 10 },
   dailyLabel: { color: C.periwinkle, fontSize: 7, letterSpacing: 0.9, fontWeight: '800' },
   dailyTitle: { color: C.ink, fontSize: 16, lineHeight: 20, fontWeight: '800', marginTop: 4 },
@@ -1380,41 +1402,41 @@ const libraryHomeS = StyleSheet.create({
   dailyWords: { color: C.ink, fontSize: 21, fontWeight: '800' },
   dailyWordsHint: { color: C.muted, fontSize: 9, fontWeight: '600' },
   dailyPercent: { color: C.periwinkle, fontSize: 14, fontWeight: '800' },
-  progressTrack: { height: 9, marginTop: 8, borderRadius: 5, overflow: 'hidden', backgroundColor: '#ECEBF3' },
+  progressTrack: { height: 9, marginTop: 8, borderRadius: 5, overflow: 'hidden', backgroundColor: bookezColors.surfaceMuted },
   progressFill: { height: '100%', borderRadius: 5, backgroundColor: C.periwinkle },
-  progressFillComplete: { backgroundColor: '#7FBA83' },
+  progressFillComplete: { backgroundColor: bookezColors.success },
   dailyActions: { marginTop: 13, flexDirection: 'row', alignItems: 'center', gap: 8 },
-  checkInButton: { minHeight: 38, paddingHorizontal: 12, borderRadius: 12, backgroundColor: '#F0EDFF', alignItems: 'center', justifyContent: 'center' },
-  checkInButtonComplete: { backgroundColor: '#E1F2E1' },
+  checkInButton: { minHeight: 38, paddingHorizontal: 12, borderRadius: 12, backgroundColor: bookezColors.accentSoft, alignItems: 'center', justifyContent: 'center' },
+  checkInButtonComplete: { backgroundColor: bookezColors.successSoft },
   checkInText: { color: C.periwinkle, fontSize: 9, fontWeight: '800' },
-  checkInTextComplete: { color: '#548C5D' },
+  checkInTextComplete: { color: bookezColors.success },
   writeButton: { flex: 1, minHeight: 38, paddingHorizontal: 12, borderRadius: 12, backgroundColor: C.periwinkle, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  writeButtonText: { color: '#FFFFFF', fontSize: 9, fontWeight: '800' },
-  writeButtonArrow: { color: '#FFFFFF', fontSize: 16 },
+  writeButtonText: { color: bookezColors.textOnAccent, fontSize: 9, fontWeight: '800' },
+  writeButtonArrow: { color: bookezColors.textOnAccent, fontSize: 16 },
   periodGrid: { marginTop: 10, flexDirection: 'row', gap: 9 },
-  periodCard: { flex: 1, minWidth: 0, padding: 12, borderRadius: 18, backgroundColor: '#F5F2FF', borderWidth: 1, borderColor: '#E3DDF8' },
-  periodCardWarm: { backgroundColor: '#FFF7EE', borderColor: '#F2E3CF' },
+  periodCard: { flex: 1, minWidth: 0, padding: 12, borderRadius: 18, backgroundColor: bookezColors.surface, borderWidth: 1, borderColor: bookezColors.border },
+  periodCardWarm: { backgroundColor: bookezColors.rust, borderColor: bookezColors.border },
   periodLabel: { color: C.muted, fontSize: 7, letterSpacing: 0.75, fontWeight: '800' },
   periodValue: { color: C.ink, fontSize: 18, fontWeight: '800', marginTop: 5 },
   periodTarget: { color: C.muted, fontSize: 8, marginTop: 1 },
-  periodTrack: { height: 6, marginTop: 10, borderRadius: 3, overflow: 'hidden', backgroundColor: 'rgba(255,255,255,0.8)' },
+  periodTrack: { height: 6, marginTop: 10, borderRadius: 3, overflow: 'hidden', backgroundColor: bookezColors.surfaceMuted },
   periodFill: { height: '100%', borderRadius: 3, backgroundColor: C.periwinkle },
-  periodFillWarm: { backgroundColor: '#E3A273' },
+  periodFillWarm: { backgroundColor: bookezColors.secondaryAccent },
   periodHint: { color: C.muted, fontSize: 7, lineHeight: 10, marginTop: 7 },
-  finishCard: { marginTop: 10, padding: 14, borderRadius: 19, backgroundColor: '#EEF8FF', borderWidth: 1, borderColor: '#D8EBF5' },
+  finishCard: { marginTop: 10, padding: 14, borderRadius: 19, backgroundColor: bookezColors.forest, borderWidth: 1, borderColor: '#48645C' },
   finishHeader: { flexDirection: 'row', alignItems: 'center' },
-  finishIcon: { width: 30, height: 30, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: '#D9EFFB' },
-  finishIconText: { color: '#4D8CAF', fontSize: 15 },
+  finishIcon: { width: 30, height: 30, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: '#203B35' },
+  finishIconText: { color: bookezColors.secondaryAccent, fontSize: 15 },
   finishCopy: { flex: 1, minWidth: 0, marginLeft: 9 },
-  finishLabel: { color: '#668CA1', fontSize: 7, letterSpacing: 0.8, fontWeight: '800' },
+  finishLabel: { color: bookezColors.secondaryAccent, fontSize: 7, letterSpacing: 0.8, fontWeight: '800' },
   finishTitle: { color: C.ink, fontSize: 13, fontWeight: '800', marginTop: 3 },
-  finishPercent: { color: '#4D8CAF', fontSize: 21, fontWeight: '800' },
+  finishPercent: { color: bookezColors.textPrimary, fontSize: 21, fontWeight: '800' },
   finishDetail: { color: C.muted, fontSize: 8, lineHeight: 12, marginTop: 10 },
-  finishAction: { alignSelf: 'flex-start', minHeight: 29, marginTop: 10, paddingHorizontal: 10, borderRadius: 9, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#C9E2EF', alignItems: 'center', justifyContent: 'center' },
-  finishActionText: { color: '#4D8CAF', fontSize: 8, fontWeight: '800' },
+  finishAction: { alignSelf: 'flex-start', minHeight: 29, marginTop: 10, paddingHorizontal: 10, borderRadius: 9, backgroundColor: bookezColors.surfaceRaised, borderWidth: 1, borderColor: '#48645C', alignItems: 'center', justifyContent: 'center' },
+  finishActionText: { color: bookezColors.textPrimary, fontSize: 8, fontWeight: '800' },
   homeFooter: { marginTop: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  homeNote: { flex: 1, color: '#8A8CA4', fontSize: 8, lineHeight: 12, paddingRight: 10 },
-  editGoals: { minHeight: 30, paddingHorizontal: 10, borderRadius: 9, backgroundColor: '#F0EDFF', alignItems: 'center', justifyContent: 'center' },
+  homeNote: { flex: 1, color: bookezColors.textMuted, fontSize: 8, lineHeight: 12, paddingRight: 10 },
+  editGoals: { minHeight: 30, paddingHorizontal: 10, borderRadius: 9, backgroundColor: bookezColors.accentSoft, alignItems: 'center', justifyContent: 'center' },
   editGoalsText: { color: C.periwinkle, fontSize: 8, fontWeight: '800' },
   aiUsageCard: { marginTop: 10, height: 74, paddingHorizontal: 13, paddingVertical: 10, borderRadius: 17, backgroundColor: bookezColors.surfaceMuted, borderWidth: 1, borderColor: bookezColors.border, shadowColor: '#493F35', shadowOpacity: 0.045, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 1 },
   aiUsageCardEmbedded: { backgroundColor: bookezColors.surfaceMuted, borderColor: bookezColors.manuscriptEdge },
@@ -1428,49 +1450,49 @@ const libraryHomeS = StyleSheet.create({
   aiUsageCountdown: { color: bookezColors.secondaryAccent, fontSize: 7, fontWeight: '800', marginLeft: 8 },
   modalShade: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(32,41,84,0.25)' },
   modalDismiss: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 },
-  modalSheet: { padding: 20, paddingBottom: 28, borderTopLeftRadius: 29, borderTopRightRadius: 29, backgroundColor: '#FBFAFF' },
-  handle: { alignSelf: 'center', width: 38, height: 4, borderRadius: 2, backgroundColor: '#DCDCE7', marginBottom: 17 },
+  modalSheet: { padding: 20, paddingBottom: 28, borderTopLeftRadius: 29, borderTopRightRadius: 29, backgroundColor: bookezColors.surface },
+  handle: { alignSelf: 'center', width: 38, height: 4, borderRadius: 2, backgroundColor: bookezColors.manuscriptEdge, marginBottom: 17 },
   modalHeader: { flexDirection: 'row', alignItems: 'flex-start' },
   modalHeaderCopy: { flex: 1, minWidth: 0, paddingRight: 12 },
   modalTitle: { color: C.ink, fontSize: 23, lineHeight: 28, fontWeight: '800', marginTop: 5 },
   modalHint: { color: C.muted, fontSize: 9, lineHeight: 14, marginTop: 8 },
-  close: { width: 34, height: 34, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F0EFF7' },
+  close: { width: 34, height: 34, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: bookezColors.surfaceMuted },
   closeText: { color: C.ink, fontSize: 22, lineHeight: 23 },
   dailyGoalModalSheet: { maxHeight: '92%' },
   goalModalContent: { paddingBottom: 4 },
   dailyGoalSectionLabel: { color: C.periwinkle, fontSize: 8, letterSpacing: 0.9, fontWeight: '800' },
   dailyGoalSectionHint: { color: C.muted, fontSize: 9, lineHeight: 13, marginTop: 3 },
   dailyGoalUnitGrid: { marginTop: 11, flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
-  dailyGoalUnitChoice: { width: '48%', minHeight: 76, padding: 9, borderRadius: 15, flexDirection: 'row', alignItems: 'center', backgroundColor: '#F5F3FA', borderWidth: 1, borderColor: '#E7E4F0' },
-  dailyGoalUnitChoiceSelected: { backgroundColor: '#F0EDFF', borderColor: '#B8B2F1' },
-  dailyGoalUnitIcon: { width: 27, height: 27, borderRadius: 9, alignItems: 'center', justifyContent: 'center', backgroundColor: '#E8E5F2' },
+  dailyGoalUnitChoice: { width: '48%', minHeight: 76, padding: 9, borderRadius: 15, flexDirection: 'row', alignItems: 'center', backgroundColor: bookezColors.surfaceRaised, borderWidth: 1, borderColor: bookezColors.border },
+  dailyGoalUnitChoiceSelected: { backgroundColor: bookezColors.accentSoft, borderColor: bookezColors.secondaryAccent },
+  dailyGoalUnitIcon: { width: 27, height: 27, borderRadius: 9, alignItems: 'center', justifyContent: 'center', backgroundColor: bookezColors.surfaceMuted },
   dailyGoalUnitIconSelected: { backgroundColor: C.periwinkle },
   dailyGoalUnitIconText: { color: C.muted, fontSize: 12, fontWeight: '800' },
-  dailyGoalUnitIconTextSelected: { color: '#FFFFFF' },
+  dailyGoalUnitIconTextSelected: { color: bookezColors.textOnAccent },
   dailyGoalUnitCopy: { flex: 1, minWidth: 0, marginLeft: 7 },
   dailyGoalUnitLabel: { color: C.ink, fontSize: 10, fontWeight: '800' },
-  dailyGoalUnitLabelSelected: { color: '#5148A5' },
+  dailyGoalUnitLabelSelected: { color: bookezColors.textPrimary },
   dailyGoalUnitHint: { color: C.muted, fontSize: 7, lineHeight: 10, marginTop: 2 },
   dailyGoalUnitCheck: { color: C.periwinkle, fontSize: 12, fontWeight: '800', marginLeft: 3 },
-  dailyGoalQuantityCard: { marginTop: 13, padding: 12, borderRadius: 17, backgroundColor: '#F8F6FD', borderWidth: 1, borderColor: '#E6E1F5' },
+  dailyGoalQuantityCard: { marginTop: 13, padding: 12, borderRadius: 17, backgroundColor: bookezColors.surfaceRaised, borderWidth: 1, borderColor: bookezColors.border },
   dailyGoalQuantityHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' },
   dailyGoalQuantityCopy: { flex: 1, minWidth: 0 },
   dailyGoalQuantityHint: { color: C.muted, fontSize: 8, lineHeight: 11, marginTop: 3 },
-  dailyGoalQuantityUnit: { color: '#6259B8', fontSize: 9, fontWeight: '800', marginLeft: 8 },
+  dailyGoalQuantityUnit: { color: bookezColors.secondaryAccent, fontSize: 9, fontWeight: '800', marginLeft: 8 },
   dailyGoalQuantityRow: { marginTop: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
-  dailyGoalStepper: { width: 44, height: 44, borderRadius: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: '#EAE7F7' },
-  dailyGoalStepperText: { color: '#5E57A9', fontSize: 23, lineHeight: 25, fontWeight: '500' },
-  dailyGoalQuantityInput: { width: 102, height: 44, paddingHorizontal: 8, borderRadius: 13, borderWidth: 1, borderColor: '#CFC9EE', color: C.ink, fontSize: 19, fontWeight: '800', textAlign: 'center', backgroundColor: '#FFFFFF' },
+  dailyGoalStepper: { width: 44, height: 44, borderRadius: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: bookezColors.surfaceMuted },
+  dailyGoalStepperText: { color: bookezColors.secondaryAccent, fontSize: 23, lineHeight: 25, fontWeight: '500' },
+  dailyGoalQuantityInput: { width: 102, height: 44, paddingHorizontal: 8, borderRadius: 13, borderWidth: 1, borderColor: bookezColors.border, color: C.ink, fontSize: 19, fontWeight: '800', textAlign: 'center', backgroundColor: bookezColors.surface },
   dailyGoalPresets: { marginTop: 9, flexDirection: 'row', gap: 6 },
-  dailyGoalPreset: { flex: 1, minHeight: 29, paddingHorizontal: 3, borderRadius: 9, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E2DEEF' },
-  dailyGoalPresetSelected: { backgroundColor: '#E9E6FF', borderColor: '#B8B2F1' },
+  dailyGoalPreset: { flex: 1, minHeight: 29, paddingHorizontal: 3, borderRadius: 9, alignItems: 'center', justifyContent: 'center', backgroundColor: bookezColors.surface, borderWidth: 1, borderColor: bookezColors.border },
+  dailyGoalPresetSelected: { backgroundColor: bookezColors.accentSoft, borderColor: bookezColors.secondaryAccent },
   dailyGoalPresetText: { color: C.muted, fontSize: 8, fontWeight: '800' },
-  dailyGoalPresetTextSelected: { color: '#5148A5' },
-  dailyGoalLegacySection: { marginTop: 16, paddingTop: 14, borderTopWidth: 1, borderTopColor: '#E8E5F0' },
+  dailyGoalPresetTextSelected: { color: bookezColors.textPrimary },
+  dailyGoalLegacySection: { marginTop: 16, paddingTop: 14, borderTopWidth: 1, borderTopColor: bookezColors.divider },
   goalField: { marginTop: 14 },
   goalFieldLabel: { color: C.ink, fontSize: 10, fontWeight: '800' },
   goalFieldHint: { color: C.muted, fontSize: 8, lineHeight: 12, marginTop: 3 },
-  goalInput: { minHeight: 45, marginTop: 7, paddingHorizontal: 13, borderRadius: 13, borderWidth: 1, borderColor: '#DDDCEA', color: C.ink, fontSize: 14, fontWeight: '700', backgroundColor: '#FFFFFF' },
+  goalInput: { minHeight: 45, marginTop: 7, paddingHorizontal: 13, borderRadius: 13, borderWidth: 1, borderColor: bookezColors.border, color: C.ink, fontSize: 14, fontWeight: '700', backgroundColor: bookezColors.surfaceRaised },
   saveGoals: { minHeight: 45, marginTop: 18, borderRadius: 13, backgroundColor: C.periwinkle, alignItems: 'center', justifyContent: 'center' },
   saveGoalsText: { color: '#FFFFFF', fontSize: 10, fontWeight: '800' },
 });
@@ -1714,7 +1736,7 @@ const copy: Project = { ...project, cloudId: createLocalUuid(), cloudRevision: 0
     const currentPart = projectSnapshot.nextPart?.title ?? (projectSnapshot.parts[projectSnapshot.parts.length - 1]?.title ?? 'No section selected');
     const coverImage = project.images?.find((image) => image.placement === 'cover');
     const projectEngagement = project.cloudId ? communityEngagement[project.cloudId] : undefined;
-    return <View key={projectKey(project, index)} style={[s.libraryProjectCard, libraryEditorialS.projectCard, project.archived && s.libraryProjectCardArchived]}>
+    return <BookezInstrumentReveal key={projectKey(project, index)} triggerKey={`Library-book-${project.title}-${index}`} delay={Math.min(360, 135 + (index * 55))} reduceMotion={reduceMotion} variant="folio" direction={index % 2 === 0 ? -1 : 1} style={[s.libraryProjectCard, libraryEditorialS.projectCard, project.archived && s.libraryProjectCardArchived]}>
       <Pressable onPress={() => onSelectProject(project.title)} style={s.libraryProjectTop} accessibilityLabel={`Select ${project.title}`}>
         <Pressable onPress={() => { onSelectProject(project.title); onOpenBookStudio(project.title, 'assemble'); }} style={[s.projectMark, libraryEditorialS.projectMark]} accessibilityRole="button" accessibilityLabel={coverImage ? `Edit cover for ${project.title}` : `Add cover to ${project.title}`}>
           {coverImage ? <Image source={{ uri: coverImage.uri }} style={s.libraryProjectCover} resizeMode="cover" accessibilityLabel={`${project.title} cover image`} /> : <BookezDefaultCover type={project.type} width={36} height={48} />}
@@ -1726,11 +1748,11 @@ const copy: Project = { ...project, cloudId: createLocalUuid(), cloudRevision: 0
       <View style={[s.projectStats, libraryEditorialS.projectStats]}><Text style={[s.projectStatText, libraryEditorialS.projectStatText]}>{formatCount(projectSnapshot.wordCount)} words</Text><Text style={[s.projectStatDot, libraryEditorialS.projectStatDot]}>·</Text><Text numberOfLines={1} style={[s.projectStatText, libraryEditorialS.projectStatText]}>{currentPart}</Text><Text style={[s.projectStatDot, libraryEditorialS.projectStatDot]}>·</Text><Text style={[s.projectStatText, libraryEditorialS.projectStatText]}>{project.images?.length ? `${project.images.length} visual${project.images.length === 1 ? '' : 's'}` : getImageSystemConfig(project.type).mode === 'IMAGE_LED' ? 'Illustrations planned' : 'Visuals optional'}</Text><Text style={[s.projectStatDot, libraryEditorialS.projectStatDot]}>·</Text><Text style={[s.projectStatText, libraryEditorialS.projectStatText]}>{formatLastEdited(project.updatedAt)}</Text></View>
       <View style={[s.projectEngagementRow, libraryEditorialS.projectEngagementRow]} accessibilityLabel={project.communityPublic ? `${projectEngagement?.viewCount ?? 0} Community views and ${projectEngagement?.reactionCount ?? 0} reactions` : 'Share this book in Community to see reader activity'}>{project.communityPublic ? <><View style={s.projectEngagementMetric}><Text style={[s.projectEngagementIcon, libraryEditorialS.projectEngagementIcon]}>◎</Text><Text style={[s.projectEngagementText, libraryEditorialS.projectEngagementText]}>{formatCount(projectEngagement?.viewCount ?? 0)} views</Text></View><View style={s.projectEngagementDivider} /><View style={s.projectEngagementMetric}><Text style={[s.projectEngagementIcon, libraryEditorialS.projectEngagementIcon]}>✦</Text><Text style={[s.projectEngagementText, libraryEditorialS.projectEngagementText]}>{formatCount(projectEngagement?.reactionCount ?? 0)} reactions</Text></View></> : <Text style={[s.projectEngagementHint, libraryEditorialS.projectEngagementHint]}>◎ Share in Community to see reader activity</Text>}</View>
       {!project.archived && <View style={[s.projectCardActions, libraryEditorialS.projectCardActions]}><BookezButton label="Continue writing" icon="feather" compact onPress={() => selectAndOpen(project, 'Write')} style={libraryEditorialS.projectContinueButton} /><BookezButton label="Preview book" variant="secondary" compact onPress={() => { onSelectProject(project.title); onOpenBookStudio(project.title, 'read'); }} style={libraryEditorialS.projectPreviewButton} /></View>}
-    </View>;
+    </BookezInstrumentReveal>;
   };
 
   return <><PageHeader page="Library" onPage={onPage} editorial /><Text style={[s.intro, libraryEditorialS.intro]}>Pick up a thread, or begin a brand new little world.</Text>
-    <BookezInstrumentReveal triggerKey={`Library-focus-${focusProject?.title ?? activeProject}`} delay={70} reduceMotion={reduceMotion} style={[s.focusCard, libraryEditorialS.focusCard]}><FolioSurfaceOrnament triggerKey={`Library-folio-${focusProject?.title ?? activeProject}`} delay={170} reduceMotion={reduceMotion} /><View pointerEvents="none" style={libraryEditorialS.focusCardAccent} />{focusProject ? <View pointerEvents="none" style={[s.focusCoverPeek, libraryEditorialS.focusCoverPeek]} accessibilityLabel={`${focusProject.title} cover`}>{focusCover?.uri ? <><Image source={{ uri: focusCover.uri }} style={s.focusCoverImage} resizeMode="cover" accessibilityLabel={`${focusProject.title} cover image`} /><View style={s.focusCoverVeil} /></> : <BookezDefaultCover type={focusProject.type} animated />}</View> : null}<BookezInkReveal triggerKey="Library-desk" delay={110} style={libraryEditorialS.focusArtworkReveal}><View style={libraryEditorialS.focusArtworkGraphic}><BookezWritingDesk width={138} height={83} color={bookezColors.textPrimary} accent={bookezColors.secondaryAccent} /></View></BookezInkReveal>
+    <BookezInstrumentReveal triggerKey={`Library-focus-${focusProject?.title ?? activeProject}`} delay={70} reduceMotion={reduceMotion} variant="folio" direction={-1} style={[s.focusCard, libraryEditorialS.focusCard]}><FolioSurfaceOrnament triggerKey={`Library-folio-${focusProject?.title ?? activeProject}`} delay={170} reduceMotion={reduceMotion} /><LibraryHeroFolioHardware /><View pointerEvents="none" style={libraryEditorialS.focusCardAccent} />{focusProject ? <View pointerEvents="none" style={[s.focusCoverPeek, libraryEditorialS.focusCoverPeek]} accessibilityLabel={`${focusProject.title} cover`}>{focusCover?.uri ? <><Image source={{ uri: focusCover.uri }} style={s.focusCoverImage} resizeMode="cover" accessibilityLabel={`${focusProject.title} cover image`} /><View style={s.focusCoverVeil} /></> : <BookezDefaultCover type={focusProject.type} animated />}</View> : null}<BookezInkReveal triggerKey="Library-desk" delay={110} style={libraryEditorialS.focusArtworkReveal}><View style={libraryEditorialS.focusArtworkGraphic}><BookezWritingDesk width={138} height={83} color={bookezColors.textPrimary} accent={bookezColors.secondaryAccent} /></View></BookezInkReveal>
       <View style={[s.focusHeader, libraryEditorialS.focusHeader]}><Text style={[s.focusEyebrow, libraryEditorialS.focusEyebrow]}>{focusIsManual ? 'YOUR FOCUS BOOK' : 'CLOSEST TO COMPLETION'}</Text><Pressable onPress={() => setFocusPickerOpen(true)} hitSlop={8} style={[s.focusPickerButton, libraryEditorialS.focusPickerButton]} accessibilityRole="button" accessibilityLabel="Choose the book shown in the focus card"><Text style={[s.focusPickerButtonText, libraryEditorialS.focusPickerButtonText]}>Switch</Text><Text style={[s.focusPickerButtonArrow, libraryEditorialS.focusPickerButtonArrow]}>⌄</Text></Pressable></View>
       <Text style={[s.focusTitle, libraryEditorialS.focusTitle]}>{focusProject?.title ?? activeProject}</Text><Text style={[s.focusCopy, libraryEditorialS.focusCopy]}>Follow the thread from first idea to finished manuscript.</Text>{focusSnapshot && <Text style={[s.focusProgress, libraryEditorialS.focusProgress]}>{focusSnapshot.progressPercent}% complete · {focusSnapshot.stage}</Text>}
       {focusProject && focusSnapshot && <LibraryWritingHome embedded project={focusProject} projects={activeBooks} snapshot={focusSnapshot} onUpdateProject={updateLibraryProject} onOpenWritingBook={onOpenWritingBook} onPage={(nextPage) => { onSelectProject(focusProject.title); onPage(nextPage); }} />}
@@ -2014,6 +2036,9 @@ function Plan({ projects, activeProject, onSelectProject, onUpdateProject, onPag
 
   return <>
     <BookezInkReveal triggerKey={`Plan-${currentProject?.title ?? 'empty'}`} style={s.planHero}>
+      <LinearGradient pointerEvents="none" colors={[bookezColors.surfaceRaised, bookezColors.manuscript, '#E8D9C1']} locations={[0, 0.62, 1]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={StyleSheet.absoluteFill} />
+      <View pointerEvents="none" style={planEditorialS.planHeroPaperEdge} />
+      <View pointerEvents="none" style={[planEditorialS.planHeroPaperEdge, planEditorialS.planHeroPaperEdgeSecond]} />
       <View style={s.planHeroTopRow}>
         <Text style={s.planHeroTopLabel}>YOUR WRITING SPACE</Text>
         <Pressable onPress={() => setProjectMenuOpen(true)} style={s.planHeroSwitcher}>
@@ -2038,7 +2063,7 @@ function Plan({ projects, activeProject, onSelectProject, onUpdateProject, onPag
       </View>
     </BookezInkReveal>
 
-    <BookezInstrumentReveal triggerKey={`Plan-selected-${currentProject?.title ?? 'empty'}`} delay={105} reduceMotion={reduceMotion} style={s.planSelectedCard}>
+    <BookezInstrumentReveal triggerKey={`Plan-selected-${currentProject?.title ?? 'empty'}`} delay={105} reduceMotion={reduceMotion} variant="folio" direction={-1} style={s.planSelectedCard}>
       <FolioSurfaceOrnament triggerKey={`Plan-selected-folio-${currentProject?.title ?? 'empty'}`} delay={210} reduceMotion={reduceMotion} />
       <View style={s.planSelectedIcon}><BookezMysticIcon name={selectedType.name} size={43} surface="jewel" shape="bookplate" animated /></View>
       <View style={{ flex: 1 }}><Text style={s.planSelectedOverline}>PLANNING</Text><Text style={s.planSelectedTitle}>{selectedType.name}</Text><Text style={s.planSelectedSub}>{blueprint.unitLabelPlural} · {estimatedTargetPages || '—'} pages</Text></View>
@@ -2051,7 +2076,7 @@ function Plan({ projects, activeProject, onSelectProject, onUpdateProject, onPag
       </Pressable>)}
     </BookezInstrumentReveal>
 
-    {step === 0 && <BookezInstrumentReveal triggerKey={`Plan-section-0-${currentProject?.title ?? 'empty'}`} delay={45} reduceMotion={reduceMotion} style={s.planStepCardAesthetic}>
+    {step === 0 && <BookezInstrumentReveal triggerKey={`Plan-section-0-${currentProject?.title ?? 'empty'}`} delay={45} reduceMotion={reduceMotion} variant="page" style={s.planStepCardAesthetic}>
       <FolioSurfaceOrnament triggerKey={`Plan-section-folio-0-${currentProject?.title ?? 'empty'}`} delay={160} reduceMotion={reduceMotion} />
       <Text style={s.planSectionKickerAesthetic}>SECTION 1 · SET THE SCOPE</Text>
       <Text style={s.planSectionTitleAesthetic}>How big should this be?</Text>
@@ -2095,7 +2120,7 @@ function Plan({ projects, activeProject, onSelectProject, onUpdateProject, onPag
       </View>
     </BookezInstrumentReveal>}
 
-    {step === 1 && <BookezInstrumentReveal triggerKey={`Plan-section-1-${currentProject?.title ?? 'empty'}`} delay={45} reduceMotion={reduceMotion} style={s.planStepCardAesthetic}>
+    {step === 1 && <BookezInstrumentReveal triggerKey={`Plan-section-1-${currentProject?.title ?? 'empty'}-${structureFilter}-${structurePage}`} delay={45} reduceMotion={reduceMotion} variant="page" direction={structurePage % 2 === 0 ? 1 : -1} style={s.planStepCardAesthetic}>
       <FolioSurfaceOrnament triggerKey={`Plan-section-folio-1-${currentProject?.title ?? 'empty'}`} delay={160} reduceMotion={reduceMotion} />
       <Text style={s.planSectionKickerAesthetic}>SECTION 2 · BUILD THE CONTAINER</Text>
       <Text style={s.planSectionTitleAesthetic}>What belongs in it?</Text>
@@ -2116,7 +2141,7 @@ function Plan({ projects, activeProject, onSelectProject, onUpdateProject, onPag
       {referencesRelevant && referencesItem && <View style={s.referencePlanCard}><View style={s.referencePlanHeader}><View style={s.referencePlanIcon}><Text style={s.referencePlanIconText}>◌</Text></View><View style={s.referencePlanCopy}><Text style={s.referencePlanEyebrow}>OPTIONAL BACK MATTER</Text><Text style={s.referencePlanTitle}>References</Text><Text style={s.referencePlanHint}>Include a source list when this work uses research, quotations, or borrowed ideas.</Text></View><Pressable onPress={() => toggleStructure(referencesItem.label)} style={[s.referencePlanToggle, referencesEnabled && s.referencePlanToggleOn]} accessibilityRole="switch" accessibilityState={{ checked: referencesEnabled }} accessibilityLabel="Include references"><Text style={[s.referencePlanToggleText, referencesEnabled && s.referencePlanToggleTextOn]}>{referencesEnabled ? 'ON' : 'OFF'}</Text></Pressable></View>{referencesEnabled && <View style={s.referencePlanBody}><Text style={s.referencePlanFieldLabel}>REFERENCE NOTES</Text><TextInput value={referenceNotes} onChangeText={(value) => { setReferenceNotes(value); persistPlan({ referenceNotes: value }); }} multiline placeholder="Example: cite the books, articles, interviews, or websites that shaped this work…" placeholderTextColor="#B4B5C2" style={s.referencePlanInput} accessibilityLabel="Reference notes" /><Text style={s.referencePlanExample}>Example: Author, A. A. (2024). Title of the source. Publisher. Add the details you know; Bookez can format the final citation in Stats.</Text></View>}</View>}
     </BookezInstrumentReveal>}
 
-    {step === 2 && <BookezInstrumentReveal triggerKey={`Plan-section-2-${currentProject?.title ?? 'empty'}`} delay={45} reduceMotion={reduceMotion} style={s.planStepCardAesthetic}>
+    {step === 2 && <BookezInstrumentReveal triggerKey={`Plan-section-2-${currentProject?.title ?? 'empty'}-${activeStoryMapPage}`} delay={45} reduceMotion={reduceMotion} variant="page" direction={activeStoryMapPage % 2 === 0 ? 1 : -1} style={s.planStepCardAesthetic}>
       <FolioSurfaceOrnament triggerKey={`Plan-section-folio-2-${currentProject?.title ?? 'empty'}`} delay={160} reduceMotion={reduceMotion} />
       <Text style={s.planSectionKickerAesthetic}>SECTION 3 · MAKE THE STORY MAP</Text>
       <Text style={s.planSectionTitleAesthetic}>Put the heart on the page.</Text>
@@ -2869,11 +2894,29 @@ function JourneyBookVisual({ snapshot, reduceMotion, triggerKey }: { snapshot: J
   }, [pageTurn, progressFill, reduceMotion, reveal, triggerKey]);
 
   return <Animated.View style={[journeyEnhancementS.bookVisual, completed && journeyEnhancementS.bookVisualComplete, { opacity: reveal, transform: [{ translateY: reveal.interpolate({ inputRange: [0, 1], outputRange: [4, 0] }) }, { scale: reveal.interpolate({ inputRange: [0, 0.72, 1], outputRange: [0.92, 1.035, 1], extrapolate: 'clamp' }) }] }]} accessibilityLabel={`${completed ? 'Finished book' : planning ? 'Book outline' : writing ? 'Manuscript in progress' : 'Blank manuscript'} visual`}>
-    <Animated.View style={[journeyEnhancementS.bookPage, completed && journeyEnhancementS.bookPageComplete, { transform: [{ translateX: pageTurn.interpolate({ inputRange: [0, 1], outputRange: [0, -3] }) }, { rotate: pageTurn.interpolate({ inputRange: [0, 1], outputRange: ['-8deg', '-13deg'] }) }] }]} />
-    <Animated.View style={[journeyEnhancementS.bookPage, journeyEnhancementS.bookPageBack, planning && journeyEnhancementS.bookPagePlanning, writing && journeyEnhancementS.bookPageWriting, { transform: [{ translateX: pageTurn.interpolate({ inputRange: [0, 1], outputRange: [0, 3] }) }, { rotate: pageTurn.interpolate({ inputRange: [0, 1], outputRange: ['8deg', '14deg'] }) }] }]} />
-    <Animated.View style={[journeyEnhancementS.bookCover, completed && journeyEnhancementS.bookCoverComplete, { transform: [{ translateY: pageTurn.interpolate({ inputRange: [0, 1], outputRange: [0, -1.5] }) }, { rotate: pageTurn.interpolate({ inputRange: [0, 1], outputRange: ['-3deg', '-1deg'] }) }] }]}><View style={journeyEnhancementS.bookCoverSpine} /><Text style={journeyEnhancementS.bookVisualMark}>{completed ? '✦' : planning ? '⌁' : writing ? '✎' : '○'}</Text><Animated.View style={[journeyEnhancementS.bookClasp, { transform: [{ scale: pageTurn.interpolate({ inputRange: [0, 0.62, 1], outputRange: [1, 1.14, 1] }) }] }]}><View style={journeyEnhancementS.bookClaspStud} /></Animated.View></Animated.View>
+    <Animated.View style={[journeyEnhancementS.bookPage, completed && journeyEnhancementS.bookPageComplete, { transform: [{ perspective: 460 }, { translateX: pageTurn.interpolate({ inputRange: [0, 1], outputRange: [0, -4] }) }, { rotateY: pageTurn.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '24deg'] }) }, { rotate: pageTurn.interpolate({ inputRange: [0, 1], outputRange: ['-8deg', '-13deg'] }) }] }]}><View style={journeyEnhancementS.bookPageDeck} /><View style={journeyEnhancementS.bookPageRule} /><View style={[journeyEnhancementS.bookPageRule, journeyEnhancementS.bookPageRuleShort]} /></Animated.View>
+    <Animated.View style={[journeyEnhancementS.bookPage, journeyEnhancementS.bookPageBack, planning && journeyEnhancementS.bookPagePlanning, writing && journeyEnhancementS.bookPageWriting, { transform: [{ perspective: 460 }, { translateX: pageTurn.interpolate({ inputRange: [0, 1], outputRange: [0, 4] }) }, { rotateY: pageTurn.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '-28deg'] }) }, { rotate: pageTurn.interpolate({ inputRange: [0, 1], outputRange: ['8deg', '14deg'] }) }] }]}><View style={journeyEnhancementS.bookPageDeck} /><View style={journeyEnhancementS.bookPageRule} /></Animated.View>
+    <Animated.View style={[journeyEnhancementS.bookCover, completed && journeyEnhancementS.bookCoverComplete, { transform: [{ translateY: pageTurn.interpolate({ inputRange: [0, 1], outputRange: [0, -1.5] }) }, { rotate: pageTurn.interpolate({ inputRange: [0, 1], outputRange: ['-3deg', '-1deg'] }) }] }]}><View style={journeyEnhancementS.bookCoverSpine} /><View style={journeyEnhancementS.bookCoverInnerFrame} /><View style={journeyEnhancementS.bookCoverStitchTop} /><View style={journeyEnhancementS.bookCoverStitchBottom} /><Text style={journeyEnhancementS.bookVisualMark}>{completed ? '✦' : planning ? '⌁' : writing ? '✎' : '○'}</Text><Animated.View style={[journeyEnhancementS.bookClasp, { transform: [{ scale: pageTurn.interpolate({ inputRange: [0, 0.62, 1], outputRange: [1, 1.14, 1] }) }] }]}><View style={journeyEnhancementS.bookClaspStud} /></Animated.View></Animated.View>
     <View style={journeyEnhancementS.bookVisualProgress}><Animated.View style={[journeyEnhancementS.bookVisualProgressFill, { width: reduceMotion ? `${safeProgress}%` : progressFill.interpolate({ inputRange: [0, 1], outputRange: ['0%', `${safeProgress}%`] }) }]} /></View>
   </Animated.View>;
+}
+
+function JourneyProgressFill({ progress, reduceMotion, triggerKey }: { progress: number; reduceMotion: boolean; triggerKey: string }) {
+  const reveal = useRef(new Animated.Value(reduceMotion ? 1 : 0)).current;
+
+  useEffect(() => {
+    reveal.stopAnimation();
+    if (reduceMotion) {
+      reveal.setValue(1);
+      return;
+    }
+    reveal.setValue(0);
+    const animation = Animated.timing(reveal, { toValue: 1, delay: 330, duration: 820, easing: Easing.out(Easing.cubic), useNativeDriver: false, isInteraction: false });
+    animation.start();
+    return () => animation.stop();
+  }, [reduceMotion, reveal, triggerKey]);
+
+  return <Animated.View style={[s.journeyProgressFill, { width: reduceMotion ? `${progress}%` : reveal.interpolate({ inputRange: [0, 1], outputRange: ['0%', `${progress}%`] }) }]} />;
 }
 
 function JourneyCelebration({ celebration, reduceMotion, onDismiss, onPrimary }: { celebration: JourneyCelebration; reduceMotion: boolean; onDismiss: () => void; onPrimary?: () => void }) {
@@ -2955,6 +2998,27 @@ const achievementCelebrationS = StyleSheet.create({
   primaryArrow: { color: '#FFF', fontSize: 18 },
   secondary: { minHeight: 33, alignItems: 'center', justifyContent: 'center' },
   secondaryText: { color: C.muted, fontSize: 9, fontWeight: '700' },
+});
+
+const achievementCelebrationStyleMap = achievementCelebrationS as unknown as Record<string, unknown>;
+Object.entries({
+  overlay: { backgroundColor: 'rgba(4,10,9,0.78)' },
+  card: { backgroundColor: bookezColors.surface, borderColor: bookezColors.border, shadowColor: '#000' },
+  glow: { backgroundColor: bookezColors.secondaryAccent },
+  badge: { backgroundColor: bookezColors.secondaryAccentSoft, borderColor: bookezColors.secondaryAccent, shadowColor: bookezColors.secondaryAccent },
+  badgeText: { color: bookezColors.textPrimary },
+  eyebrow: { color: bookezColors.secondaryAccent },
+  title: { color: bookezColors.textPrimary },
+  detail: { color: bookezColors.textSecondary },
+  context: { backgroundColor: bookezColors.surfaceMuted },
+  contextIcon: { color: bookezColors.secondaryAccent },
+  contextText: { color: bookezColors.textPrimary },
+  primary: { backgroundColor: bookezColors.accentStrong },
+  primaryText: { color: bookezColors.textOnAccent },
+  primaryArrow: { color: bookezColors.textOnAccent },
+  secondaryText: { color: bookezColors.textSecondary },
+}).forEach(([key, override]) => {
+  achievementCelebrationStyleMap[key] = [achievementCelebrationStyleMap[key], override];
 });
 
 type JourneyPoint = { x: number; y: number };
@@ -5293,16 +5357,26 @@ function Write({ projects, activeProject, userId, onOpenWritingBook, onUpdatePro
 
   return <>
     {focusMode && <View style={s.focusModeHeader}><Text style={s.focusModeLabel}>FOCUS MODE</Text><Pressable onPress={toggleFocusMode} style={s.focusModeExit} accessibilityRole="button" accessibilityLabel="Exit focus mode"><Text style={s.focusModeExitText}>Exit focus</Text></Pressable></View>}
-    <View style={[s.writeProjectBar, s.writeProjectBarRight, focusMode && s.focusHidden]}>
-      <Pressable onPress={() => setProjectMenuOpen(true)} style={s.writeProjectSwitcher} accessibilityLabel="Switch writing project">
-        <View style={s.writeProjectIcon}><BookezMysticIcon name={currentProject.type} size={34} surface="jewel" shape="bookplate" animated /></View>
-        <View style={s.writeProjectCopy}><Text style={s.writeProjectOverline}>WRITING</Text><Text numberOfLines={1} style={s.writeProjectTitle}>{currentProject.title}</Text></View>
-        <Text style={s.writeProjectChevron}>⌄</Text>
-      </Pressable>
-    </View>
-
     <BookezInkReveal triggerKey={`Write-${currentProject.title}`} style={[s.writeHero, compactHero && s.writeHeroCompact, focusMode && s.focusHidden]}>
-      <View style={[s.writeTop, compactHero && s.writeTopCompact]}><View style={s.writeTopCopy}><Text style={[s.overline, writeEditorialS.writeHeroOverline]}>{currentProject.title.toUpperCase()}</Text><Text style={s.writeTitle}>{completed ? 'The manuscript is complete.' : 'Write'}</Text>{!completed && <Text style={s.writeTitleHint}>Focus. Create. One word at a time.</Text>}</View>{parts.length > 0 && <View style={[s.writeProgress, s.writeTopProgress, compactHero && s.writeTopProgressCompact]}><View style={s.writeProgressTop}><Text style={s.writeProgressValue}>{completionPercent}%</Text><Text style={s.writeProgressLabel}>COMPLETE</Text></View><View style={s.writeProgressTrack}><View style={[s.writeProgressFill, { width: `${completionPercent}%`, backgroundColor: activeArea.color }]} /></View><Text style={s.writeProgressText}>{completed ? 'MANUSCRIPT READY' : activeProgressLabel}</Text></View>}</View>
+      <LinearGradient pointerEvents="none" colors={[bookezColors.surfaceRaised, bookezColors.surface, bookezColors.manuscript]} locations={[0, 0.58, 1]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={StyleSheet.absoluteFill} />
+      <View pointerEvents="none" style={writeEditorialS.writeManuscriptLeatherGlow} />
+      <View pointerEvents="none" style={writeEditorialS.writeManuscriptTopRule} />
+      <View style={[writeEditorialS.writeManuscriptMasthead, compactHero && writeEditorialS.writeManuscriptMastheadCompact]}>
+        <View style={writeEditorialS.writeManuscriptHeading}>
+          <Text style={writeEditorialS.writeManuscriptStudio}>BOOKEZ STUDIO</Text>
+          <Text numberOfLines={2} style={[writeEditorialS.writeManuscriptTitle, completed && writeEditorialS.writeManuscriptTitleComplete]}>{completed ? 'MANUSCRIPT COMPLETE' : 'MANUSCRIPT'}</Text>
+          <Text style={writeEditorialS.writeManuscriptSubtitle}>{completed ? 'Your story is ready for its next chapter.' : 'Craft your story.\nOne word at a time.'}</Text>
+        </View>
+        <View style={[writeEditorialS.writeManuscriptArt, compactHero && writeEditorialS.writeManuscriptArtCompact]} accessible={false}>
+          <BookezManuscriptFolio width={compactHero ? 142 : 166} height={compactHero ? 86 : 100} color={bookezColors.textPrimary} accent={bookezColors.secondaryAccent} />
+        </View>
+      </View>
+      <Pressable onPress={() => setProjectMenuOpen(true)} style={writeEditorialS.writeManuscriptProjectCard} accessibilityRole="button" accessibilityLabel="Switch writing project">
+        <View style={writeEditorialS.writeManuscriptProjectIcon}><BookezMysticIcon name={currentProject.type} size={38} surface="jewel" shape="bookplate" animated /></View>
+        <View style={writeEditorialS.writeManuscriptProjectCopy}><Text numberOfLines={1} style={writeEditorialS.writeManuscriptProjectTitle}>{currentProject.title.toUpperCase()}</Text><Text numberOfLines={1} style={writeEditorialS.writeManuscriptProjectMeta}>{currentProject.type} · {completed ? 'Manuscript ready' : activeProgressLabel}</Text></View>
+        <Text style={writeEditorialS.writeManuscriptProjectArrow}>›</Text>
+      </Pressable>
+      {parts.length > 0 && <View style={writeEditorialS.writeManuscriptProgress}><View style={s.writeProgressTop}><Text style={[s.writeProgressValue, writeEditorialS.writeManuscriptProgressValue]}>{completionPercent}%</Text><Text style={[s.writeProgressLabel, writeEditorialS.writeManuscriptProgressLabel]}>COMPLETE</Text></View><View style={[s.writeProgressTrack, writeEditorialS.writeManuscriptProgressTrack]}><View style={[s.writeProgressFill, writeEditorialS.writeManuscriptProgressFill, { width: `${completionPercent}%` }]} /></View></View>}
       {activePart && !completed && <Pressable onPress={continueWriting} style={s.writeContinueButton} accessibilityRole="button" accessibilityLabel="Continue writing" accessibilityHint="Focuses the current manuscript and places the cursor at the end."><LinearGradient pointerEvents="none" colors={[bookezColors.accentStrong, bookezColors.accent]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={StyleSheet.absoluteFill} /><View style={s.writeContinueCopy}><Text style={s.writeContinueLabel}>CONTINUE WRITING</Text><Text style={s.writeContinueHint}>{activeProgressLabel}</Text></View><Text style={s.writeContinueArrow}>→</Text></Pressable>}
       <WriteCompletionSeal signal={completionSealSignal} />
     </BookezInkReveal>
@@ -5545,15 +5619,16 @@ function Journey({ projects, activeProject, onSelectProject, onUpdateProject, on
       <Text style={s.journeyPickerChevron}>⌄</Text>
     </Pressable>
 
-    <View style={s.journeySummaryCard}>
-      <View style={s.journeySummaryTop}><View><Text style={s.journeySummaryEyebrow}>YOUR JOURNEY</Text><Text style={s.journeySummaryStage}>{snapshot.stage}</Text></View><Text style={s.journeySummaryPercent}>{snapshot.progressPercent}%</Text></View>
-      <JourneyBookVisual snapshot={snapshot} />
-      <View style={s.journeyProgressTrack}><View style={[s.journeyProgressFill, { width: `${snapshot.progressPercent}%` }]} /></View>
-      <View style={s.journeyStatsRow}><View style={s.journeyStat}><Text style={s.journeyStatValue}>{formatCount(snapshot.wordCount)}</Text><Text style={s.journeyStatLabel}>WORDS WRITTEN</Text><Text style={s.journeyStatSub}>{snapshot.targetWords ? `of ${formatCount(snapshot.targetWords)} est. target` : 'Target not set'}</Text></View><View style={s.journeyStatDivider} /><View style={s.journeyStat}><Text style={s.journeyStatValue}>{snapshot.completedUnits} of {snapshot.unitCount}</Text><Text style={s.journeyStatLabel}>{snapshot.blueprint.unitLabelPlural.toUpperCase()}</Text><Text style={s.journeyStatSub}>with a draft</Text></View></View>
+    <BookezInstrumentReveal triggerKey={`Journey-summary-${journeySignature}`} delay={70} reduceMotion={reduceMotion} variant="folio" direction={-1} style={s.journeySummaryCard}>
+      <FolioSurfaceOrnament triggerKey={`Journey-folio-${journeySignature}`} delay={170} reduceMotion={reduceMotion} />
+      <View style={s.journeySummaryTop}><View><Text style={s.journeySummaryEyebrow}>YOUR JOURNEY</Text><Text style={s.journeySummaryStage}>{snapshot.stage}</Text></View><BookezAnimatedNumber value={snapshot.progressPercent} triggerKey={journeySignature} formatter={(value) => `${Math.round(value)}%`} reduceMotion={reduceMotion} style={s.journeySummaryPercent} /></View>
+      <JourneyBookVisual snapshot={snapshot} reduceMotion={reduceMotion} triggerKey={journeySignature} />
+      <View style={s.journeyProgressTrack}><JourneyProgressFill progress={snapshot.progressPercent} reduceMotion={reduceMotion} triggerKey={journeySignature} /></View>
+      <View style={s.journeyStatsRow}><View style={s.journeyStat}><BookezAnimatedNumber value={snapshot.wordCount} triggerKey={journeySignature} formatter={(value) => formatCount(Math.round(value))} reduceMotion={reduceMotion} style={s.journeyStatValue} /><Text style={s.journeyStatLabel}>WORDS WRITTEN</Text><Text style={s.journeyStatSub}>{snapshot.targetWords ? `of ${formatCount(snapshot.targetWords)} est. target` : 'Target not set'}</Text></View><View style={s.journeyStatDivider} /><View style={s.journeyStat}><Text style={s.journeyStatValue}>{snapshot.completedUnits} of {snapshot.unitCount}</Text><Text style={s.journeyStatLabel}>{snapshot.blueprint.unitLabelPlural.toUpperCase()}</Text><Text style={s.journeyStatSub}>with a draft</Text></View></View>
       <View style={s.journeyEstimateCard}><View style={s.journeyEstimateIcon}><Text style={s.journeyEstimateIconText}>◷</Text></View><View style={s.journeyEstimateCopy}><Text style={s.journeyEstimateLabel}>ESTIMATED FINISH</Text><Text style={s.journeyEstimateValue}>{snapshot.estimateLabel}</Text><Text style={s.journeyEstimateDetail}>{snapshot.estimateDetail}</Text></View></View>
       <View style={s.journeyNextRow}><View style={s.journeyNextDot}><Text style={s.journeyNextDotText}>{currentMilestone.icon}</Text></View><View style={s.journeyNextCopy}><Text style={s.journeyNextEyebrow}>NEXT STEP</Text><Text style={s.journeyNextTitle}>{nextStep.title}</Text><Text style={s.journeyNextMeta}>{nextStep.time}</Text></View><Text style={s.journeyNextArrow}>→</Text></View>
       <Pressable onPress={() => snapshot.manuscriptComplete ? onOpenBookStudio(currentProject.title, 'read') : onOpenWritingBook(currentProject.title)} style={s.journeyContinueButton}><Text style={s.journeyContinueText}>{snapshot.manuscriptComplete ? 'Open Book Studio' : 'Continue Journey'}</Text><Text style={s.journeyContinueAction}>{nextAction}</Text><Text style={s.journeyContinueArrow}>→</Text></Pressable>
-    </View>
+    </BookezInstrumentReveal>
 
     {todayPlan && <View style={[s.journeyTodayCard, todayPlan.tone === 'paused' && s.journeyTodayCardPaused, todayPlan.tone === 'foundation' && s.journeyTodayCardFoundation]}>
       <View style={s.journeyTodayHeader}><View style={[s.journeyTodayIcon, todayPlan.tone === 'paused' && s.journeyTodayIconPaused, todayPlan.tone === 'foundation' && s.journeyTodayIconFoundation]}><Text style={s.journeyTodayIconText}>{todayPlan.tone === 'paused' ? 'Ⅱ' : todayPlan.tone === 'foundation' ? '⌁' : '◷'}</Text></View><View style={s.journeyTodayCopy}><Text style={s.journeyTodayEyebrow}>TODAY’S WRITING PLAN</Text><Text style={s.journeyTodayTitle}>{todayPlan.title}</Text></View><Text style={s.journeyTodayStatus}>{todayPlan.tone === 'scheduled' ? 'TODAY' : todayPlan.tone === 'paused' ? 'PAUSED' : 'GENTLE'}</Text></View>
@@ -6128,6 +6203,7 @@ function ProfileSupportSheet({ visible, type, onClose, onSwitchToFeedback }: { v
 }
 
 function Profile({ projects, reminders, onRemindersChange, smartReminders, onSmartRemindersChange, profileReminders, onProfileRemindersChange, onLogout, onDeleteAccount, cloudSyncState, cloudConflictCount, cloudBackupEnabled, onCloudBackupChange, onSyncNow, onReviewConflicts, onPage, onOpenBookStudio, onOpenOnboarding }: { projects: Project[]; reminders: boolean; onRemindersChange: (enabled: boolean) => void; smartReminders: boolean; onSmartRemindersChange: (enabled: boolean) => void; profileReminders: ProfileReminder[]; onProfileRemindersChange: Dispatch<SetStateAction<ProfileReminder[]>>; onLogout: () => Promise<void>; onDeleteAccount: () => Promise<void>; cloudSyncState: 'saved' | 'saving' | 'offline' | 'paused' | 'error' | 'conflict'; cloudConflictCount: number; cloudBackupEnabled: boolean; onCloudBackupChange: (enabled: boolean) => void; onSyncNow: () => void; onReviewConflicts: () => void; onPage: (page: Page) => void; onOpenBookStudio: (title: string, section: StudioSection) => void; onOpenOnboarding: () => void }) {
+  const reduceMotion = useBookezReduceMotion();
   const [notificationPanelOpen, setNotificationPanelOpen] = useState(false);
   const [expandedReminderId, setExpandedReminderId] = useState('weekday-writing');
   const [voicePanelOpen, setVoicePanelOpen] = useState(false);
@@ -6143,6 +6219,7 @@ function Profile({ projects, reminders, onRemindersChange, smartReminders, onSma
   const [accountActionError, setAccountActionError] = useState('');
   const [deleteConfirmation, setDeleteConfirmation] = useState('');
   const [authOpen, setAuthOpen] = useState(false);
+  const [emailChangeOpen, setEmailChangeOpen] = useState(false);
   const [cloudEmail, setCloudEmail] = useState<string | null>(null);
   const [cloudProfile, setCloudProfile] = useState<{ id: string; displayName: string; bio: string | null; createdAt: string | null } | null>(null);
   const [profileAvatarUri, setProfileAvatarUri] = useState<string | null>(null);
@@ -6395,16 +6472,18 @@ function Profile({ projects, reminders, onRemindersChange, smartReminders, onSma
               ? 'Offline — saved on this device'
               : 'Synced securely';
 
-  return <><BookezInkReveal triggerKey="Profile" style={s.profileHero}><View style={s.profileHeroIdentity}><Pressable onPress={() => void chooseProfileAvatar()} disabled={profileAvatarBusy} style={[s.profileAvatar, s.profileAvatarCompact]} accessibilityRole="button" accessibilityLabel={cloudProfile ? 'Choose profile picture' : 'Sign in to choose a profile picture'}>{profileAvatarUri ? <Image source={{ uri: profileAvatarUri }} style={s.profileAvatarImage} resizeMode="cover" /> : <Text style={[s.profileAvatarText, s.profileAvatarTextCompact]}>{profileInitials}</Text>}<View style={[s.profileHalo, s.profileHaloCompact]} />{cloudProfile ? <View style={s.profileAvatarEditBadge}><Text style={s.profileAvatarEditBadgeText}>{profileAvatarBusy ? '…' : '✎'}</Text></View> : null}</Pressable><View style={s.profileHeroCopy}><Text style={s.profileOverline}>BOOKEZ WRITER</Text><Text numberOfLines={1} style={[s.profileName, s.profileNameInHero]}>{profileDisplayName}</Text><Text numberOfLines={2} style={s.profileEmail}>{cloudEmail ?? 'Sign in to sync your writing across devices'}</Text><Text style={s.profileMemberSince}>{memberSince}</Text></View></View><Pressable onPress={openProfileEditor} style={s.profileEditButton} accessibilityRole="button" accessibilityLabel={cloudProfile ? 'Edit profile' : 'Sign in to sync your writing'}><Text style={s.profileEditButtonText}>{cloudProfile ? 'Edit profile' : 'Sign in to sync'}</Text></Pressable></BookezInkReveal>
-    <WriterProfileSummaryCard userId={cloudProfile?.id ?? null} refreshKey={`${projects.length}:${projects.map((project) => project.cloudId).join(',')}`} onEdit={cloudProfile ? openProfileEditor : undefined} />
+  return <><BookezInstrumentReveal triggerKey="Profile" reduceMotion={reduceMotion} variant="folio" direction={-1} style={s.profileHero}><FolioSurfaceOrnament triggerKey="Profile-hero-folio" delay={110} reduceMotion={reduceMotion} /><View style={s.profileHeroIdentity}><Pressable onPress={() => void chooseProfileAvatar()} disabled={profileAvatarBusy} style={[s.profileAvatar, s.profileAvatarCompact]} accessibilityRole="button" accessibilityLabel={cloudProfile ? 'Choose profile picture' : 'Sign in to choose a profile picture'}>{profileAvatarUri ? <Image source={{ uri: profileAvatarUri }} style={s.profileAvatarImage} resizeMode="cover" /> : <Text style={[s.profileAvatarText, s.profileAvatarTextCompact]}>{profileInitials}</Text>}<View style={[s.profileHalo, s.profileHaloCompact]} />{cloudProfile ? <View style={s.profileAvatarEditBadge}><Text style={s.profileAvatarEditBadgeText}>{profileAvatarBusy ? '…' : '✎'}</Text></View> : null}</Pressable><View style={s.profileHeroCopy}><Text style={s.profileOverline}>BOOKEZ WRITER</Text><Text numberOfLines={1} style={[s.profileName, s.profileNameInHero]}>{profileDisplayName}</Text><Text numberOfLines={2} style={s.profileEmail}>{cloudEmail ?? 'Sign in to sync your writing across devices'}</Text><Text style={s.profileMemberSince}>{memberSince}</Text></View></View><Pressable onPress={openProfileEditor} style={s.profileEditButton} accessibilityRole="button" accessibilityLabel={cloudProfile ? 'Edit profile' : 'Sign in to sync your writing'}><Text style={s.profileEditButtonText}>{cloudProfile ? 'Edit profile' : 'Sign in to sync'}</Text></Pressable></BookezInstrumentReveal>
+    <WriterProfileSummaryCard userId={cloudProfile?.id ?? null} refreshKey={`${projects.length}:${projects.map((project) => project.cloudId).join(',')}`} onEdit={cloudProfile ? openProfileEditor : undefined} artifact />
     <Text style={s.preferenceTitle}>Getting started</Text>
-    <View style={s.onboardingProfileCard}>
+    <BookezInstrumentReveal triggerKey="Profile-tour" delay={120} reduceMotion={reduceMotion} variant="folio" style={s.onboardingProfileCard}>
+      <FolioSurfaceOrnament triggerKey="Profile-tour-folio" delay={220} reduceMotion={reduceMotion} />
       <View style={s.onboardingProfileGlow} />
       <View style={s.onboardingProfileHeader}><View style={s.onboardingProfileIcon}><Text style={s.onboardingProfileIconText}>✦</Text></View><View style={s.onboardingProfileCopy}><Text style={s.onboardingProfileKicker}>YOUR BOOKEZ MAP</Text><Text style={s.onboardingProfileTitle}>Find your way around.</Text><Text style={s.onboardingProfileSub}>A quick, visual tour of every part of the writing space.</Text></View></View>
       <Pressable onPress={onOpenOnboarding} style={s.onboardingProfileButton} accessibilityRole="button" accessibilityLabel="Review the Bookez quick tour"><Text style={s.onboardingProfileButtonText}>Review the tour</Text><Text style={s.onboardingProfileButtonArrow}>→</Text></Pressable>
-    </View>
+    </BookezInstrumentReveal>
     <Text style={s.preferenceTitle}>Cloud Sync</Text>
     <View style={syncS.dropdown}>
+      <FolioSurfaceOrnament triggerKey="Profile-cloud-panel" delay={245} reduceMotion={reduceMotion} />
       <Pressable onPress={() => setCloudSyncPanelOpen((current) => !current)} style={syncS.dropdownHeader} accessibilityRole="button" accessibilityState={{ expanded: cloudSyncPanelOpen }} accessibilityLabel={cloudSyncPanelOpen ? 'Collapse cloud sync controls' : 'Expand cloud sync controls'}>
         <View style={syncS.dropdownIcon}><Text style={syncS.dropdownIconText}>☁</Text></View>
         <View style={syncS.dropdownCopy}><Text style={syncS.dropdownKicker}>CLOUD BACKUP</Text><Text style={syncS.dropdownTitle}>Cloud sync</Text><Text style={syncS.dropdownStatus}>{cloudSyncSummary}</Text></View>
@@ -6423,11 +6502,13 @@ function Profile({ projects, reminders, onRemindersChange, smartReminders, onSma
     </Modal>
       <Text style={s.preferenceTitle}>Notifications</Text>
       <View style={s.notificationPanel}>
+      <FolioSurfaceOrnament triggerKey="Profile-notifications-panel" delay={275} reduceMotion={reduceMotion} />
       <Pressable onPress={() => setNotificationPanelOpen(!notificationPanelOpen)} style={s.notificationPanelHeader} accessibilityRole="button" accessibilityLabel={notificationPanelOpen ? 'Close notification controls' : 'Open notification controls'}><View style={s.notificationBell}><Text style={s.notificationBellText}>◷</Text></View><View style={s.notificationHeaderCopy}><Text style={s.notificationTitle}>Writing reminders</Text><Text style={s.notificationSub}>{reminders ? `${profileReminders.length} reminder${profileReminders.length === 1 ? '' : 's'} · ${smartReminders ? 'adapts to your pace' : 'steady messages'}` : 'Turn them on for gentle, book-specific nudges'}</Text></View><Switch value={reminders} onValueChange={(value) => { onRemindersChange(value); if (value) setNotificationPanelOpen(true); }} trackColor={{ false: '#D7D9E6', true: '#BAB6F1' }} thumbColor={reminders ? C.periwinkle : '#FFF'} /></Pressable>
       {notificationPanelOpen && <View style={s.notificationPanelBody}><Text style={s.notificationPanelHint}>Choose when Bookez checks in. Times use your device’s local time, and each nudge points to the next part of the book you are moving forward.</Text><View style={s.notificationSmartCard}><View style={s.notificationSmartIcon}><Text style={s.notificationSmartIconText}>✦</Text></View><View style={s.notificationSmartCopy}><Text style={s.notificationSmartTitle}>{smartReminders ? 'Smart pacing is on' : 'Smart pacing is off'}</Text><Text style={s.notificationSmartDescription}>{smartReminders ? activeReminderInsight?.summary ?? 'Bookez will use your writing rhythm to shape each reminder.' : 'Your reminders will keep a simple, steady message and will not adjust to your writing history.'}</Text>{smartReminders && activeReminderInsight && <Text style={s.notificationSmartPreview}>{activeReminderInsight.kind === 'catch_up' ? `Next return: about ${formatCount(activeReminderInsight.suggestedWords)} words · ${activeReminderInsight.suggestedMinutes} min` : activeReminderInsight.kind === 'complete' ? 'Next nudge: a calm final read-through' : activeReminderInsight.goalLabel}</Text>}</View><Switch value={smartReminders} onValueChange={onSmartRemindersChange} trackColor={{ false: '#D7D9E6', true: '#BAB6F1' }} thumbColor={smartReminders ? C.periwinkle : '#FFF'} accessibilityLabel="Adapt reminders to my writing progress" /></View>{reminders ? profileReminders.map((reminder) => { const expanded = expandedReminderId === reminder.id; const frequency = getProfileReminderFrequency(reminder); return <View key={reminder.id} style={[s.notificationReminder, expanded && s.notificationReminderExpanded]}><Pressable onPress={() => setExpandedReminderId(expanded ? '' : reminder.id)} style={s.notificationReminderSummary} accessibilityRole="button" accessibilityLabel={`${reminder.label}, ${reminder.time}`}><View style={[s.notificationReminderIcon, reminder.enabled && s.notificationReminderIconActive]}><Text style={s.notificationReminderIconText}>◷</Text></View><View style={s.notificationReminderCopy}><Text numberOfLines={1} style={s.notificationReminderLabel}>{reminder.label || 'Untitled reminder'}</Text><Text style={s.notificationReminderMeta}>{reminder.time} · {getProfileReminderFrequencyLabel(reminder)}</Text></View><Switch value={reminder.enabled} onValueChange={(value) => updateProfileReminder(reminder.id, { enabled: value })} trackColor={{ false: '#D7D9E6', true: '#BAB6F1' }} thumbColor={reminder.enabled ? C.periwinkle : '#FFF'} accessibilityLabel={`Enable ${reminder.label || 'writing'} reminder`} /><Text style={s.notificationReminderChevron}>{expanded ? '⌃' : '⌄'}</Text></Pressable>{expanded && <View style={s.notificationReminderEditor}><Text style={s.notificationFieldLabel}>REMINDER NAME</Text><TextInput value={reminder.label} onChangeText={(value) => updateProfileReminder(reminder.id, { label: value })} placeholder="Writing session" placeholderTextColor="#A0A3BB" style={s.notificationInput} accessibilityLabel="Reminder name" /><Text style={s.notificationFieldLabel}>TIME</Text><TextInput value={reminder.time} onChangeText={(value) => updateProfileReminder(reminder.id, { time: value })} onEndEditing={({ nativeEvent }) => { const normalized = normalizeReminderTime(nativeEvent.text); if (normalized) updateProfileReminder(reminder.id, { time: normalized }); else Alert.alert('Check the reminder time', 'Use a time such as 7:00 PM or 19:00.'); }} placeholder="e.g. 7:00 PM" placeholderTextColor="#A0A3BB" style={s.notificationInput} accessibilityLabel="Reminder time" /><Text style={s.notificationFieldLabel}>FREQUENCY</Text><View style={s.notificationFrequencyRow}>{profileReminderFrequencyOptions.map((option) => <Pressable key={`${reminder.id}-${option.key}`} onPress={() => option.key !== 'custom' && updateProfileReminder(reminder.id, { days: option.days })} style={[s.notificationFrequencyChoice, frequency === option.key && s.notificationFrequencyChoiceActive]} accessibilityRole="button" accessibilityState={{ selected: frequency === option.key }}><Text style={[s.notificationFrequencyText, frequency === option.key && s.notificationFrequencyTextActive]}>{option.label}</Text></Pressable>)}</View><Text style={s.notificationFieldLabel}>DAYS OF THE WEEK</Text><View style={s.notificationDaysRow}>{dayLabels.map((label, day) => <Pressable key={`${reminder.id}-${day}`} onPress={() => toggleProfileReminderDay(reminder.id, day)} style={[s.notificationDay, reminder.days.includes(day) && s.notificationDayActive]} accessibilityLabel={`${reminder.days.includes(day) ? 'Remove' : 'Add'} ${dayNames[day]}`}><Text style={[s.notificationDayText, reminder.days.includes(day) && s.notificationDayTextActive]}>{label}</Text></Pressable>)}</View><View style={s.notificationReminderActions}><Text style={s.notificationReminderDaysHint}>{reminder.days.length ? `${getProfileReminderFrequencyLabel(reminder)} · ${reminder.days.length} day${reminder.days.length === 1 ? '' : 's'} selected` : 'Choose at least one day'}</Text><Pressable onPress={() => removeProfileReminder(reminder.id)} style={s.notificationRemoveButton}><Text style={s.notificationRemoveText}>Remove</Text></Pressable></View></View>}</View>; }) : <Text style={s.notificationDisabledCopy}>Reminders are paused. Turn them on whenever you want a gentle nudge.</Text>}<Pressable onPress={addProfileReminder} style={s.notificationAddButton} accessibilityRole="button"><Text style={s.notificationAddIcon}>＋</Text><Text style={s.notificationAddText}>Add another reminder</Text></Pressable></View>}
     </View>
     <Text style={s.preferenceTitle}>Reading & listening</Text>
     <View style={s.voicePanel}>
+      <FolioSurfaceOrnament triggerKey="Profile-voice-panel" delay={300} reduceMotion={reduceMotion} />
       <Pressable onPress={() => setVoicePanelOpen((current) => !current)} style={s.voicePanelHeader} accessibilityRole="button" accessibilityState={{ expanded: voicePanelOpen }} accessibilityLabel={voicePanelOpen ? 'Collapse reading voice settings' : 'Expand reading voice settings'}>
         <View style={s.voicePanelIcon}><Text style={s.voicePanelIconText}>◖</Text></View>
         <View style={s.voicePanelCopy}><Text style={s.voicePanelKicker}>AUDIOBOOK VOICE</Text><Text style={s.voicePanelTitle}>Reading voice</Text><Text numberOfLines={1} style={s.voicePanelStatus}>{selectedVoice ? `${selectedVoice.name} · ${selectedVoice.language}` : 'Device default voice'}</Text></View>
@@ -6451,6 +6532,7 @@ function Profile({ projects, reminders, onRemindersChange, smartReminders, onSma
     </Modal>
     <Text style={s.preferenceTitle}>Help & information</Text>
     <View style={s.settingsCard}>
+      <FolioSurfaceOrnament triggerKey="Profile-help-panel" delay={325} reduceMotion={reduceMotion} />
       <Pressable onPress={() => openSupport('help')} style={s.settingsRow} accessibilityRole="button"><View style={s.settingsRowCopy}><View style={[s.settingsIcon, s.settingsIconBlue]}><Text style={s.settingsIconText}>?</Text></View><View><Text style={s.settingsText}>Help with Bookez</Text><Text style={s.settingsSub}>Find your way around planning, writing, and sync</Text></View></View><Text style={s.chevron}>›</Text></Pressable>
       <View style={s.prefLine} />
       <Pressable onPress={() => openSupport('feedback')} style={s.settingsRow} accessibilityRole="button"><View style={s.settingsRowCopy}><View style={[s.settingsIcon, s.settingsIconBlue]}><Text style={s.settingsIconText}>✦</Text></View><View><Text style={s.settingsText}>Feedback & suggestions</Text><Text style={s.settingsSub}>Share an idea or tell us what would help</Text></View></View><Text style={s.chevron}>›</Text></Pressable>
@@ -6461,6 +6543,7 @@ function Profile({ projects, reminders, onRemindersChange, smartReminders, onSma
     </View>
     <Text style={s.preferenceTitle}>Privacy & terms</Text>
     <View style={s.settingsCard}>
+      <FolioSurfaceOrnament triggerKey="Profile-legal-panel" delay={350} reduceMotion={reduceMotion} />
       <Pressable onPress={() => setLegalDocument('privacy')} style={s.settingsRow}><View style={s.settingsRowCopy}><View style={[s.settingsIcon, s.settingsIconBlue]}><Text style={s.settingsIconText}>⌁</Text></View><View><Text style={s.settingsText}>Privacy policy</Text><Text style={s.settingsSub}>How Bookez handles your writing</Text></View></View><Text style={s.chevron}>›</Text></Pressable>
       <View style={s.prefLine} />
       <Pressable onPress={() => setLegalDocument('terms')} style={s.settingsRow}><View style={s.settingsRowCopy}><View style={[s.settingsIcon, s.settingsIconGold]}><Text style={s.settingsIconText}>§</Text></View><View><Text style={s.settingsText}>Terms of service</Text><Text style={s.settingsSub}>The simple rules for using Bookez</Text></View></View><Text style={s.chevron}>›</Text></Pressable>
@@ -6470,6 +6553,12 @@ function Profile({ projects, reminders, onRemindersChange, smartReminders, onSma
 
     <Text style={s.preferenceTitle}>Account & data</Text>
     <View style={s.accountCard}>
+      <FolioSurfaceOrnament triggerKey="Profile-account-panel" delay={375} reduceMotion={reduceMotion} />
+      <View style={s.accountEmailPanel}>
+        <View style={s.accountEmailHeader}><View style={[s.settingsIcon, s.settingsIconGold]}><Text style={s.settingsIconText}>@</Text></View><View style={s.accountActionCopy}><Text style={s.accountEmailKicker}>ACCOUNT / EMAIL</Text><Text numberOfLines={1} style={s.settingsText}>Email address</Text><Text numberOfLines={2} style={s.accountEmailValue}>{cloudEmail ?? 'Sign in to manage your account email'}</Text></View></View>
+        <Pressable onPress={() => cloudEmail ? setEmailChangeOpen(true) : setAuthOpen(true)} style={s.changeEmailButton} accessibilityRole="button" accessibilityLabel={cloudEmail ? 'Change account email' : 'Sign in to manage account email'}><Text style={s.changeEmailButtonText}>{cloudEmail ? 'Change email' : 'Sign in to manage'}</Text><Text style={s.changeEmailButtonArrow}>→</Text></Pressable>
+      </View>
+      <View style={s.prefLine} />
       <Pressable onPress={() => activeProject && onOpenBookStudio(activeProject.title, 'export')} style={s.accountActionRow} accessibilityRole="button" accessibilityState={{ disabled: !activeProject }}><View style={[s.settingsIcon, s.settingsIconBlue]}><Text style={s.settingsIconText}>↗</Text></View><View style={s.accountActionCopy}><Text numberOfLines={1} style={s.settingsText}>Export my writing</Text><Text numberOfLines={2} style={s.settingsSub}>{activeProject ? 'Open Book Studio to assemble and export your book' : 'Add a project to export writing'}</Text></View><Text style={s.chevron}>›</Text></Pressable>
       <View style={s.prefLine} />
       <Pressable onPress={() => setAuthOpen(true)} style={s.accountActionRow} accessibilityRole="button"><View style={[s.settingsIcon, s.settingsIconSage]}><Text style={s.settingsIconText}>◎</Text></View><View style={s.accountActionCopy}><Text numberOfLines={1} style={s.settingsText}>Account management</Text><Text numberOfLines={2} style={s.settingsSub}>{cloudEmail ? 'Manage your shared CityPeak sign-in' : 'Connect or manage your Bookez cloud account'}</Text></View><Text style={s.chevron}>›</Text></Pressable>
@@ -6478,6 +6567,7 @@ function Profile({ projects, reminders, onRemindersChange, smartReminders, onSma
     </View>
 
     <View style={s.accountClosureCard}>
+      <FolioSurfaceOrnament triggerKey="Profile-account-closure-panel" delay={400} reduceMotion={reduceMotion} />
       <View pointerEvents="none" style={s.accountClosureRule}><View style={s.accountClosureRuleLine} /><Text style={s.accountClosureRuleMark}>◇</Text><View style={s.accountClosureRuleLine} /></View>
       <View style={s.accountClosureHeader}><View style={s.accountClosureSeal}><Text style={s.accountClosureSealText}>×</Text></View><View style={s.accountClosureCopy}><Text style={s.accountClosureKicker}>ACCOUNT CLOSURE</Text><Text style={s.accountClosureTitle}>Delete your account</Text></View></View>
       <Text style={s.accountClosureDescription}>Permanently removes your Bookez profile, projects, drafts, Community activity, and uploaded files.</Text>
@@ -6507,6 +6597,8 @@ function Profile({ projects, reminders, onRemindersChange, smartReminders, onSma
 
     <AuthSheet visible={authOpen} onClose={() => setAuthOpen(false)} signedInEmail={cloudEmail} />
 
+    <ChangeEmailSheet visible={emailChangeOpen} currentEmail={cloudEmail} onClose={() => setEmailChangeOpen(false)} onEmailConfirmed={(email) => setCloudEmail(email)} />
+
     <ProfileSupportSheet visible={feedbackOpen} type={supportType} onClose={() => setFeedbackOpen(false)} onSwitchToFeedback={() => openSupport('feedback')} />
   </>;
 }
@@ -6518,6 +6610,7 @@ function AuthSheet({ visible, onClose, signedInEmail, dismissible = true }: { vi
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [providerBusy, setProviderBusy] = useState<Provider | null>(null);
   const [resendBusy, setResendBusy] = useState(false);
   const [verificationPending, setVerificationPending] = useState(false);
   const [message, setMessage] = useState('');
@@ -6527,7 +6620,7 @@ function AuthSheet({ visible, onClose, signedInEmail, dismissible = true }: { vi
 
   useEffect(() => {
     if (!visible) return;
-    setMode('signIn'); setMessage(''); setError(''); setShowPassword(false); setResendBusy(false); setVerificationPending(false);
+    setMode('signIn'); setMessage(''); setError(''); setShowPassword(false); setProviderBusy(null); setResendBusy(false); setVerificationPending(false);
     entrance.setValue(0);
     const entranceAnimation = Animated.spring(entrance, { toValue: 1, tension: 58, friction: 9, useNativeDriver: true });
     const glowAnimation = Animated.loop(Animated.sequence([
@@ -6588,11 +6681,72 @@ function AuthSheet({ visible, onClose, signedInEmail, dismissible = true }: { vi
     finally { setBusy(false); }
   };
 
+  const signInWithProvider = async (provider: Provider, label: string) => {
+    setProviderBusy(provider); setMessage(''); setError('');
+    try {
+      const signedIn = provider === 'apple' && Platform.OS === 'ios'
+        ? await signInWithApple()
+        : await signInWithOAuthProvider(provider);
+      if (signedIn) onClose();
+    } catch (caught) {
+      const caughtMessage = caught instanceof Error ? caught.message : `${label} sign-in could not be completed.`;
+      setError(caughtMessage);
+    } finally {
+      setProviderBusy(null);
+    }
+  };
+
   const modeTitle = mode === 'forgot' ? 'Find your way back.' : mode === 'signUp' ? 'Make room for the work that matters.' : 'Welcome back.';
   const modeCopy = mode === 'forgot' ? 'Enter your email and we’ll send a secure link to reset your password.' : mode === 'signUp' ? 'Create a private space for your ideas, drafts, and finished work.' : 'Sign in to keep your writing moving across your devices.';
   const primaryLabel = mode === 'forgot' ? 'Send reset link' : mode === 'signUp' ? 'Create my account' : 'Sign in to Bookez';
 
-  return <Modal animationType="fade" visible={visible} transparent onRequestClose={dismissible ? onClose : undefined}><View style={authS.shade}>{dismissible && <Pressable style={authS.dismiss} onPress={onClose} />}<KeyboardAvoidingView style={authS.keyboard} behavior={Platform.OS === 'ios' ? 'padding' : undefined}><Animated.View style={[authS.sheet, { opacity: entrance, transform: [{ translateY: entrance.interpolate({ inputRange: [0, 1], outputRange: [34, 0] }) }] }]}><LinearGradient colors={['#F7F5FF', '#EEF6FF', '#FFF5EC']} style={StyleSheet.absoluteFill} /><Animated.View style={[authS.orbOne, { transform: [{ translateY: glow.interpolate({ inputRange: [0, 1], outputRange: [0, 16] }) }, { scale: glow.interpolate({ inputRange: [0, 1], outputRange: [1, 1.08] }) }] }]} /><Animated.View style={[authS.orbTwo, { transform: [{ translateY: glow.interpolate({ inputRange: [0, 1], outputRange: [14, 0] }) }] }]} /><ScrollView contentContainerStyle={authS.content} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}><View style={authS.topBar}><View style={authS.brand}><View style={authS.logoMark} accessibilityLabel="Bookez book icon"><View style={authS.bookPageLeft} /><View style={authS.bookPageRight} /><View style={authS.bookSpine} /></View><View><Text style={authS.brandName}>BOOKEZ</Text><Text style={authS.brandSub}>A quieter place to write</Text></View></View>{dismissible && <Pressable onPress={onClose} style={authS.closeButton} accessibilityLabel="Close sign in"><Text style={authS.closeText}>×</Text></Pressable>}</View>{signedInEmail ? <View style={authS.connectedState}><View style={authS.statusIcon}><Text style={authS.statusIconText}>✓</Text></View><Text style={authS.eyebrow}>BOOKEZ CLOUD</Text><Text style={authS.title}>Your writing is connected.</Text><Text style={authS.copy}>Signed in as {signedInEmail}. Your Bookez profile can sync safely without changing your CityPeak account.</Text>{error ? <Text style={authS.error}>{error}</Text> : null}<Pressable onPress={signOut} disabled={busy} style={[authS.primary, busy && authS.disabled]}>{busy && <ActivityIndicator size="small" color="#FFF" />}<Text style={authS.primaryText}>{busy ? 'Signing out…' : 'Sign out of Bookez'}</Text></Pressable><Pressable onPress={onClose} style={authS.secondary}><Text style={authS.secondaryText}>Done</Text></Pressable></View> : <><View style={authS.hero}><Text style={authS.eyebrow}>{mode === 'forgot' ? 'ACCOUNT RECOVERY' : mode === 'signUp' ? 'CREATE YOUR SPACE' : 'WELCOME BACK'}</Text><Text style={authS.title}>{modeTitle}</Text><Text style={authS.copy}>{modeCopy}</Text></View><View style={authS.modeRow}><Pressable onPress={() => { setMode('signIn'); setMessage(''); setError(''); }} style={[authS.modeOption, mode === 'signIn' && authS.modeOptionActive]}><Text style={[authS.modeText, mode === 'signIn' && authS.modeTextActive]}>Sign in</Text></Pressable><Pressable onPress={() => { setMode('signUp'); setMessage(''); setError(''); }} style={[authS.modeOption, mode === 'signUp' && authS.modeOptionActive]}><Text style={[authS.modeText, mode === 'signUp' && authS.modeTextActive]}>Create account</Text></Pressable></View>{mode === 'signUp' && <View><Text style={authS.fieldLabel}>YOUR NAME</Text><TextInput value={displayName} onChangeText={setDisplayName} placeholder="What should we call you?" placeholderTextColor="#A3A5BA" style={authS.input} autoCapitalize="words" accessibilityLabel="Your name" /></View>}<Text style={authS.fieldLabel}>EMAIL ADDRESS</Text><TextInput value={email} onChangeText={setEmail} autoCapitalize="none" keyboardType="email-address" textContentType="emailAddress" placeholder="you@example.com" placeholderTextColor="#A3A5BA" style={authS.input} accessibilityLabel="Email address" />{mode !== 'forgot' && <><Text style={authS.fieldLabel}>PASSWORD</Text><View style={authS.passwordWrap}><TextInput value={password} onChangeText={setPassword} secureTextEntry={!showPassword} textContentType={mode === 'signUp' ? 'newPassword' : 'password'} placeholder={mode === 'signUp' ? 'At least 10 characters, upper/lowercase + number' : 'Your password'} placeholderTextColor="#A3A5BA" style={authS.passwordInput} accessibilityLabel="Password" /><Pressable onPress={() => setShowPassword((current) => !current)} style={authS.passwordToggle} accessibilityLabel={showPassword ? 'Hide password' : 'Show password'}><Text style={authS.passwordToggleText}>{showPassword ? 'Hide' : 'Show'}</Text></Pressable></View></>}{message ? <View style={authS.messageBox}><Text style={authS.messageIcon}>✓</Text><Text style={authS.message}>{message}</Text></View> : null}{error ? <View style={authS.errorBox}><Text style={authS.errorIcon}>!</Text><Text style={authS.error}>{error}</Text></View> : null}{verificationPending && <Pressable onPress={resendConfirmation} disabled={busy || resendBusy} style={authS.textButton}><Text style={authS.textButtonText}>{resendBusy ? 'Sending verification email…' : 'Resend verification email'}</Text></Pressable>}<Pressable onPress={submit} disabled={busy} style={[authS.primary, busy && authS.disabled]}>{busy && <ActivityIndicator size="small" color="#FFF" />}<Text style={authS.primaryText}>{busy ? 'One moment…' : primaryLabel}</Text><Text style={authS.primaryArrow}>→</Text></Pressable>{mode === 'signIn' && <Pressable onPress={() => { setMode('forgot'); setMessage(''); setError(''); }} disabled={busy} style={authS.textButton}><Text style={authS.textButtonText}>Forgot your password?</Text></Pressable>}{mode === 'forgot' && <Pressable onPress={() => { setMode('signIn'); setMessage(''); setError(''); }} style={authS.textButton}><Text style={authS.textButtonText}>← Back to sign in</Text></Pressable>}{mode === 'signUp' && <Text style={authS.legal}>By creating an account, you agree to keep your Bookez space respectful and secure.</Text>}{mode !== 'forgot' && <Pressable onPress={() => { setMode(mode === 'signIn' ? 'signUp' : 'signIn'); setMessage(''); setError(''); }} style={authS.secondary}><Text style={authS.secondaryText}>{mode === 'signIn' ? 'New to Bookez? Create an account' : 'Already have an account? Sign in'}</Text></Pressable>}</>}</ScrollView></Animated.View></KeyboardAvoidingView></View></Modal>;
+  return (
+    <Modal animationType="fade" visible={visible} transparent onRequestClose={dismissible ? onClose : undefined}>
+      <View style={authS.shade}>
+        {dismissible && <Pressable style={authS.dismiss} onPress={onClose} />}
+        <KeyboardAvoidingView style={authS.keyboard} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <Animated.View style={[authS.sheet, { opacity: entrance, transform: [{ translateY: entrance.interpolate({ inputRange: [0, 1], outputRange: [34, 0] }) }] }]}>
+            <LinearGradient colors={[bookezColors.background, bookezColors.surfaceRaised, bookezColors.manuscript]} style={StyleSheet.absoluteFill} />
+            <Animated.View style={[authS.orbOne, { transform: [{ translateY: glow.interpolate({ inputRange: [0, 1], outputRange: [0, 16] }) }, { scale: glow.interpolate({ inputRange: [0, 1], outputRange: [1, 1.08] }) }] }]} />
+            <Animated.View style={[authS.orbTwo, { transform: [{ translateY: glow.interpolate({ inputRange: [0, 1], outputRange: [14, 0] }) }] }]} />
+            <ScrollView contentContainerStyle={authS.content} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+              <View style={authS.topBar}>
+                <View style={authS.brand}>
+                  <View style={authS.logoMark} accessibilityLabel="Bookez book icon"><View style={authS.bookPageLeft} /><View style={authS.bookPageRight} /><View style={authS.bookSpine} /></View>
+                  <View><Text style={authS.brandName}>BOOKEZ</Text><Text style={authS.brandSub}>A quieter place to write</Text></View>
+                </View>
+                {dismissible && <Pressable onPress={onClose} style={authS.closeButton} accessibilityLabel="Close sign in"><Text style={authS.closeText}>×</Text></Pressable>}
+              </View>
+              {signedInEmail ? <View style={authS.connectedState}>
+                <View style={authS.statusIcon}><Text style={authS.statusIconText}>✓</Text></View>
+                <Text style={authS.eyebrow}>BOOKEZ CLOUD</Text>
+                <Text style={authS.title}>Your writing is connected.</Text>
+                <Text style={authS.copy}>Signed in as {signedInEmail}. Your Bookez profile can sync safely without changing your CityPeak account.</Text>
+                {error ? <Text style={authS.error}>{error}</Text> : null}
+                <Pressable onPress={signOut} disabled={busy} style={[authS.primary, busy && authS.disabled]}>{busy && <ActivityIndicator size="small" color="#FFF" />}<Text style={authS.primaryText}>{busy ? 'Signing out…' : 'Sign out of Bookez'}</Text></Pressable>
+                <Pressable onPress={onClose} style={authS.secondary}><Text style={authS.secondaryText}>Done</Text></Pressable>
+              </View> : <>
+                <View style={authS.hero}><Text style={authS.eyebrow}>{mode === 'forgot' ? 'ACCOUNT RECOVERY' : mode === 'signUp' ? 'CREATE YOUR SPACE' : 'WELCOME BACK'}</Text><Text style={authS.title}>{modeTitle}</Text><Text style={authS.copy}>{modeCopy}</Text></View>
+                <View style={authS.modeRow}><Pressable onPress={() => { setMode('signIn'); setMessage(''); setError(''); }} style={[authS.modeOption, mode === 'signIn' && authS.modeOptionActive]}><Text style={[authS.modeText, mode === 'signIn' && authS.modeTextActive]}>Sign in</Text></Pressable><Pressable onPress={() => { setMode('signUp'); setMessage(''); setError(''); }} style={[authS.modeOption, mode === 'signUp' && authS.modeOptionActive]}><Text style={[authS.modeText, mode === 'signUp' && authS.modeTextActive]}>Create account</Text></Pressable></View>
+                {mode !== 'forgot' && <View style={authS.providerSection}><Text style={authS.providerLabel}>CONTINUE WITH</Text><View style={authS.providerRow}><Pressable accessibilityRole="button" accessibilityLabel="Continue with Google" onPress={() => { void signInWithProvider('google', 'Google'); }} disabled={busy || providerBusy !== null} style={[authS.providerButton, (busy || providerBusy !== null) && authS.providerButtonDisabled]}><View style={[authS.providerIconBadge, authS.providerGoogleBadge]}><Text style={authS.googleMark}>G</Text></View><Text style={authS.providerText}>{providerBusy === 'google' ? 'Connecting…' : 'Google'}</Text></Pressable><Pressable accessibilityRole="button" accessibilityLabel="Continue with Apple" onPress={() => { void signInWithProvider('apple', 'Apple'); }} disabled={busy || providerBusy !== null} style={[authS.providerButton, (busy || providerBusy !== null) && authS.providerButtonDisabled]}><View style={[authS.providerIconBadge, authS.providerAppleBadge]}><BookezAppleMark /></View><Text style={authS.providerText}>{providerBusy === 'apple' ? 'Connecting…' : 'Apple'}</Text></Pressable></View><View style={authS.providerDividerRow}><View style={authS.providerDividerLine} /><Text style={authS.providerDividerText}>OR CONTINUE WITH EMAIL</Text><View style={authS.providerDividerLine} /></View></View>}
+                {mode === 'signUp' && <View><Text style={authS.fieldLabel}>YOUR NAME</Text><TextInput value={displayName} onChangeText={setDisplayName} placeholder="What should we call you?" placeholderTextColor={bookezColors.textMuted} style={authS.input} autoCapitalize="words" accessibilityLabel="Your name" /></View>}
+                <Text style={authS.fieldLabel}>EMAIL ADDRESS</Text><TextInput value={email} onChangeText={setEmail} autoCapitalize="none" keyboardType="email-address" textContentType="emailAddress" placeholder="you@example.com" placeholderTextColor={bookezColors.textMuted} style={authS.input} accessibilityLabel="Email address" />
+                {mode !== 'forgot' && <><Text style={authS.fieldLabel}>PASSWORD</Text><View style={authS.passwordWrap}><TextInput value={password} onChangeText={setPassword} secureTextEntry={!showPassword} textContentType={mode === 'signUp' ? 'newPassword' : 'password'} placeholder={mode === 'signUp' ? 'At least 10 characters, upper/lowercase + number' : 'Your password'} placeholderTextColor={bookezColors.textMuted} style={authS.passwordInput} accessibilityLabel="Password" /><Pressable onPress={() => setShowPassword((current) => !current)} style={authS.passwordToggle} accessibilityLabel={showPassword ? 'Hide password' : 'Show password'}><Text style={authS.passwordToggleText}>{showPassword ? 'Hide' : 'Show'}</Text></Pressable></View></>}
+                {message ? <View style={authS.messageBox}><Text style={authS.messageIcon}>✓</Text><Text style={authS.message}>{message}</Text></View> : null}{error ? <View style={authS.errorBox}><Text style={authS.errorIcon}>!</Text><Text style={authS.error}>{error}</Text></View> : null}
+                {verificationPending && <Pressable onPress={resendConfirmation} disabled={busy || resendBusy} style={authS.textButton}><Text style={authS.textButtonText}>{resendBusy ? 'Sending verification email…' : 'Resend verification email'}</Text></Pressable>}
+                <Pressable onPress={submit} disabled={busy || providerBusy !== null} style={[authS.primary, (busy || providerBusy !== null) && authS.disabled]}>{busy && <ActivityIndicator size="small" color="#FFF" />}<Text style={authS.primaryText}>{busy ? 'One moment…' : primaryLabel}</Text><Text style={authS.primaryArrow}>→</Text></Pressable>
+                {mode === 'signIn' && <Pressable onPress={() => { setMode('forgot'); setMessage(''); setError(''); }} disabled={busy || providerBusy !== null} style={authS.textButton}><Text style={authS.textButtonText}>Forgot your password?</Text></Pressable>}{mode === 'forgot' && <Pressable onPress={() => { setMode('signIn'); setMessage(''); setError(''); }} style={authS.textButton}><Text style={authS.textButtonText}>← Back to sign in</Text></Pressable>}{mode === 'signUp' && <Text style={authS.legal}>By creating an account, you agree to keep your Bookez space respectful and secure.</Text>}{mode !== 'forgot' && <Pressable onPress={() => { setMode(mode === 'signIn' ? 'signUp' : 'signIn'); setMessage(''); setError(''); }} style={authS.secondary}><Text style={authS.secondaryText}>{mode === 'signIn' ? 'New to Bookez? Create an account' : 'Already have an account? Sign in'}</Text></Pressable>}
+              </>}
+            </ScrollView>
+          </Animated.View>
+        </KeyboardAvoidingView>
+      </View>
+    </Modal>
+  );
+}
+
+function BookezAppleMark() {
+  return <View style={authS.appleMark} accessibilityElementsHidden><View style={authS.appleBodyLeft} /><View style={authS.appleBodyRight} /><View style={authS.appleBite} /><View style={authS.appleLeaf} /></View>;
 }
 
 function PasswordUpdateScreen({ visible, onComplete }: { visible: boolean; onComplete: () => void }) {
@@ -6695,14 +6849,19 @@ function PlanBookInstrumentMotion() {
       glint.setValue(0);
       return;
     }
+    pageLift.setValue(0);
+    glint.setValue(0);
     const pageAnimation = Animated.loop(Animated.sequence([
-      Animated.delay(6200),
-      Animated.timing(pageLift, { toValue: 1, duration: 420, easing: Easing.out(Easing.cubic), useNativeDriver: true, isInteraction: false }),
-      Animated.timing(pageLift, { toValue: 0, duration: 620, easing: Easing.inOut(Easing.cubic), useNativeDriver: true, isInteraction: false }),
+      Animated.delay(520),
+      Animated.timing(pageLift, { toValue: 1, duration: 510, easing: Easing.out(Easing.cubic), useNativeDriver: true, isInteraction: false }),
+      Animated.spring(pageLift, { toValue: 0, speed: 10, bounciness: 3, useNativeDriver: true, isInteraction: false }),
+      Animated.delay(10800),
     ]));
     const glintAnimation = Animated.loop(Animated.sequence([
-      Animated.delay(7800),
+      Animated.delay(1180),
       Animated.timing(glint, { toValue: 1, duration: 980, easing: Easing.inOut(Easing.cubic), useNativeDriver: true, isInteraction: false }),
+      Animated.timing(glint, { toValue: 0, duration: 1, useNativeDriver: true, isInteraction: false }),
+      Animated.delay(13800),
     ]));
     pageAnimation.start();
     glintAnimation.start();
@@ -6713,36 +6872,64 @@ function PlanBookInstrumentMotion() {
   }, [glint, pageLift, reduceMotion]);
 
   return <View style={s.planArtMotion}>
-    <Animated.View style={{ transform: [{ translateY: pageLift.interpolate({ inputRange: [0, 1], outputRange: [0, -1.5] }) }, { rotate: pageLift.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '-0.7deg'] }) }, { scale: pageLift.interpolate({ inputRange: [0, 1], outputRange: [1, 1.008] }) }] }}>
-      <BookezOpenBook width={150} height={92} color={bookezColors.textPrimary} accent={bookezColors.secondaryAccent} style={s.planArt} />
+    <Animated.View style={{ transform: [{ perspective: 720 }, { translateY: pageLift.interpolate({ inputRange: [0, 1], outputRange: [0, -4] }) }, { rotateX: pageLift.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '3.2deg'] }) }, { rotate: pageLift.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '-1.35deg'] }) }, { scale: pageLift.interpolate({ inputRange: [0, 1], outputRange: [1, 1.02] }) }] }}>
+      <BookezPlanningFolio width={150} height={92} color={bookezColors.textPrimary} accent={bookezColors.secondaryAccent} style={s.planArt} />
     </Animated.View>
+    {!reduceMotion && <Animated.View pointerEvents="none" style={[s.planArtLooseLeaf, { opacity: pageLift.interpolate({ inputRange: [0, 0.16, 0.72, 1], outputRange: [0, 0.5, 0.92, 0.3] }), transform: [{ perspective: 520 }, { translateX: pageLift.interpolate({ inputRange: [0, 1], outputRange: [0, -12] }) }, { translateY: pageLift.interpolate({ inputRange: [0, 1], outputRange: [0, -7] }) }, { rotateY: pageLift.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '-72deg'] }) }, { rotate: pageLift.interpolate({ inputRange: [0, 1], outputRange: ['1deg', '-6deg'] }) }] }]}><BookezPlanningLeaf width={67} height={66} color={bookezColors.textPrimary} accent={bookezColors.secondaryAccent} /></Animated.View>}
     {!reduceMotion && <Animated.View pointerEvents="none" style={[s.planArtGlint, { opacity: glint.interpolate({ inputRange: [0, 0.16, 0.52, 0.88, 1], outputRange: [0, 0.2, 0.9, 0.16, 0] }), transform: [{ translateX: glint.interpolate({ inputRange: [0, 1], outputRange: [8, 132] }) }, { translateY: glint.interpolate({ inputRange: [0, 0.55, 1], outputRange: [7, -3, 4] }) }, { scale: glint.interpolate({ inputRange: [0, 0.52, 1], outputRange: [0.45, 1.05, 0.5] }) }] }]}><Text style={s.planArtGlintText}>✦</Text></Animated.View>}
   </View>;
 }
 
 function FolioSurfaceOrnament({ triggerKey, reduceMotion, tone = 'paper', delay = 0 }: { triggerKey: string; reduceMotion: boolean; tone?: 'paper' | 'ink'; delay?: number }) {
   const trace = useRef(new Animated.Value(reduceMotion ? 1 : 0)).current;
+  const mechanism = useRef(new Animated.Value(reduceMotion ? 1 : 0)).current;
 
   useEffect(() => {
     trace.stopAnimation();
+    mechanism.stopAnimation();
     if (reduceMotion) {
       trace.setValue(1);
+      mechanism.setValue(1);
       return;
     }
     trace.setValue(0);
-    const animation = Animated.timing(trace, { toValue: 1, delay, duration: 920, easing: Easing.out(Easing.cubic), useNativeDriver: true, isInteraction: false });
+    mechanism.setValue(0);
+    const animation = Animated.parallel([
+      Animated.timing(trace, { toValue: 1, delay, duration: 820, easing: Easing.out(Easing.cubic), useNativeDriver: true, isInteraction: false }),
+      Animated.spring(mechanism, { toValue: 1, delay: delay + 90, speed: 12, bounciness: 5, useNativeDriver: true, isInteraction: false }),
+    ]);
     animation.start();
     return () => animation.stop();
-  }, [delay, reduceMotion, trace, triggerKey]);
+  }, [delay, mechanism, reduceMotion, trace, triggerKey]);
 
-  const ink = tone === 'ink';
+  const ink = tone === 'ink' || triggerKey.startsWith('Profile-') || triggerKey.startsWith('Stats-metric-') || triggerKey.startsWith('Stats-chart-');
   return <View pointerEvents="none" accessible={false} style={s.folioOrnament}>
+    <Animated.View style={[s.folioBackSheet, ink && s.folioBackSheetInk, { opacity: mechanism.interpolate({ inputRange: [0, 0.32, 1], outputRange: [0, 0.22, ink ? 0.28 : 0.48] }), transform: [{ perspective: 700 }, { translateX: mechanism.interpolate({ inputRange: [0, 1], outputRange: [7, 0] }) }, { rotateY: mechanism.interpolate({ inputRange: [0, 1], outputRange: ['-4deg', '0deg'] }) }, { rotate: mechanism.interpolate({ inputRange: [0, 1], outputRange: ['0.7deg', '0deg'] }) }] }]} />
+    <Animated.View style={[s.folioTopPage, ink && s.folioTopPageInk, { opacity: mechanism.interpolate({ inputRange: [0, 0.4, 1], outputRange: [0, 0.2, ink ? 0.36 : 0.62] }), transform: [{ translateY: mechanism.interpolate({ inputRange: [0, 1], outputRange: [4, 0] }) }, { scaleX: mechanism.interpolate({ inputRange: [0, 1], outputRange: [0.82, 1] }) }] }]} />
+    <Animated.View style={[s.folioTopPage, s.folioTopPageSecond, ink && s.folioTopPageInk, { opacity: mechanism.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0, 0.16, ink ? 0.24 : 0.4] }), transform: [{ translateY: mechanism.interpolate({ inputRange: [0, 1], outputRange: [5, 0] }) }, { scaleX: mechanism.interpolate({ inputRange: [0, 1], outputRange: [0.76, 1] }) }] }]} />
+    <Animated.View style={[s.folioBevelHighlight, ink && s.folioBevelHighlightInk, { opacity: trace.interpolate({ inputRange: [0, 0.28, 1], outputRange: [0, 0.12, ink ? 0.3 : 0.58] }) }]} />
+    <Animated.View style={[s.folioBevelShadow, ink && s.folioBevelShadowInk, { opacity: trace.interpolate({ inputRange: [0, 0.34, 1], outputRange: [0, 0.12, ink ? 0.34 : 0.48] }) }]} />
+    <Animated.View style={[s.folioSpineRail, ink && s.folioSpineRailInk, { opacity: mechanism.interpolate({ inputRange: [0, 0.46, 1], outputRange: [0, 0.12, ink ? 0.42 : 0.5] }), transform: [{ scaleY: mechanism.interpolate({ inputRange: [0, 1], outputRange: [0.42, 1] }) }] }]} />
     <Animated.View style={[s.folioInsetFrame, ink && s.folioInsetFrameInk, { opacity: trace.interpolate({ inputRange: [0, 0.25, 1], outputRange: [0, 0.18, ink ? 0.34 : 0.5] }) }]} />
     <Animated.View style={[s.folioTopRule, ink && s.folioTopRuleInk, { opacity: trace.interpolate({ inputRange: [0, 0.18, 1], outputRange: [0, 0.3, ink ? 0.7 : 0.62] }), transform: [{ scaleX: trace.interpolate({ inputRange: [0, 1], outputRange: [0.04, 1] }) }] }]} />
-    <View style={[s.folioPageEdge, s.folioPageEdgeOne, ink && s.folioPageEdgeInk]} />
-    <View style={[s.folioPageEdge, s.folioPageEdgeTwo, ink && s.folioPageEdgeInk]} />
-    <View style={[s.folioBottomEdge, ink && s.folioPageEdgeInk]} />
+    <Animated.View style={[s.folioPageEdge, s.folioPageEdgeOne, ink && s.folioPageEdgeInk, { opacity: trace.interpolate({ inputRange: [0, 0.35, 1], outputRange: [0, 0, ink ? 0.42 : 0.52] }), transform: [{ translateX: trace.interpolate({ inputRange: [0, 1], outputRange: [5, 0] }) }] }]} />
+    <Animated.View style={[s.folioPageEdge, s.folioPageEdgeTwo, ink && s.folioPageEdgeInk, { opacity: trace.interpolate({ inputRange: [0, 0.45, 1], outputRange: [0, 0, ink ? 0.28 : 0.34] }), transform: [{ translateX: trace.interpolate({ inputRange: [0, 1], outputRange: [8, 0] }) }] }]} />
+    <Animated.View style={[s.folioBottomEdge, ink && s.folioPageEdgeInk, { opacity: trace.interpolate({ inputRange: [0, 0.3, 1], outputRange: [0, 0.1, ink ? 0.34 : 0.42] }), transform: [{ scaleX: trace.interpolate({ inputRange: [0, 1], outputRange: [0.2, 1] }) }] }]} />
+    <Animated.View style={[s.folioCornerFold, ink && s.folioCornerFoldInk, { opacity: trace.interpolate({ inputRange: [0, 0.4, 1], outputRange: [0, 0, ink ? 0.42 : 0.58] }), transform: [{ rotate: trace.interpolate({ inputRange: [0, 1], outputRange: ['-18deg', '0deg'] }) }, { scale: trace.interpolate({ inputRange: [0, 1], outputRange: [0.45, 1] }) }] }]} />
+    <Animated.View style={[s.folioBrassPin, { opacity: mechanism, transform: [{ translateY: mechanism.interpolate({ inputRange: [0, 1], outputRange: [-5, 0] }) }, { rotate: mechanism.interpolate({ inputRange: [0, 1], outputRange: ['-18deg', '0deg'] }) }, { scale: mechanism.interpolate({ inputRange: [0, 0.66, 1], outputRange: [0.38, 1.14, 1] }) }] }]}><View style={s.folioBrassPinCore} /></Animated.View>
+    {!reduceMotion && <Animated.View style={[s.folioSweep, ink && s.folioSweepInk, { opacity: trace.interpolate({ inputRange: [0, 0.24, 0.58, 0.86, 1], outputRange: [0, 0, 0.72, 0.18, 0] }), transform: [{ translateX: trace.interpolate({ inputRange: [0, 1], outputRange: [-18, 185] }) }] }]} />}
     {!reduceMotion && <Animated.View style={[s.folioSpark, { opacity: trace.interpolate({ inputRange: [0, 0.3, 0.65, 1], outputRange: [0, 0, 0.85, 0] }), transform: [{ translateX: trace.interpolate({ inputRange: [0, 1], outputRange: [0, 72] }) }, { rotate: trace.interpolate({ inputRange: [0, 1], outputRange: ['-18deg', '10deg'] }) }, { scale: trace.interpolate({ inputRange: [0, 0.65, 1], outputRange: [0.4, 1.05, 0.55] }) }] }]}><Text style={[s.folioSparkText, ink && s.folioSparkTextInk]}>✦</Text></Animated.View>}
+  </View>;
+}
+
+function LibraryHeroFolioHardware() {
+  return <View pointerEvents="none" accessible={false} style={s.libraryFolioHardware}>
+    <LinearGradient colors={[bookezWithAlpha(bookezColors.accentStrong, 0.92), bookezWithAlpha(bookezColors.accent, 0.78), bookezWithAlpha(bookezColors.textPrimary, 0.8)]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={s.libraryFolioSpine} />
+    <View style={[s.libraryFolioSpineRib, s.libraryFolioSpineRibTop]} />
+    <View style={[s.libraryFolioSpineRib, s.libraryFolioSpineRibMiddle]} />
+    <View style={[s.libraryFolioSpineRib, s.libraryFolioSpineRibBottom]} />
+    <View style={s.libraryFolioPageBlock}><View style={s.libraryFolioPageRule} /><View style={[s.libraryFolioPageRule, s.libraryFolioPageRuleMiddle]} /><View style={[s.libraryFolioPageRule, s.libraryFolioPageRuleBottom]} /></View>
+    <View style={s.libraryFolioClasp}><LinearGradient colors={[bookezColors.accentStrong, bookezColors.accent, bookezColors.accentStrong]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={StyleSheet.absoluteFill} /><View style={s.libraryFolioClaspStud}><View style={s.libraryFolioClaspStudCore} /></View></View>
   </View>;
 }
 
@@ -6752,24 +6939,43 @@ type BookezInstrumentRevealProps = {
   delay?: number;
   reduceMotion: boolean;
   style?: StyleProp<ViewStyle>;
+  variant?: 'rise' | 'folio' | 'page' | 'tile';
+  direction?: -1 | 1;
 };
 
-function BookezInstrumentReveal({ children, triggerKey, delay = 0, reduceMotion, style }: BookezInstrumentRevealProps) {
+function BookezInstrumentReveal({ children, triggerKey, delay = 0, reduceMotion, style, variant = 'rise', direction = 1 }: BookezInstrumentRevealProps) {
   const reveal = useRef(new Animated.Value(reduceMotion ? 1 : 0)).current;
+  const settle = useRef(new Animated.Value(reduceMotion ? 1 : 0)).current;
 
   useEffect(() => {
     reveal.stopAnimation();
+    settle.stopAnimation();
     if (reduceMotion) {
       reveal.setValue(1);
+      settle.setValue(1);
       return;
     }
     reveal.setValue(0);
-    const animation = Animated.timing(reveal, { toValue: 1, delay, duration: 520, easing: Easing.out(Easing.cubic), useNativeDriver: true, isInteraction: false });
+    settle.setValue(0);
+    const duration = variant === 'page' ? 470 : variant === 'folio' ? 410 : variant === 'tile' ? 360 : 390;
+    const animation = Animated.parallel([
+      Animated.timing(reveal, { toValue: 1, delay, duration, easing: Easing.out(Easing.cubic), useNativeDriver: true, isInteraction: false }),
+      Animated.spring(settle, { toValue: 1, delay, speed: variant === 'page' ? 11 : 13, bounciness: variant === 'page' ? 5 : 4, useNativeDriver: true, isInteraction: false }),
+    ]);
     animation.start();
     return () => animation.stop();
-  }, [delay, reduceMotion, reveal, triggerKey]);
+  }, [delay, reduceMotion, reveal, settle, triggerKey, variant]);
 
-  return <Animated.View style={[style, { opacity: reveal, transform: [{ translateY: reveal.interpolate({ inputRange: [0, 1], outputRange: [8, 0] }) }, { scale: reveal.interpolate({ inputRange: [0, 1], outputRange: [0.985, 1] }) }] }]}>{children}</Animated.View>;
+  const horizontalOffset = variant === 'page' ? 18 * direction : variant === 'folio' ? 7 * direction : variant === 'tile' ? 2 * direction : 0;
+  const verticalOffset = variant === 'tile' ? 11 : variant === 'page' ? 7 : variant === 'folio' ? 9 : 8;
+  const initialScale = variant === 'folio' ? 0.958 : variant === 'page' ? 0.974 : variant === 'tile' ? 0.968 : 0.982;
+  const initialRotateX = variant === 'folio' ? '4.5deg' : variant === 'tile' ? '2.8deg' : variant === 'page' ? '2deg' : '0.7deg';
+  const initialRotateY = variant === 'page' ? `${direction * -10.5}deg` : variant === 'folio' ? `${direction * -4.2}deg` : variant === 'tile' ? `${direction * -2}deg` : '0deg';
+  const opacity = variant === 'page'
+    ? reveal.interpolate({ inputRange: [0, 0.18, 1], outputRange: [0.18, 0.72, 1] })
+    : reveal;
+
+  return <Animated.View style={[style, { opacity, transform: [{ perspective: 900 }, { translateX: settle.interpolate({ inputRange: [0, 1], outputRange: [horizontalOffset, 0] }) }, { translateY: settle.interpolate({ inputRange: [0, 1], outputRange: [verticalOffset, 0] }) }, { rotateX: settle.interpolate({ inputRange: [0, 1], outputRange: [initialRotateX, '0deg'] }) }, { rotateY: settle.interpolate({ inputRange: [0, 1], outputRange: [initialRotateY, '0deg'] }) }, { scale: settle.interpolate({ inputRange: [0, 0.74, 1], outputRange: [initialScale, 1.007, 1] }) }] }]}>{children}</Animated.View>;
 }
 
 function BookezAnimatedNumber({ value, triggerKey, formatter, reduceMotion, style }: { value: number; triggerKey: string; formatter: (value: number) => string; reduceMotion: boolean; style: StyleProp<TextStyle> }) {
@@ -6953,15 +7159,15 @@ function Stats({ projects, activeProject, onSelectProject, onPage }: { projects:
   return <>
     <BookezInkReveal triggerKey={`Stats-${currentProject.title}`} style={s.statsHero}><View style={s.statsHeroTop}><View style={{ flex: 1 }}><Text style={s.statsOverline}>YOUR WRITING RHYTHM</Text><Text style={s.statsTitle}>Stats</Text><Text style={s.statsSubtitle}>Small steps today. Big story tomorrow.</Text></View><Pressable onPress={() => onPage('Journey')} style={s.statsJourneyButton}><Text style={s.statsJourneyButtonText}>View Journey</Text><Text style={s.statsJourneyButtonArrow}>↗</Text></Pressable></View><Text numberOfLines={1} style={s.statsBookName}>{scope === 'overall' ? 'All your projects' : currentProject.title}</Text><View style={s.statsScopeToggle}><Pressable onPress={() => setScope('overall')} style={[s.statsScopeOption, scope === 'overall' && s.statsScopeOptionActive]}><Text style={[s.statsScopeOptionText, scope === 'overall' && s.statsScopeOptionTextActive]}>Overall</Text></Pressable><Pressable onPress={() => setScope('project')} style={[s.statsScopeOption, scope === 'project' && s.statsScopeOptionActive]}><Text style={[s.statsScopeOptionText, scope === 'project' && s.statsScopeOptionTextActive]}>Project-specific</Text></Pressable></View>{scope === 'project' && <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.statsProjectPicker}>{projects.map((project, index) => <Pressable key={projectKey(project, index)} onPress={() => onSelectProject(project.title)} style={[s.statsProjectOption, project.title === activeProject && s.statsProjectOptionActive]}><View style={[s.statsProjectOptionMark, { backgroundColor: project.color }]}><Text style={s.statsProjectOptionMarkText}>{project.mark}</Text></View><Text numberOfLines={1} style={[s.statsProjectOptionText, project.title === activeProject && s.statsProjectOptionTextActive]}>{project.title}</Text></Pressable>)}</ScrollView>}<View style={s.rangeRow}>{(['Week', 'Month', 'All time'] as StatsRange[]).map((item) => <Pill key={item} label={item} selected={range === item} onPress={() => setRange(item)} />)}</View></BookezInkReveal>
 
-      <BookezInstrumentReveal triggerKey={statsMotionKey} delay={70} reduceMotion={reduceMotion} style={s.statsNumbers}><StatsConstellationMotion triggerKey={statsMotionKey} reduceMotion={reduceMotion} /><View style={s.statsHeadlineMetric}><BookezAnimatedNumber value={stats.currentStreak} triggerKey={statsMotionKey} formatter={(value) => value > 0.45 ? String(Math.round(value)) : '—'} reduceMotion={reduceMotion} style={s.bigNumber} /><Text style={s.bigNumberLabel}>DAY STREAK</Text><Text style={s.statsMetricHint}>{stats.activeDays ? `${stats.activeDays} days here · ${stats.lifetimeActiveDays} lifetime` : 'Write to start a streak'}</Text></View><View style={s.statsHeadlineDivider} /><View style={s.statsHeadlineMetric}><BookezAnimatedNumber value={stats.journey.wordCount} triggerKey={statsMotionKey} formatter={(value) => formatCount(Math.round(value))} reduceMotion={reduceMotion} style={s.bigNumber} /><Text style={s.bigNumberLabel}>{scope === 'overall' ? 'TOTAL WORDS' : 'CURRENT WORDS'}</Text><Text style={s.statsMetricHint}>{scope === 'overall' ? 'across all projects' : `${stats.journey.progressPercent}% journey complete`}</Text></View></BookezInstrumentReveal>
+      <BookezInstrumentReveal triggerKey={statsMotionKey} delay={70} reduceMotion={reduceMotion} variant="folio" direction={-1} style={s.statsNumbers}><FolioSurfaceOrnament triggerKey={`Stats-summary-folio-${statsMotionKey}`} delay={160} reduceMotion={reduceMotion} tone="ink" /><StatsConstellationMotion triggerKey={statsMotionKey} reduceMotion={reduceMotion} /><View style={s.statsHeadlineMetric}><BookezAnimatedNumber value={stats.currentStreak} triggerKey={statsMotionKey} formatter={(value) => value > 0.45 ? String(Math.round(value)) : '—'} reduceMotion={reduceMotion} style={s.bigNumber} /><Text style={s.bigNumberLabel}>DAY STREAK</Text><Text style={s.statsMetricHint}>{stats.activeDays ? `${stats.activeDays} days here · ${stats.lifetimeActiveDays} lifetime` : 'Write to start a streak'}</Text></View><View style={s.statsHeadlineDivider} /><View style={s.statsHeadlineMetric}><BookezAnimatedNumber value={stats.journey.wordCount} triggerKey={statsMotionKey} formatter={(value) => formatCount(Math.round(value))} reduceMotion={reduceMotion} style={s.bigNumber} /><Text style={s.bigNumberLabel}>{scope === 'overall' ? 'TOTAL WORDS' : 'CURRENT WORDS'}</Text><Text style={s.statsMetricHint}>{scope === 'overall' ? 'across all projects' : `${stats.journey.progressPercent}% journey complete`}</Text></View></BookezInstrumentReveal>
 
-    <View style={s.statsMetricGrid}><BookezInstrumentReveal triggerKey={statsMotionKey} delay={130} reduceMotion={reduceMotion} style={[s.statsMetricCard, s.statsMetricCardLavender]}><Text style={s.statsMetricIcon}>✎</Text><Text style={s.statsMetricCardValue}>{average(stats.averageWords)}</Text><Text style={s.statsMetricCardLabel}>AVG WORDS / DAY</Text></BookezInstrumentReveal><BookezInstrumentReveal triggerKey={statsMotionKey} delay={180} reduceMotion={reduceMotion} style={[s.statsMetricCard, s.statsMetricCardWarm]}><Text style={s.statsMetricIcon}>▤</Text><Text style={s.statsMetricCardValue}>{average(stats.averagePages)}</Text><Text style={s.statsMetricCardLabel}>AVG EST. PAGES / DAY</Text></BookezInstrumentReveal><BookezInstrumentReveal triggerKey={statsMotionKey} delay={230} reduceMotion={reduceMotion} style={[s.statsMetricCard, s.statsMetricCardSuccess]}><Text style={s.statsMetricIcon}>◷</Text><Text style={s.statsMetricCardValue}>{stats.averageMinutes ? formatDuration(stats.averageMinutes) : '—'}</Text><Text style={s.statsMetricCardLabel}>AVG ACTIVE / DAY</Text></BookezInstrumentReveal><BookezInstrumentReveal triggerKey={statsMotionKey} delay={280} reduceMotion={reduceMotion} style={[s.statsMetricCard, s.statsMetricCardBlue]}><Text style={s.statsMetricIcon}>◌</Text><Text style={s.statsMetricCardValue}>{stats.completionAverage ? `${Math.round(stats.completionAverage)}%` : '—'}</Text><Text style={s.statsMetricCardLabel}>AVG % COMPLETED / DAY</Text></BookezInstrumentReveal></View>
+    <View style={s.statsMetricGrid}><BookezInstrumentReveal triggerKey={statsMotionKey} delay={130} reduceMotion={reduceMotion} variant="tile" direction={-1} style={[s.statsMetricCard, s.statsMetricCardLavender]}><FolioSurfaceOrnament triggerKey={`Stats-metric-words-${statsMotionKey}`} delay={230} reduceMotion={reduceMotion} /><Text style={s.statsMetricIcon}>✎</Text><Text style={s.statsMetricCardValue}>{average(stats.averageWords)}</Text><Text style={s.statsMetricCardLabel}>AVG WORDS / DAY</Text></BookezInstrumentReveal><BookezInstrumentReveal triggerKey={statsMotionKey} delay={180} reduceMotion={reduceMotion} variant="tile" style={[s.statsMetricCard, s.statsMetricCardWarm]}><FolioSurfaceOrnament triggerKey={`Stats-metric-pages-${statsMotionKey}`} delay={280} reduceMotion={reduceMotion} /><Text style={s.statsMetricIcon}>▤</Text><Text style={s.statsMetricCardValue}>{average(stats.averagePages)}</Text><Text style={s.statsMetricCardLabel}>AVG EST. PAGES / DAY</Text></BookezInstrumentReveal><BookezInstrumentReveal triggerKey={statsMotionKey} delay={230} reduceMotion={reduceMotion} variant="tile" direction={-1} style={[s.statsMetricCard, s.statsMetricCardSuccess]}><FolioSurfaceOrnament triggerKey={`Stats-metric-time-${statsMotionKey}`} delay={330} reduceMotion={reduceMotion} /><Text style={s.statsMetricIcon}>◷</Text><Text style={s.statsMetricCardValue}>{stats.averageMinutes ? formatDuration(stats.averageMinutes) : '—'}</Text><Text style={s.statsMetricCardLabel}>AVG ACTIVE / DAY</Text></BookezInstrumentReveal><BookezInstrumentReveal triggerKey={statsMotionKey} delay={280} reduceMotion={reduceMotion} variant="tile" style={[s.statsMetricCard, s.statsMetricCardBlue]}><FolioSurfaceOrnament triggerKey={`Stats-metric-completion-${statsMotionKey}`} delay={380} reduceMotion={reduceMotion} /><Text style={s.statsMetricIcon}>◌</Text><Text style={s.statsMetricCardValue}>{stats.completionAverage ? `${Math.round(stats.completionAverage)}%` : '—'}</Text><Text style={s.statsMetricCardLabel}>AVG % COMPLETED / DAY</Text></BookezInstrumentReveal></View>
 
     <AchievementOverview projectTitle={currentProject.title} bookAchievements={projectMilestones} writingAchievements={writerAchievements} nextAchievement={nextVisibleAchievement} nextLabel={nextVisibleAchievementLabel} triggerKey={statsMotionKey} reduceMotion={reduceMotion} />
 
     <View style={s.achievementSection}><View style={s.statsSectionHeader}><View><Text style={s.statsSectionTitle}>Book milestones</Text><Text style={s.statsCardHint}>Helpful progress markers for {currentProject.title}</Text></View><Text style={s.statsSectionCount}>{earnedProjectMilestones}/{projectMilestones.length}</Text></View><View style={s.achievementCard}><AchievementList achievements={projectMilestones} /></View></View>
 
-    <BookezInstrumentReveal triggerKey={statsMotionKey} delay={300} reduceMotion={reduceMotion} style={s.chartCard}><View style={s.chartHeader}><View><Text style={s.chartTitle}>Writing rhythm</Text><Text style={s.statsCardHint}>{range === 'Week' ? 'Words and focused minutes · last seven days' : range === 'Month' ? 'Recent writing pattern · last thirty days' : 'Most recent logged writing days'}</Text></View><Text style={s.chartTotal}>{stats.totalLoggedWords ? formatCount(stats.totalLoggedWords) : '—'} words</Text></View><View style={s.chartLegend}><View style={s.chartLegendItem}><View style={[s.chartLegendDot, { backgroundColor: bookezColors.accent }]} /><Text style={s.chartLegendText}>Words</Text></View><View style={s.chartLegendItem}><View style={[s.chartLegendDot, { backgroundColor: bookezColors.secondaryAccent }]} /><Text style={s.chartLegendText}>Focused minutes</Text></View></View><View style={s.chart}>{stats.chartRows.map((row, index) => { const wordHeight = row.words ? Math.max(7, Math.round((row.words / maxChartWords) * 95)) : 3; const minuteHeight = row.minutes ? Math.max(7, Math.round((row.minutes / maxChartMinutes) * 95)) : 3; return <View key={row.key} style={s.barCol}><View style={s.barPair}><StatsAnimatedBar height={wordHeight} delay={360 + (index * 45)} triggerKey={statsMotionKey} reduceMotion={reduceMotion} style={[s.bar, row.words > 0 && index === stats.chartRows.length - 1 && s.barActive]} /><StatsAnimatedBar height={minuteHeight} delay={400 + (index * 45)} triggerKey={statsMotionKey} reduceMotion={reduceMotion} style={s.barTime} /></View><Text style={s.barLabel}>{formatActivityDay(row.key)}</Text></View>; })}</View>{!hasActivity && <Text style={s.statsEmptyHint}>No writing days logged yet. Your next manuscript session will start the rhythm here.</Text>}</BookezInstrumentReveal>
+    <BookezInstrumentReveal triggerKey={statsMotionKey} delay={300} reduceMotion={reduceMotion} variant="folio" style={s.chartCard}><FolioSurfaceOrnament triggerKey={`Stats-chart-folio-${statsMotionKey}`} delay={390} reduceMotion={reduceMotion} /><View style={s.chartHeader}><View><Text style={s.chartTitle}>Writing rhythm</Text><Text style={s.statsCardHint}>{range === 'Week' ? 'Words and focused minutes · last seven days' : range === 'Month' ? 'Recent writing pattern · last thirty days' : 'Most recent logged writing days'}</Text></View><Text style={s.chartTotal}>{stats.totalLoggedWords ? formatCount(stats.totalLoggedWords) : '—'} words</Text></View><View style={s.chartLegend}><View style={s.chartLegendItem}><View style={[s.chartLegendDot, { backgroundColor: bookezColors.accent }]} /><Text style={s.chartLegendText}>Words</Text></View><View style={s.chartLegendItem}><View style={[s.chartLegendDot, { backgroundColor: bookezColors.secondaryAccent }]} /><Text style={s.chartLegendText}>Focused minutes</Text></View></View><View style={s.chart}>{stats.chartRows.map((row, index) => { const wordHeight = row.words ? Math.max(7, Math.round((row.words / maxChartWords) * 95)) : 3; const minuteHeight = row.minutes ? Math.max(7, Math.round((row.minutes / maxChartMinutes) * 95)) : 3; return <View key={row.key} style={s.barCol}><View style={s.barPair}><StatsAnimatedBar height={wordHeight} delay={360 + (index * 45)} triggerKey={statsMotionKey} reduceMotion={reduceMotion} style={[s.bar, row.words > 0 && index === stats.chartRows.length - 1 && s.barActive]} /><StatsAnimatedBar height={minuteHeight} delay={400 + (index * 45)} triggerKey={statsMotionKey} reduceMotion={reduceMotion} style={s.barTime} /></View><Text style={s.barLabel}>{formatActivityDay(row.key)}</Text></View>; })}</View>{!hasActivity && <Text style={s.statsEmptyHint}>No writing days logged yet. Your next manuscript session will start the rhythm here.</Text>}</BookezInstrumentReveal>
 
     <View style={s.statsSectionHeader}><View><Text style={s.statsSectionTitle}>Daily ledger</Text><Text style={s.statsCardHint}>Words, estimated pages, time, and completion</Text></View><Text style={s.statsSectionCount}>{stats.activeDays ? `${stats.activeDays} days` : 'No days yet'}</Text></View>
     {stats.dailyRows.length ? stats.dailyRows.map((entry, index) => <BookezInstrumentReveal key={entry.key} triggerKey={statsMotionKey} delay={Math.min(420, 170 + (index * 45))} reduceMotion={reduceMotion} style={s.statsDayRow}><View style={s.statsDayCopy}><Text style={s.statsDayTitle}>{formatActivityDay(entry.key, true)}</Text><Text style={s.statsDaySub}>{formatDuration(entry.minutes)} active</Text></View><View style={s.statsDayMetric}><Text style={s.statsDayValue}>{formatCount(entry.words)}</Text><Text style={s.statsDayLabel}>WORDS</Text></View><View style={s.statsDayMetric}><Text style={s.statsDayValue}>{entry.pages ? entry.pages.toFixed(1) : '—'}</Text><Text style={s.statsDayLabel}>EST. PAGES</Text></View><View style={s.statsDayMetric}><Text style={s.statsDayValue}>{entry.completion ? `${Math.round(entry.completion)}%` : '—'}</Text><Text style={s.statsDayLabel}>DONE</Text></View></BookezInstrumentReveal>) : <BookezInstrumentReveal triggerKey={statsMotionKey} delay={190} reduceMotion={reduceMotion} style={s.statsEmptyCard}><Text style={s.statsEmptyIcon}>⌁</Text><Text style={s.statsEmptyTitle}>Your daily record is waiting.</Text><Text style={s.statsEmptyCopy}>Start writing in the manuscript and Bookez will track your words, pace, pages, and progress by day.</Text></BookezInstrumentReveal>}
@@ -6986,9 +7192,43 @@ function Stats({ projects, activeProject, onSelectProject, onPage }: { projects:
   </>;
 }
 
-function NavigationArtIcon({ page, active, reached = false }: { page: Page; active: boolean; reached?: boolean }) {
-  const color = active ? bookezColors.accent : reached ? bookezColors.secondaryAccent : bookezColors.textMuted;
-  const accent = active ? bookezColors.secondaryAccent : bookezColors.manuscriptEdge;
+function BookezPageScene({ page, children }: { page: Page; children: ReactNode }) {
+  const reduceMotion = useBookezReduceMotion();
+  const sweep = useRef(new Animated.Value(reduceMotion ? 1 : 0)).current;
+  const previousPage = useRef(page);
+  const direction = useRef<-1 | 1>(1);
+
+  if (previousPage.current !== page) {
+    const previousIndex = bottomNavPages.indexOf(previousPage.current);
+    const nextIndex = bottomNavPages.indexOf(page);
+    direction.current = nextIndex >= previousIndex ? 1 : -1;
+    previousPage.current = page;
+  }
+
+  useEffect(() => {
+    sweep.stopAnimation();
+    if (reduceMotion) {
+      sweep.setValue(1);
+      return;
+    }
+    sweep.setValue(0);
+    const animation = Animated.timing(sweep, { toValue: 1, duration: 620, easing: Easing.inOut(Easing.cubic), useNativeDriver: true, isInteraction: false });
+    animation.start();
+    return () => animation.stop();
+  }, [page, reduceMotion, sweep]);
+
+  const fromRight = direction.current === 1;
+  return <View style={s.pageScene}>
+    <View pointerEvents="none" accessible={false} style={[s.pageSceneTopDeck, { opacity: 0.72 }]}><View style={s.pageSceneTopSheetBack} /><View style={s.pageSceneTopSheetMiddle} /><View style={s.pageSceneTopSheetFront}><View style={s.pageSceneTopThread} /></View></View>
+    {children}
+    {!reduceMotion && <Animated.View pointerEvents="none" style={[s.pageSceneEdge, fromRight ? s.pageSceneEdgeRight : s.pageSceneEdgeLeft, { opacity: sweep.interpolate({ inputRange: [0, 0.2, 0.72, 1], outputRange: [0, 0.58, 0.14, 0] }), transform: [{ scaleY: sweep.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0.3, 1, 0.86] }) }] }]}><LinearGradient colors={fromRight ? ['rgba(174,123,62,0)', 'rgba(174,123,62,0.22)'] : ['rgba(174,123,62,0.22)', 'rgba(174,123,62,0)']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={StyleSheet.absoluteFill} /></Animated.View>}
+    {!reduceMotion && <Animated.View pointerEvents="none" style={[s.pageSceneSpark, fromRight ? s.pageSceneSparkLeft : s.pageSceneSparkRight, { opacity: sweep.interpolate({ inputRange: [0, 0.24, 0.58, 0.9, 1], outputRange: [0, 0.12, 0.82, 0.12, 0] }), transform: [{ translateX: sweep.interpolate({ inputRange: [0, 1], outputRange: [0, direction.current * 72] }) }, { translateY: sweep.interpolate({ inputRange: [0, 0.55, 1], outputRange: [4, -2, 2] }) }, { rotate: sweep.interpolate({ inputRange: [0, 1], outputRange: ['-18deg', '16deg'] }) }, { scale: sweep.interpolate({ inputRange: [0, 0.58, 1], outputRange: [0.4, 1, 0.5] }) }] }]}><Text style={s.pageSceneSparkText}>✦</Text></Animated.View>}
+  </View>;
+}
+
+function NavigationArtIcon({ page, active, reached = false, ancient = false }: { page: Page; active: boolean; reached?: boolean; ancient?: boolean }) {
+  const color = ancient ? active ? ancientGameColors.gold : reached ? ancientGameColors.brass : ancientGameColors.muted : active ? bookezColors.accent : reached ? bookezColors.secondaryAccent : bookezColors.textMuted;
+  const accent = ancient ? active ? ancientGameColors.goldPale : ancientGameColors.brassDark : active ? bookezColors.secondaryAccent : bookezColors.manuscriptEdge;
   if (page === 'Library') return <BookezPublishingBook width={25} height={22} color={color} accent={accent} />;
   if (page === 'Plan') return <BookezOpenBook width={27} height={19} color={color} accent={accent} />;
   if (page === 'Write') return <BookezQuill width={19} height={24} color={color} accent={accent} />;
@@ -6999,7 +7239,7 @@ function NavigationArtIcon({ page, active, reached = false }: { page: Page; acti
   return <BookezPublishingBook width={23} height={21} color={color} accent={accent} />;
 }
 
-function Navigation({ page, onPage, projects, activeProject, quillSignal, editorial = false }: { page: Page; onPage: (page: Page) => void; projects: Project[]; activeProject: string; quillSignal: number; editorial?: boolean }) {
+function Navigation({ page, onPage, projects, activeProject, quillSignal, editorial = false, ancient = false }: { page: Page; onPage: (page: Page) => void; projects: Project[]; activeProject: string; quillSignal: number; editorial?: boolean; ancient?: boolean }) {
   const creationPages: Page[] = ['Library', 'Plan', 'Write'];
   const selectedProject = projects.find((project) => project.title === activeProject);
   const selectedSnapshot = selectedProject ? getJourneySnapshot(selectedProject) : null;
@@ -7095,12 +7335,12 @@ function Navigation({ page, onPage, projects, activeProject, quillSignal, editor
     const active = page === item;
     const reached = creation && (index <= projectProgressIndex || index <= reachableCreationIndex);
     return <View key={item} style={s.navTabWrapper}><Pressable onPress={() => onPage(item)} style={s.navItem} accessibilityRole="button" accessibilityState={{ selected: active }}>
-      <View style={[s.navNode, editorial && libraryEditorialS.navNode, active && s.navNodeActive, active && editorial && libraryEditorialS.navNodeActive, reached && !active && s.navNodeReached, !active && !reached && s.navNodeFuture]}>{active && <Animated.View pointerEvents="none" style={[s.navActiveHalo, { opacity: reduceMotion ? 0.1 : activePulse.interpolate({ inputRange: [0, 1], outputRange: [0.07, 0.2] }), transform: reduceMotion ? undefined : [{ scale: activePulse.interpolate({ inputRange: [0, 1], outputRange: [0.84, 1.12] }) }] }]} />}{active && !reduceMotion && <View pointerEvents="none" style={s.navConstellation}><Animated.View style={[s.navConstellationDot, s.navConstellationDotOne, { opacity: constellationTrail.interpolate({ inputRange: [0, 0.12, 0.62, 1], outputRange: [0, 1, 0.7, 0] }), transform: [{ translateX: constellationTrail.interpolate({ inputRange: [0, 1], outputRange: [0, -5] }) }, { translateY: constellationTrail.interpolate({ inputRange: [0, 1], outputRange: [0, -4] }) }, { scale: constellationTrail.interpolate({ inputRange: [0, 0.45, 1], outputRange: [0.3, 1, 0.65] }) }] }]} /><Animated.View style={[s.navConstellationDot, s.navConstellationDotTwo, { opacity: constellationTrail.interpolate({ inputRange: [0, 0.24, 0.76, 1], outputRange: [0, 1, 0.68, 0] }), transform: [{ translateX: constellationTrail.interpolate({ inputRange: [0, 1], outputRange: [0, 5] }) }, { translateY: constellationTrail.interpolate({ inputRange: [0, 1], outputRange: [0, -2] }) }, { scale: constellationTrail.interpolate({ inputRange: [0, 0.55, 1], outputRange: [0.3, 1, 0.6] }) }] }]} /><Animated.View style={[s.navConstellationDot, s.navConstellationDotThree, { opacity: constellationTrail.interpolate({ inputRange: [0, 0.36, 0.86, 1], outputRange: [0, 1, 0.62, 0] }), transform: [{ translateX: constellationTrail.interpolate({ inputRange: [0, 1], outputRange: [0, 3] }) }, { translateY: constellationTrail.interpolate({ inputRange: [0, 1], outputRange: [0, 5] }) }, { scale: constellationTrail.interpolate({ inputRange: [0, 0.65, 1], outputRange: [0.3, 1, 0.55] }) }] }]} /></View>}<Animated.View pointerEvents="none" style={[s.navArtMotion, active && !reduceMotion && { transform: [{ translateY: activePulse.interpolate({ inputRange: [0, 1], outputRange: [0, -0.7] }) }, { scale: activePulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.035] }) }] }]}><Animated.View style={item === 'Write' && !reduceMotion ? { transform: [{ translateX: quillStroke.interpolate({ inputRange: [0, 1], outputRange: [0, 2] }) }, { translateY: quillStroke.interpolate({ inputRange: [0, 1], outputRange: [0, -1] }) }, { rotate: quillStroke.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '-5deg'] }) }] } : undefined}><NavigationArtIcon page={item} active={active} reached={reached} /></Animated.View></Animated.View></View>
-      <Text numberOfLines={1} ellipsizeMode="tail" style={[s.navLabel, editorial && libraryEditorialS.navLabel, active && s.navLabelActive, active && editorial && libraryEditorialS.navLabelActive]}>{pageMeta[item].short}</Text>
+      <View style={[s.navNode, editorial && libraryEditorialS.navNode, ancient && ancientChromeS.navNode, active && s.navNodeActive, active && editorial && libraryEditorialS.navNodeActive, active && ancient && ancientChromeS.navNodeActive, reached && !active && s.navNodeReached, !active && !reached && s.navNodeFuture]}>{active && <Animated.View pointerEvents="none" style={[s.navActiveHalo, ancient && ancientChromeS.navActiveHalo, { opacity: reduceMotion ? 0.1 : activePulse.interpolate({ inputRange: [0, 1], outputRange: [0.07, 0.2] }), transform: reduceMotion ? undefined : [{ scale: activePulse.interpolate({ inputRange: [0, 1], outputRange: [0.84, 1.12] }) }] }]} />}{active && !reduceMotion && <View pointerEvents="none" style={s.navConstellation}><Animated.View style={[s.navConstellationDot, s.navConstellationDotOne, { opacity: constellationTrail.interpolate({ inputRange: [0, 0.12, 0.62, 1], outputRange: [0, 1, 0.7, 0] }), transform: [{ translateX: constellationTrail.interpolate({ inputRange: [0, 1], outputRange: [0, -5] }) }, { translateY: constellationTrail.interpolate({ inputRange: [0, 1], outputRange: [0, -4] }) }, { scale: constellationTrail.interpolate({ inputRange: [0, 0.45, 1], outputRange: [0.3, 1, 0.65] }) }] }]} /><Animated.View style={[s.navConstellationDot, s.navConstellationDotTwo, { opacity: constellationTrail.interpolate({ inputRange: [0, 0.24, 0.76, 1], outputRange: [0, 1, 0.68, 0] }), transform: [{ translateX: constellationTrail.interpolate({ inputRange: [0, 1], outputRange: [0, 5] }) }, { translateY: constellationTrail.interpolate({ inputRange: [0, 1], outputRange: [0, -2] }) }, { scale: constellationTrail.interpolate({ inputRange: [0, 0.55, 1], outputRange: [0.3, 1, 0.6] }) }] }]} /><Animated.View style={[s.navConstellationDot, s.navConstellationDotThree, { opacity: constellationTrail.interpolate({ inputRange: [0, 0.36, 0.86, 1], outputRange: [0, 1, 0.62, 0] }), transform: [{ translateX: constellationTrail.interpolate({ inputRange: [0, 1], outputRange: [0, 3] }) }, { translateY: constellationTrail.interpolate({ inputRange: [0, 1], outputRange: [0, 5] }) }, { scale: constellationTrail.interpolate({ inputRange: [0, 0.65, 1], outputRange: [0.3, 1, 0.55] }) }] }]} /></View>}<Animated.View pointerEvents="none" style={[s.navArtMotion, active && !reduceMotion && { transform: [{ translateY: activePulse.interpolate({ inputRange: [0, 1], outputRange: [0, -0.7] }) }, { scale: activePulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.035] }) }] }]}><Animated.View style={item === 'Write' && !reduceMotion ? { transform: [{ translateX: quillStroke.interpolate({ inputRange: [0, 1], outputRange: [0, 2] }) }, { translateY: quillStroke.interpolate({ inputRange: [0, 1], outputRange: [0, -1] }) }, { rotate: quillStroke.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '-5deg'] }) }] } : undefined}><NavigationArtIcon page={item} active={active} reached={reached} ancient={ancient} /></Animated.View></Animated.View></View>
+      <Text numberOfLines={1} ellipsizeMode="tail" style={[s.navLabel, editorial && libraryEditorialS.navLabel, ancient && ancientChromeS.navLabel, active && s.navLabelActive, active && editorial && libraryEditorialS.navLabelActive, active && ancient && ancientChromeS.navLabelActive]}>{pageMeta[item].short}</Text>
     </Pressable></View>;
   };
 
-  return <View style={[s.navShell, editorial && libraryEditorialS.navShell]}>{routeTraveling && <View pointerEvents="none" style={s.navRouteTrailLayer}><View style={s.navRouteGuide} /><Animated.View style={[s.navRouteLight, { opacity: routeGlow, transform: [{ translateX: routeTravel }, { scale: routeGlow.interpolate({ inputRange: [0, 1], outputRange: [0.7, 1.12] }) }] }]}><View style={s.navRouteLightCore} /></Animated.View></View>}<View style={s.navCreationGroup}><View pointerEvents="none" style={s.navConnectorTrack}><View style={[s.navConnectorSegment, editorial && libraryEditorialS.navConnectorSegment, (projectProgressIndex >= 1 || reachableCreationIndex >= 1) && s.navConnectorSegmentReached]} /><View style={[s.navConnectorSegment, s.navConnectorSegmentSecond, editorial && libraryEditorialS.navConnectorSegment, (projectProgressIndex >= 2 || reachableCreationIndex >= 2) && s.navConnectorSegmentReached]} /></View>{creationPages.map((item, index) => renderNavItem(item, index, true))}</View><View style={[s.navWorkflowBreak, editorial && libraryEditorialS.navWorkflowBreak]} /><View style={s.navSupportGroup}>{bottomNavPages.slice(3).map((item) => renderNavItem(item, 0))}</View></View>;
+  return <View style={[s.navShell, editorial && libraryEditorialS.navShell, ancient && ancientChromeS.navShell]}>{routeTraveling && <View pointerEvents="none" style={s.navRouteTrailLayer}><View style={s.navRouteGuide} /><Animated.View style={[s.navRouteLight, { opacity: routeGlow, transform: [{ translateX: routeTravel }, { scale: routeGlow.interpolate({ inputRange: [0, 1], outputRange: [0.7, 1.12] }) }] }]}><View style={s.navRouteLightCore} /></Animated.View></View>}<View style={s.navCreationGroup}><View pointerEvents="none" style={s.navConnectorTrack}><View style={[s.navConnectorSegment, editorial && libraryEditorialS.navConnectorSegment, (projectProgressIndex >= 1 || reachableCreationIndex >= 1) && s.navConnectorSegmentReached]} /><View style={[s.navConnectorSegment, s.navConnectorSegmentSecond, editorial && libraryEditorialS.navConnectorSegment, (projectProgressIndex >= 2 || reachableCreationIndex >= 2) && s.navConnectorSegmentReached]} /></View>{creationPages.map((item, index) => renderNavItem(item, index, true))}</View><View style={[s.navWorkflowBreak, editorial && libraryEditorialS.navWorkflowBreak, ancient && ancientChromeS.navWorkflowBreak]} /><View style={s.navSupportGroup}>{bottomNavPages.slice(3).map((item) => renderNavItem(item, 0))}</View></View>;
 }
 
 export default Sentry.wrap(function App() {
@@ -7296,7 +7536,7 @@ export default Sentry.wrap(function App() {
         const initialUrl = await Linking.getInitialURL();
         if (initialUrl) authCallback = await handleBookezAuthUrl(initialUrl);
       } catch (caught) {
-        if (mounted) Alert.alert('Reset link unavailable', caught instanceof Error ? caught.message : 'This password reset link may have expired. Request a new one and try again.');
+        if (mounted) Alert.alert('Confirmation link unavailable', bookezAuthCallbackErrorMessage(caught));
       }
       const { data: { session } } = await supabase.auth.getSession();
       if (mounted && authCallback?.type === 'recovery') setPasswordResetVisible(true);
@@ -7308,7 +7548,7 @@ export default Sentry.wrap(function App() {
       void handleBookezAuthUrl(url).then((result) => {
         if (result?.type === 'recovery') setPasswordResetVisible(true);
       }).catch((caught) => {
-        Alert.alert('Reset link unavailable', caught instanceof Error ? caught.message : 'This password reset link may have expired. Request a new one and try again.');
+        Alert.alert('Confirmation link unavailable', bookezAuthCallbackErrorMessage(caught));
       });
     });
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
@@ -7637,7 +7877,11 @@ export default Sentry.wrap(function App() {
     return <Stats projects={projects} activeProject={activeProject} onSelectProject={setActiveProject} onPage={setPage} />;
   };
   const isBookStudio = page === 'BookStudio';
-  return <><StatusBar style="dark" />{isBookStudio ? (!authReady ? null : accountState === 'active' ? renderPage() : accountState === 'signedOut' ? <AuthSheet visible onClose={() => undefined} signedInEmail={null} dismissible={false} /> : <ScrollView contentContainerStyle={s.content} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled"><AccountExit deleted onReturn={returnFromAccount} /></ScrollView>) : <Ambient editorial><SafeAreaView style={s.safe}>{!authReady ? null : accountState === 'active' ? <><Reanimated.ScrollView ref={appScrollRef} contentContainerStyle={s.content} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" onScroll={page === 'Journey' ? journeyScrollHandler : undefined} scrollEventThrottle={16}>{renderPage()}</Reanimated.ScrollView><Navigation page={page} onPage={setPage} projects={projects} activeProject={activeProject} quillSignal={writeQuillSignal} editorial /></> : accountState === 'signedOut' ? <AuthSheet visible onClose={() => undefined} signedInEmail={null} dismissible={false} /> : <ScrollView contentContainerStyle={s.content} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled"><AccountExit deleted onReturn={returnFromAccount} /></ScrollView>}</SafeAreaView></Ambient>}<PasswordUpdateScreen visible={passwordResetVisible} onComplete={() => setPasswordResetVisible(false)} /><BookezOnboarding visible={onboardingVisible && accountState === 'active' && onboardingOwnerChecked === onboardingOwner} onFinish={completeOnboarding} /><AchievementCelebrationModal item={achievementCelebration} onDismiss={dismissAchievementCelebration} onViewStats={viewAchievementStats} /></>;
+  // The manuscript palette is the product-wide visual language now. Stats and
+  // Profile established the darker reference, so every main tab shares that
+  // same ambient chrome and navigation treatment.
+  const ancientPage = page !== 'BookStudio';
+  return <><StatusBar style={ancientPage ? 'light' : 'dark'} />{isBookStudio ? (!authReady ? null : accountState === 'active' ? renderPage() : accountState === 'signedOut' ? <AuthSheet visible onClose={() => undefined} signedInEmail={null} dismissible={false} /> : <ScrollView contentContainerStyle={s.content} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled"><AccountExit deleted onReturn={returnFromAccount} /></ScrollView>) : <Ambient editorial ancient={ancientPage}><SafeAreaView style={s.safe}>{!authReady ? null : accountState === 'active' ? <><Reanimated.ScrollView ref={appScrollRef} contentContainerStyle={s.content} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" onScroll={page === 'Journey' ? journeyScrollHandler : undefined} scrollEventThrottle={16}><BookezPageScene page={page}>{renderPage()}</BookezPageScene></Reanimated.ScrollView><Navigation page={page} onPage={setPage} projects={projects} activeProject={activeProject} quillSignal={writeQuillSignal} editorial ancient={ancientPage} /></> : accountState === 'signedOut' ? <AuthSheet visible onClose={() => undefined} signedInEmail={null} dismissible={false} /> : <ScrollView contentContainerStyle={s.content} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled"><AccountExit deleted onReturn={returnFromAccount} /></ScrollView>}</SafeAreaView></Ambient>}<PasswordUpdateScreen visible={passwordResetVisible} onComplete={() => setPasswordResetVisible(false)} /><BookezOnboarding visible={onboardingVisible && accountState === 'active' && onboardingOwnerChecked === onboardingOwner} onFinish={completeOnboarding} /><AchievementCelebrationModal item={achievementCelebration} onDismiss={dismissAchievementCelebration} onViewStats={viewAchievementStats} /></>;
 });
 
 const libraryEditorialS = StyleSheet.create({
@@ -7650,12 +7894,12 @@ const libraryEditorialS = StyleSheet.create({
   avatar: { backgroundColor: bookezColors.surface, borderWidth: 1, borderColor: bookezColors.manuscriptEdge, shadowColor: '#493F35', shadowOpacity: 0.1 },
   avatarText: { color: bookezColors.accent },
   intro: { marginTop: -2, color: bookezColors.textSecondary, fontFamily: bookezType.bodySecondary.fontFamily, fontSize: 13, lineHeight: 20 },
-  focusCard: { minHeight: 0, marginTop: bookezSpacing.lg, padding: bookezSpacing.lg, borderRadius: 20, backgroundColor: bookezColors.surface, borderWidth: 1, borderColor: bookezColors.manuscriptEdge, shadowColor: '#493F35', shadowOpacity: 0.1, shadowRadius: 18, shadowOffset: { width: 0, height: 8 }, elevation: 4 },
-  focusCardAccent: { position: 'absolute', top: -68, right: -52, width: 190, height: 190, borderRadius: 95, backgroundColor: bookezColors.surfaceAccent, opacity: 0.88 },
+  focusCard: { minHeight: 0, marginTop: bookezSpacing.lg, padding: bookezSpacing.lg, borderRadius: 20, backgroundColor: bookezColors.manuscript, borderWidth: 1, borderColor: bookezColors.secondaryAccent, shadowColor: '#30261F', shadowOpacity: 0.15, shadowRadius: 19, shadowOffset: { width: 0, height: 9 }, elevation: 5 },
+  focusCardAccent: { position: 'absolute', top: -68, right: -52, width: 190, height: 190, borderRadius: 95, backgroundColor: bookezColors.surfaceRaised, opacity: 0.72 },
   focusShape: { color: bookezColors.secondaryAccent, opacity: 0.08 },
   focusArtworkReveal: { position: 'absolute', right: 0, bottom: 28 },
   focusArtworkGraphic: { opacity: 0.32 },
-  focusCoverPeek: { top: 61, right: 22, width: 59, height: 80, borderColor: bookezColors.manuscriptEdge, shadowColor: '#493F35', shadowOpacity: 0.13 },
+  focusCoverPeek: { top: 61, right: 22, width: 59, height: 80, borderWidth: 1, borderColor: bookezColors.secondaryAccent, shadowColor: '#2B2026', shadowOpacity: 0.2, shadowRadius: 8, shadowOffset: { width: 0, height: 5 }, elevation: 4 },
   focusHeader: { minHeight: 28 },
   focusEyebrow: { color: bookezColors.secondaryAccent, fontSize: 9, letterSpacing: 1.05, fontWeight: '800' },
   focusPickerButton: { backgroundColor: bookezColors.surfaceMuted, borderColor: bookezColors.border },
@@ -7665,7 +7909,7 @@ const libraryEditorialS = StyleSheet.create({
   focusCopy: { color: bookezColors.textSecondary, fontFamily: bookezType.bodySecondary.fontFamily, fontSize: 12, lineHeight: 17, marginTop: 6, maxWidth: 250 },
   focusProgress: { color: bookezColors.accent, fontSize: 9, fontWeight: '800', marginTop: 8 },
   focusActions: { marginTop: bookezSpacing.md, gap: bookezSpacing.xs },
-  focusPrimaryButton: { flex: 1, backgroundColor: bookezColors.textPrimary, borderColor: bookezColors.textPrimary },
+  focusPrimaryButton: { flex: 1, backgroundColor: bookezColors.accentStrong, borderColor: bookezColors.accentStrong },
   focusSecondaryButton: { flex: 0.72, backgroundColor: bookezColors.surfaceRaised, borderColor: bookezColors.border },
   sectionBar: { marginTop: bookezSpacing.section, marginBottom: bookezSpacing.sm },
   sectionTitle: { color: bookezColors.textPrimary, fontFamily: bookezType.sectionTitle.fontFamily, fontSize: 20, lineHeight: 25, fontWeight: '600', letterSpacing: -0.2 },
@@ -7689,7 +7933,7 @@ const libraryEditorialS = StyleSheet.create({
   projectEngagementText: { color: bookezColors.textPrimary },
   projectEngagementHint: { color: bookezColors.textSecondary },
   projectCardActions: { marginTop: bookezSpacing.sm, gap: bookezSpacing.xs },
-  projectContinueButton: { flex: 1, backgroundColor: bookezColors.textPrimary, borderColor: bookezColors.textPrimary },
+  projectContinueButton: { flex: 1, backgroundColor: bookezColors.accentStrong, borderColor: bookezColors.accentStrong },
   projectPreviewButton: { flex: 0.66, backgroundColor: bookezColors.surfaceRaised, borderColor: bookezColors.border },
   addProjectRow: { marginTop: 4, borderRadius: 16, borderColor: bookezColors.manuscriptEdge, minHeight: 76, paddingHorizontal: 14, backgroundColor: bookezColors.surface, shadowColor: '#493F35', shadowOpacity: 0.035, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 1 },
   addProjectPlus: { backgroundColor: bookezColors.accentSoft, borderWidth: 1, borderColor: '#E5C9D0' },
@@ -7729,7 +7973,7 @@ const libraryEditorialS = StyleSheet.create({
   typeName: { color: bookezColors.textPrimary, fontFamily: bookezType.cardTitle.fontFamily },
   typeExample: { color: bookezColors.textSecondary },
   typeCheckSelected: { backgroundColor: bookezColors.accent, borderColor: bookezColors.accent },
-  createProjectButton: { backgroundColor: bookezColors.textPrimary, borderColor: bookezColors.textPrimary, shadowColor: '#493F35', shadowOpacity: 0.16 },
+  createProjectButton: { backgroundColor: bookezColors.accentStrong, borderColor: bookezColors.accentStrong, shadowColor: '#000', shadowOpacity: 0.28 },
   libraryMenuShade: { backgroundColor: 'rgba(26,43,67,0.22)' },
   libraryMenu: { backgroundColor: bookezColors.surface, borderWidth: 1, borderColor: bookezColors.border, ...bookezShadows.lifted },
   libraryMenuOverline: { color: bookezColors.secondaryAccent },
@@ -7743,11 +7987,19 @@ const libraryEditorialS = StyleSheet.create({
   renameTitle: { color: bookezColors.textPrimary, fontFamily: bookezType.pageTitle.fontFamily, fontWeight: '600' },
   renameInput: { backgroundColor: bookezColors.surfaceRaised, borderColor: bookezColors.border, color: bookezColors.textPrimary },
   renameCancelText: { color: bookezColors.textSecondary },
-  renameSave: { backgroundColor: bookezColors.textPrimary },
+  renameSave: { backgroundColor: bookezColors.accentStrong },
+  librarySourcesShade: { backgroundColor: 'rgba(4,10,9,0.72)' },
+  librarySourcesSheet: { backgroundColor: bookezColors.surface, borderTopColor: bookezColors.border },
+  librarySourcesOverline: { color: bookezColors.secondaryAccent },
+  librarySourcesHeaderTitle: { color: bookezColors.textPrimary },
+  librarySourcesHeaderHint: { color: bookezColors.textSecondary },
+  librarySourcesIntro: { backgroundColor: bookezColors.surfaceAccent, color: bookezColors.textSecondary },
 });
 
 const planEditorialS = StyleSheet.create({
   planHero: { backgroundColor: bookezColors.manuscript, borderBottomWidth: 1, borderBottomColor: bookezColors.manuscriptEdge },
+  planHeroPaperEdge: { position: 'absolute', right: -22, bottom: 8, width: 150, height: 1, backgroundColor: bookezWithAlpha(bookezColors.secondaryAccent, 0.18), transform: [{ rotate: '-3deg' }] },
+  planHeroPaperEdgeSecond: { right: -14, bottom: 13, width: 124, opacity: 0.58, transform: [{ rotate: '-1.5deg' }] },
   planHeroTopLabel: { color: bookezColors.secondaryAccent },
   planHeroSwitcher: { backgroundColor: bookezColors.surface, borderWidth: 1, borderColor: bookezColors.border, ...bookezShadows.subtle },
   planTopOverline: { color: bookezColors.secondaryAccent },
@@ -7920,7 +8172,7 @@ const planEditorialS = StyleSheet.create({
   planFooterText: { color: bookezColors.secondaryAccent },
   planNavButton: { backgroundColor: bookezColors.surfaceRaised, borderColor: bookezColors.border },
   planNavButtonDisabled: { backgroundColor: bookezColors.surfaceMuted },
-  planNavButtonPrimary: { backgroundColor: bookezColors.textPrimary, borderColor: bookezColors.textPrimary },
+  planNavButtonPrimary: { backgroundColor: bookezColors.accentStrong, borderColor: bookezColors.accentStrong },
   planNavButtonText: { color: bookezColors.textSecondary },
   planNavButtonTextPrimary: { color: bookezColors.textOnAccent },
   planningMethodShade: { backgroundColor: 'rgba(26,43,67,0.24)' },
@@ -7943,7 +8195,7 @@ const planEditorialS = StyleSheet.create({
   scopeDateHint: { color: bookezColors.textMuted },
   scopeDateSecondary: { backgroundColor: bookezColors.surfaceMuted },
   scopeDateSecondaryText: { color: bookezColors.textSecondary },
-  scopeDatePrimary: { backgroundColor: bookezColors.textPrimary },
+  scopeDatePrimary: { backgroundColor: bookezColors.accentStrong },
   projectMenuShade: { backgroundColor: 'rgba(26,43,67,0.22)' },
   projectMenu: { backgroundColor: bookezColors.surface, borderColor: bookezColors.border, ...bookezShadows.lifted },
   projectMenuHeader: { color: bookezColors.secondaryAccent },
@@ -7962,7 +8214,30 @@ const writeEditorialS = StyleSheet.create({
   writeProjectOverline: { color: bookezColors.secondaryAccent },
   writeProjectTitle: { color: bookezColors.textPrimary, fontFamily: bookezType.cardTitle.fontFamily },
   writeProjectChevron: { color: bookezColors.accent },
-  writeHero: { marginTop: 15, padding: bookezSpacing.lg, borderRadius: 20, backgroundColor: bookezColors.surface, borderColor: '#D9C8AD', ...bookezShadows.subtle },
+  writeHero: { marginTop: 3, padding: 0, borderRadius: 22, overflow: 'hidden', backgroundColor: bookezColors.surface, borderColor: bookezColors.manuscriptEdge, shadowColor: '#493F35', shadowOpacity: 0.24, shadowRadius: 18, shadowOffset: { width: 0, height: 8 }, elevation: 5 },
+  writeHeroCompact: { padding: 0 },
+  writeManuscriptLeatherGlow: { position: 'absolute', top: -58, left: -38, width: 230, height: 180, borderRadius: 115, backgroundColor: bookezWithAlpha(bookezColors.secondaryAccent, 0.08), transform: [{ rotate: '-18deg' }] },
+  writeManuscriptTopRule: { position: 'absolute', top: 9, right: 13, left: 13, height: 1, backgroundColor: bookezWithAlpha(bookezColors.secondaryAccent, 0.28) },
+  writeManuscriptMasthead: { minHeight: 148, paddingTop: 20, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', overflow: 'hidden' },
+  writeManuscriptMastheadCompact: { minHeight: 136, paddingHorizontal: 13 },
+  writeManuscriptHeading: { flex: 1, minWidth: 0, zIndex: 2, paddingBottom: 5 },
+  writeManuscriptStudio: { color: bookezColors.secondaryAccent, fontFamily: bookezType.label.fontFamily, fontSize: 7, lineHeight: 11, letterSpacing: 1.05, fontWeight: '800' },
+  writeManuscriptTitle: { color: bookezColors.textPrimary, fontFamily: bookezType.display.fontFamily, fontSize: 27, lineHeight: 31, letterSpacing: 0.25, fontWeight: '600', marginTop: 5, textShadowColor: bookezWithAlpha(bookezColors.white, 0.72), textShadowRadius: 2, textShadowOffset: { width: 0, height: 1 } },
+  writeManuscriptTitleComplete: { fontSize: 21, lineHeight: 25, maxWidth: 165 },
+  writeManuscriptSubtitle: { color: bookezColors.textSecondary, fontFamily: bookezType.editorial.fontFamily, fontSize: 12, lineHeight: 15, fontWeight: '600', marginTop: 6 },
+  writeManuscriptArt: { width: 166, height: 106, marginRight: -13, marginLeft: -20, marginTop: 12, alignItems: 'center', justifyContent: 'center', transform: [{ rotate: '-1.2deg' }] },
+  writeManuscriptArtCompact: { width: 138, height: 92, marginRight: -17, marginLeft: -24 },
+  writeManuscriptProjectCard: { minHeight: 58, marginHorizontal: 10, marginBottom: 9, paddingHorizontal: 10, paddingVertical: 8, borderRadius: 13, overflow: 'hidden', flexDirection: 'row', alignItems: 'center', backgroundColor: bookezColors.surfaceRaised, borderWidth: 1, borderColor: bookezColors.border, shadowColor: '#493F35', shadowOpacity: 0.22, shadowRadius: 7, shadowOffset: { width: 0, height: 3 }, elevation: 2 },
+  writeManuscriptProjectIcon: { width: 38, height: 38, borderRadius: 9, alignItems: 'center', justifyContent: 'center', backgroundColor: bookezColors.accentSoft, borderWidth: 1, borderColor: '#D7AEB9' },
+  writeManuscriptProjectCopy: { flex: 1, minWidth: 0, marginLeft: 10 },
+  writeManuscriptProjectTitle: { color: bookezColors.accent, fontFamily: bookezType.label.fontFamily, fontSize: 8, lineHeight: 12, letterSpacing: 0.5, fontWeight: '800' },
+  writeManuscriptProjectMeta: { color: bookezColors.textSecondary, fontFamily: bookezType.bodySecondary.fontFamily, fontSize: 9, lineHeight: 13, marginTop: 3 },
+  writeManuscriptProjectArrow: { color: bookezColors.accent, fontSize: 23, lineHeight: 25, marginLeft: 8 },
+  writeManuscriptProgress: { marginHorizontal: 14, marginBottom: 10 },
+  writeManuscriptProgressValue: { color: bookezColors.textPrimary, fontSize: 16, lineHeight: 20 },
+  writeManuscriptProgressLabel: { color: bookezColors.textMuted },
+  writeManuscriptProgressTrack: { height: 5, marginTop: 4, backgroundColor: bookezColors.manuscriptEdge },
+  writeManuscriptProgressFill: { height: 5, backgroundColor: bookezColors.secondaryAccent },
   writeTitle: { color: bookezColors.textPrimary, fontFamily: bookezType.display.fontFamily, fontSize: 32, lineHeight: 37, fontWeight: '600', letterSpacing: -0.8 },
   writeTitleHint: { color: bookezColors.textSecondary, fontFamily: bookezType.bodySecondary.fontFamily, fontSize: 13, lineHeight: 20, marginTop: 6, maxWidth: 260 },
   writeProgressValue: { color: bookezColors.textPrimary, fontFamily: bookezType.sectionTitle.fontFamily, fontSize: 20, lineHeight: 24, fontWeight: '600' },
@@ -7970,7 +8245,7 @@ const writeEditorialS = StyleSheet.create({
   writeProgressTrack: { backgroundColor: bookezColors.manuscriptEdge },
   writeProgressText: { color: bookezColors.secondaryAccent, letterSpacing: 0.55 },
   writeTopProgressCompact: { borderTopColor: bookezColors.manuscriptEdge },
-  writeContinueButton: { backgroundColor: bookezColors.accentStrong, borderColor: bookezColors.accentStrong, shadowColor: bookezColors.accent, shadowOpacity: 0.2 },
+  writeContinueButton: { marginTop: 2, marginHorizontal: 10, marginBottom: 10, minHeight: 56, backgroundColor: bookezColors.accentStrong, borderColor: '#7B3A4F', shadowColor: '#000', shadowOpacity: 0.24 },
   writeContinueLabel: { color: bookezColors.textOnAccent, letterSpacing: 1 },
   writeContinueHint: { color: '#F7EDEF' },
   writeContinueArrow: { color: bookezColors.textOnAccent },
@@ -8087,7 +8362,7 @@ const writeEditorialS = StyleSheet.create({
   writeCompleteCopy: { color: '#526B58' },
   writeCompleteFlagsButton: { backgroundColor: bookezColors.surface, borderWidth: 1, borderColor: '#CFE4CE' },
   writeCompleteFlagsText: { color: bookezColors.success },
-  focusModeHeader: { backgroundColor: bookezColors.textPrimary, borderRadius: bookezRadii.control },
+  focusModeHeader: { backgroundColor: bookezColors.accentStrong, borderRadius: bookezRadii.control },
   focusModeExit: { backgroundColor: 'rgba(255,255,255,0.12)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)' },
   sessionToolPanel: { backgroundColor: bookezColors.surface, borderColor: bookezColors.border, ...bookezShadows.subtle },
   sessionToolPanelIcon: { backgroundColor: bookezColors.accentSoft },
@@ -8572,8 +8847,17 @@ const journeyEnhancementS: any = StyleSheet.create({
   bookPagePlanning: { backgroundColor: '#D4E8FF' },
   bookPageWriting: { backgroundColor: '#D7F0E2' },
   bookPageComplete: { backgroundColor: '#FFFDF2' },
+  bookPageDeck: { position: 'absolute', top: 3, right: 3, bottom: 3, width: 2, borderRadius: 1, backgroundColor: bookezColors.manuscriptEdge, opacity: 0.56 },
+  bookPageRule: { position: 'absolute', top: 10, left: 6, right: 7, height: StyleSheet.hairlineWidth, backgroundColor: bookezColors.textPrimary, opacity: 0.22 },
+  bookPageRuleShort: { top: 16, right: 14 },
   bookCover: { width: 35, height: 40, borderRadius: 7, alignItems: 'center', justifyContent: 'center', backgroundColor: C.periwinkle, transform: [{ rotate: '-3deg' }], shadowColor: '#605CA1', shadowOpacity: 0.2, shadowRadius: 5, shadowOffset: { width: 0, height: 2 }, elevation: 3 },
   bookCoverComplete: { backgroundColor: '#C79722', shadowColor: '#D69C24', shadowOpacity: 0.4 },
+  bookCoverSpine: { position: 'absolute', top: 4, bottom: 4, left: 4, width: 3, borderRadius: 2, backgroundColor: 'rgba(255,248,238,0.24)' },
+  bookCoverInnerFrame: { position: 'absolute', top: 3, right: 3, bottom: 3, left: 7, borderRadius: 4, borderWidth: StyleSheet.hairlineWidth, borderColor: bookezColors.secondaryAccentSoft, opacity: 0.72 },
+  bookCoverStitchTop: { position: 'absolute', top: 5, right: 7, left: 10, height: StyleSheet.hairlineWidth, borderTopWidth: StyleSheet.hairlineWidth, borderStyle: 'dashed', borderColor: bookezColors.secondaryAccentSoft, opacity: 0.58 },
+  bookCoverStitchBottom: { position: 'absolute', right: 7, bottom: 5, left: 10, height: StyleSheet.hairlineWidth, borderTopWidth: StyleSheet.hairlineWidth, borderStyle: 'dashed', borderColor: bookezColors.secondaryAccentSoft, opacity: 0.58 },
+  bookClasp: { position: 'absolute', right: -5, top: 16, width: 10, height: 8, borderRadius: 3, alignItems: 'center', justifyContent: 'center', backgroundColor: bookezColors.secondaryAccentSoft, borderWidth: 1, borderColor: bookezColors.secondaryAccent },
+  bookClaspStud: { width: 3, height: 3, borderRadius: 2, backgroundColor: bookezColors.secondaryAccent },
   bookVisualMark: { color: '#FFF', fontSize: 16, fontWeight: '700' },
   bookVisualProgress: { position: 'absolute', left: 11, right: 11, bottom: 7, height: 4, borderRadius: 3, overflow: 'hidden', backgroundColor: 'rgba(255,255,255,0.62)' },
   bookVisualProgressFill: { height: 4, borderRadius: 3, backgroundColor: C.coral },
@@ -8749,45 +9033,63 @@ const feedbackS = StyleSheet.create({
 });
 
 const authS = StyleSheet.create({
-  shade: { flex: 1, backgroundColor: 'rgba(32,41,84,0.12)' },
+  shade: { flex: 1, backgroundColor: 'rgba(19,36,61,0.22)' },
   dismiss: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 },
   keyboard: { flex: 1, justifyContent: 'flex-end' },
-  sheet: { flex: 1, overflow: 'hidden', backgroundColor: '#F8F7FF' },
+  sheet: { flex: 1, overflow: 'hidden', backgroundColor: bookezColors.background },
   content: { flexGrow: 1, justifyContent: 'center', paddingHorizontal: 24, paddingTop: 8, paddingBottom: 88 },
-  orbOne: { position: 'absolute', top: -85, right: -58, width: 220, height: 220, borderRadius: 110, backgroundColor: 'rgba(201,188,245,0.48)' },
-  orbTwo: { position: 'absolute', top: 168, left: -88, width: 170, height: 170, borderRadius: 85, backgroundColor: 'rgba(165,220,247,0.30)' },
+  orbOne: { position: 'absolute', top: -85, right: -58, width: 220, height: 220, borderRadius: 110, backgroundColor: bookezWithAlpha(bookezColors.secondaryAccent, 0.17) },
+  orbTwo: { position: 'absolute', top: 168, left: -88, width: 170, height: 170, borderRadius: 85, backgroundColor: bookezWithAlpha(bookezColors.accentSoft, 0.78) },
   topBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   brand: { flexDirection: 'row', alignItems: 'center' },
-  logoMark: { width: 38, height: 38, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: C.ink, borderWidth: 2, borderColor: '#E5B95C', shadowColor: C.ink, shadowOpacity: 0.16, shadowRadius: 9, shadowOffset: { width: 0, height: 4 }, elevation: 2 },
-  bookPageLeft: { position: 'absolute', width: 10, height: 15, left: 7, top: 9, borderTopLeftRadius: 3, borderBottomLeftRadius: 3, backgroundColor: '#FFF9E8', borderWidth: 1, borderColor: '#E7C56E' },
-  bookPageRight: { position: 'absolute', width: 10, height: 15, right: 7, top: 9, borderTopRightRadius: 3, borderBottomRightRadius: 3, backgroundColor: '#FFF9E8', borderWidth: 1, borderColor: '#E7C56E' },
-  bookSpine: { position: 'absolute', width: 1, height: 14, top: 10, left: 18, backgroundColor: '#C99938' },
-  brandName: { color: C.ink, fontSize: 11, letterSpacing: 1.8, fontWeight: '800', marginLeft: 10 },
-  brandSub: { color: C.muted, fontSize: 8, marginTop: 2, marginLeft: 10 },
-  closeButton: { width: 36, height: 36, borderRadius: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.68)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.8)' },
-  closeText: { color: C.ink, fontSize: 23, lineHeight: 24, fontWeight: '300' },
+  logoMark: { width: 38, height: 38, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: bookezColors.accentStrong, borderWidth: 2, borderColor: bookezColors.secondaryAccent, shadowColor: bookezColors.accentStrong, shadowOpacity: 0.16, shadowRadius: 9, shadowOffset: { width: 0, height: 4 }, elevation: 2 },
+  bookPageLeft: { position: 'absolute', width: 10, height: 15, left: 7, top: 9, borderTopLeftRadius: 3, borderBottomLeftRadius: 3, backgroundColor: '#FFF8EE', borderWidth: 1, borderColor: bookezColors.secondaryAccent },
+  bookPageRight: { position: 'absolute', width: 10, height: 15, right: 7, top: 9, borderTopRightRadius: 3, borderBottomRightRadius: 3, backgroundColor: '#FFF8EE', borderWidth: 1, borderColor: bookezColors.secondaryAccent },
+  bookSpine: { position: 'absolute', width: 1, height: 14, top: 10, left: 18, backgroundColor: bookezColors.secondaryAccent },
+  brandName: { color: bookezColors.textPrimary, fontSize: 11, letterSpacing: 1.8, fontWeight: '800', marginLeft: 10 },
+  brandSub: { color: bookezColors.textSecondary, fontSize: 8, marginTop: 2, marginLeft: 10 },
+  closeButton: { width: 36, height: 36, borderRadius: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: bookezWithAlpha(bookezColors.surface, 0.78), borderWidth: 1, borderColor: bookezColors.border },
+  closeText: { color: bookezColors.textPrimary, fontSize: 23, lineHeight: 24, fontWeight: '300' },
   hero: { marginTop: 36, maxWidth: 330 },
-  eyebrow: { color: C.periwinkle, fontSize: 8, letterSpacing: 1.2, fontWeight: '800' },
-  title: { color: C.ink, fontSize: 29, lineHeight: 34, fontWeight: '800', marginTop: 9, letterSpacing: -0.5 },
-  copy: { color: C.muted, fontSize: 11, lineHeight: 17, marginTop: 10, maxWidth: 330 },
-  modeRow: { marginTop: 29, padding: 4, borderRadius: 16, flexDirection: 'row', backgroundColor: 'rgba(201,188,245,0.28)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.86)' },
+  eyebrow: { color: bookezColors.accent, fontSize: 8, letterSpacing: 1.2, fontWeight: '800' },
+  title: { color: bookezColors.textPrimary, fontSize: 29, lineHeight: 34, fontWeight: '800', marginTop: 9, letterSpacing: -0.5 },
+  copy: { color: bookezColors.textSecondary, fontSize: 11, lineHeight: 17, marginTop: 10, maxWidth: 330 },
+  modeRow: { marginTop: 29, padding: 4, borderRadius: 16, flexDirection: 'row', backgroundColor: bookezColors.surfaceMuted, borderWidth: 1, borderColor: bookezColors.border },
   modeOption: { flex: 1, minHeight: 36, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
-  modeOptionActive: { backgroundColor: '#FFF', shadowColor: '#6C6795', shadowOpacity: 0.1, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 2 },
-  modeText: { color: C.muted, fontSize: 10, fontWeight: '700' },
-  modeTextActive: { color: C.ink },
-  fieldLabel: { color: '#7C7BC3', fontSize: 8, letterSpacing: 1, fontWeight: '800', marginTop: 19, marginBottom: 7 },
-  input: { minHeight: 52, paddingHorizontal: 15, borderRadius: 15, backgroundColor: 'rgba(255,255,255,0.90)', borderWidth: 1, borderColor: 'rgba(201,188,245,0.72)', color: C.ink, fontSize: 13, shadowColor: C.periwinkle, shadowOpacity: 0.06, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 1 },
-  passwordWrap: { minHeight: 52, borderRadius: 15, flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.90)', borderWidth: 1, borderColor: 'rgba(201,188,245,0.72)', shadowColor: C.periwinkle, shadowOpacity: 0.06, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 1 },
-  passwordInput: { flex: 1, minHeight: 50, paddingHorizontal: 15, color: C.ink, fontSize: 13 },
+  modeOptionActive: { backgroundColor: bookezColors.surface, shadowColor: bookezColors.accent, shadowOpacity: 0.1, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 2 },
+  modeText: { color: bookezColors.textSecondary, fontSize: 10, fontWeight: '700' },
+  modeTextActive: { color: bookezColors.textPrimary },
+  providerSection: { marginTop: 20 },
+  providerLabel: { color: bookezColors.textMuted, fontSize: 8, letterSpacing: 1.05, fontWeight: '800' },
+  providerRow: { flexDirection: 'row', gap: 8, marginTop: 8 },
+  providerButton: { flex: 1, minHeight: 50, paddingHorizontal: 10, borderRadius: 14, backgroundColor: bookezColors.surface, borderWidth: 1, borderColor: bookezColors.border, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', ...bookezShadows.subtle },
+  providerButtonDisabled: { opacity: 0.55 },
+  providerIconBadge: { width: 28, height: 28, borderRadius: 10, alignItems: 'center', justifyContent: 'center', marginRight: 7 },
+  providerGoogleBadge: { backgroundColor: '#EFF5FF' },
+  providerAppleBadge: { backgroundColor: bookezColors.surfaceMuted },
+  providerText: { color: bookezColors.textPrimary, fontSize: 10, fontWeight: '800' },
+  googleMark: { color: '#4285F4', fontSize: 18, fontWeight: '900' },
+  appleMark: { width: 20, height: 20, position: 'relative' },
+  appleBodyLeft: { position: 'absolute', left: 3, top: 6, width: 9, height: 11, borderRadius: 7, backgroundColor: bookezColors.textPrimary, transform: [{ rotate: '-12deg' }] },
+  appleBodyRight: { position: 'absolute', right: 3, top: 6, width: 9, height: 11, borderRadius: 7, backgroundColor: bookezColors.textPrimary, transform: [{ rotate: '12deg' }] },
+  appleBite: { position: 'absolute', right: 1, top: 7, width: 5, height: 5, borderRadius: 3, backgroundColor: bookezColors.surfaceMuted },
+  appleLeaf: { position: 'absolute', left: 8, top: 1, width: 6, height: 4, borderRadius: 4, backgroundColor: bookezColors.textPrimary, transform: [{ rotate: '-28deg' }] },
+  providerDividerRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 18 },
+  providerDividerLine: { flex: 1, height: 1, backgroundColor: bookezColors.divider },
+  providerDividerText: { color: bookezColors.textMuted, fontSize: 7, letterSpacing: 0.8, fontWeight: '800' },
+  fieldLabel: { color: bookezColors.accent, fontSize: 8, letterSpacing: 1, fontWeight: '800', marginTop: 19, marginBottom: 7 },
+  input: { minHeight: 52, paddingHorizontal: 15, borderRadius: 15, backgroundColor: bookezColors.surfaceRaised, borderWidth: 1, borderColor: bookezColors.border, color: bookezColors.textPrimary, fontSize: 13, shadowColor: bookezColors.accent, shadowOpacity: 0.06, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 1 },
+  passwordWrap: { minHeight: 52, borderRadius: 15, flexDirection: 'row', alignItems: 'center', backgroundColor: bookezColors.surfaceRaised, borderWidth: 1, borderColor: bookezColors.border, shadowColor: bookezColors.accent, shadowOpacity: 0.06, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 1 },
+  passwordInput: { flex: 1, minHeight: 50, paddingHorizontal: 15, color: bookezColors.textPrimary, fontSize: 13 },
   passwordToggle: { paddingHorizontal: 14, minHeight: 50, alignItems: 'center', justifyContent: 'center' },
-  passwordToggleText: { color: C.periwinkle, fontSize: 9, fontWeight: '800' },
-  primary: { minHeight: 54, marginTop: 22, paddingHorizontal: 16, borderRadius: 16, backgroundColor: C.periwinkle, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', shadowColor: C.periwinkle, shadowOpacity: 0.25, shadowRadius: 12, shadowOffset: { width: 0, height: 6 }, elevation: 3 },
+  passwordToggleText: { color: bookezColors.accent, fontSize: 9, fontWeight: '800' },
+  primary: { minHeight: 54, marginTop: 22, paddingHorizontal: 16, borderRadius: 16, backgroundColor: bookezColors.accentStrong, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', shadowColor: bookezColors.accentStrong, shadowOpacity: 0.25, shadowRadius: 12, shadowOffset: { width: 0, height: 6 }, elevation: 3 },
   primaryText: { color: '#FFF', fontSize: 11, fontWeight: '800' },
   primaryArrow: { color: '#FFF', fontSize: 19, marginLeft: 10, marginTop: -1 },
   secondary: { minHeight: 45, marginTop: 4, alignItems: 'center', justifyContent: 'center' },
-  secondaryText: { color: C.muted, fontSize: 10, fontWeight: '700', textAlign: 'center' },
+  secondaryText: { color: bookezColors.textSecondary, fontSize: 10, fontWeight: '700', textAlign: 'center' },
   textButton: { minHeight: 38, alignItems: 'center', justifyContent: 'center' },
-  textButtonText: { color: C.periwinkle, fontSize: 10, fontWeight: '800' },
+  textButtonText: { color: bookezColors.accent, fontSize: 10, fontWeight: '800' },
   legal: { color: '#9A9CB1', fontSize: 8, lineHeight: 12, marginTop: 13, textAlign: 'center' },
   messageBox: { marginTop: 13, padding: 11, borderRadius: 13, flexDirection: 'row', alignItems: 'flex-start', backgroundColor: '#ECF8EE', borderWidth: 1, borderColor: '#D5EED9' },
   messageIcon: { color: '#4D8B59', fontSize: 12, fontWeight: '800', marginRight: 8 },
@@ -8801,40 +9103,61 @@ const authS = StyleSheet.create({
   disabled: { opacity: 0.55 },
 });
 
+const authStyleMap = authS as unknown as Record<string, unknown>;
+Object.entries({
+  shade: { backgroundColor: 'rgba(4,10,9,0.72)' },
+  bookPageLeft: { backgroundColor: bookezColors.manuscript },
+  bookPageRight: { backgroundColor: bookezColors.manuscript },
+  providerGoogleBadge: { backgroundColor: bookezColors.surfaceMuted },
+  legal: { color: bookezColors.textMuted },
+  messageBox: { backgroundColor: bookezColors.successSoft, borderColor: bookezColors.success },
+  messageIcon: { color: bookezColors.success },
+  message: { color: bookezColors.success },
+  errorBox: { backgroundColor: bookezColors.destructiveSoft, borderColor: bookezColors.destructive },
+  errorIcon: { color: bookezColors.destructive, backgroundColor: bookezColors.surfaceAccent },
+  error: { color: bookezColors.destructive },
+  statusIcon: { backgroundColor: bookezColors.successSoft, borderColor: bookezColors.success },
+  statusIconText: { color: bookezColors.success },
+  primaryText: { color: bookezColors.textOnAccent },
+  primaryArrow: { color: bookezColors.textOnAccent },
+}).forEach(([key, override]) => {
+  authStyleMap[key] = [authStyleMap[key], override];
+});
+
 const passwordResetS = StyleSheet.create({
-  modal: { flex: 1, overflow: 'hidden', backgroundColor: '#F8F7FF' },
+  modal: { flex: 1, overflow: 'hidden', backgroundColor: bookezColors.background },
   keyboard: { flex: 1 },
   content: { flexGrow: 1, justifyContent: 'center', paddingHorizontal: 24, paddingTop: 24, paddingBottom: 58 },
-  orbOne: { position: 'absolute', top: -70, right: -62, width: 210, height: 210, borderRadius: 105, backgroundColor: 'rgba(201,188,245,0.42)' },
-  orbTwo: { position: 'absolute', top: 250, left: -100, width: 185, height: 185, borderRadius: 93, backgroundColor: 'rgba(165,220,247,0.24)' },
+  orbOne: { position: 'absolute', top: -70, right: -62, width: 210, height: 210, borderRadius: 105, backgroundColor: bookezWithAlpha(bookezColors.secondaryAccent, 0.17) },
+  orbTwo: { position: 'absolute', top: 250, left: -100, width: 185, height: 185, borderRadius: 93, backgroundColor: bookezWithAlpha(bookezColors.accentSoft, 0.78) },
   brandRow: { flexDirection: 'row', alignItems: 'center' },
-  brandMark: { width: 38, height: 38, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: C.ink, borderWidth: 2, borderColor: '#E5B95C', shadowColor: C.ink, shadowOpacity: 0.16, shadowRadius: 9, shadowOffset: { width: 0, height: 4 }, elevation: 2 },
-  brandMarkText: { color: '#FFF9E8', fontSize: 20 },
-  brandName: { color: C.ink, fontSize: 11, letterSpacing: 1.8, fontWeight: '800', marginLeft: 10 },
-  brandSub: { color: C.muted, fontSize: 8, marginTop: 2, marginLeft: 10 },
+  brandMark: { width: 38, height: 38, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: bookezColors.accentStrong, borderWidth: 2, borderColor: bookezColors.secondaryAccent, shadowColor: bookezColors.accentStrong, shadowOpacity: 0.16, shadowRadius: 9, shadowOffset: { width: 0, height: 4 }, elevation: 2 },
+  brandMarkText: { color: '#FFF8EE', fontSize: 20 },
+  brandName: { color: bookezColors.textPrimary, fontSize: 11, letterSpacing: 1.8, fontWeight: '800', marginLeft: 10 },
+  brandSub: { color: bookezColors.textSecondary, fontSize: 8, marginTop: 2, marginLeft: 10 },
   hero: { marginTop: 36, maxWidth: 340 },
-  eyebrow: { color: C.periwinkle, fontSize: 8, letterSpacing: 1.2, fontWeight: '800' },
-  title: { color: C.ink, fontSize: 29, lineHeight: 34, fontWeight: '800', marginTop: 9, letterSpacing: -0.5 },
-  copy: { color: C.muted, fontSize: 11, lineHeight: 17, marginTop: 10, maxWidth: 340 },
-  fieldLabel: { color: '#7C7BC3', fontSize: 8, letterSpacing: 1, fontWeight: '800', marginTop: 19, marginBottom: 7 },
-  passwordWrap: { minHeight: 52, borderRadius: 15, flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.92)', borderWidth: 1, borderColor: 'rgba(201,188,245,0.72)', shadowColor: C.periwinkle, shadowOpacity: 0.06, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 1 },
-  passwordInput: { flex: 1, minHeight: 50, paddingHorizontal: 15, color: C.ink, fontSize: 13 },
+  eyebrow: { color: bookezColors.accent, fontSize: 8, letterSpacing: 1.2, fontWeight: '800' },
+  title: { color: bookezColors.textPrimary, fontSize: 29, lineHeight: 34, fontWeight: '800', marginTop: 9, letterSpacing: -0.5 },
+  copy: { color: bookezColors.textSecondary, fontSize: 11, lineHeight: 17, marginTop: 10, maxWidth: 340 },
+  fieldLabel: { color: bookezColors.accent, fontSize: 8, letterSpacing: 1, fontWeight: '800', marginTop: 19, marginBottom: 7 },
+  passwordWrap: { minHeight: 52, borderRadius: 15, flexDirection: 'row', alignItems: 'center', backgroundColor: bookezColors.surfaceRaised, borderWidth: 1, borderColor: bookezColors.border, shadowColor: bookezColors.accent, shadowOpacity: 0.06, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 1 },
+  passwordInput: { flex: 1, minHeight: 50, paddingHorizontal: 15, color: bookezColors.textPrimary, fontSize: 13 },
   passwordToggle: { paddingHorizontal: 14, minHeight: 50, alignItems: 'center', justifyContent: 'center' },
-  passwordToggleText: { color: C.periwinkle, fontSize: 9, fontWeight: '800' },
-  requirements: { marginTop: 10, padding: 12, borderRadius: 15, backgroundColor: 'rgba(255,255,255,0.62)', borderWidth: 1, borderColor: 'rgba(201,188,245,0.48)', flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  passwordToggleText: { color: bookezColors.accent, fontSize: 9, fontWeight: '800' },
+  requirements: { marginTop: 10, padding: 12, borderRadius: 15, backgroundColor: bookezWithAlpha(bookezColors.surface, 0.76), borderWidth: 1, borderColor: bookezColors.border, flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   requirementRow: { width: '47%', flexDirection: 'row', alignItems: 'center' },
   requirementMark: { width: 17, height: 17, borderRadius: 9, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F1F0F7' },
   requirementMarkMet: { backgroundColor: '#E5F4E8' },
   requirementMarkText: { color: '#A1A4B7', fontSize: 12, lineHeight: 15, fontWeight: '800' },
   requirementMarkTextMet: { color: '#4D8B59' },
-  requirementText: { color: C.muted, fontSize: 8, marginLeft: 6 },
+  requirementText: { color: bookezColors.textSecondary, fontSize: 8, marginLeft: 6 },
   requirementTextMet: { color: '#4D8B59', fontWeight: '700' },
   matchHint: { color: '#C96567', fontSize: 9, marginTop: 7 },
   matchHintMet: { color: '#4D8B59' },
   errorBox: { marginTop: 13, padding: 11, borderRadius: 13, flexDirection: 'row', alignItems: 'flex-start', backgroundColor: '#FFF0F0', borderWidth: 1, borderColor: '#F5D7D8' },
   errorIcon: { width: 16, height: 16, borderRadius: 8, textAlign: 'center', color: '#C96567', fontSize: 11, lineHeight: 16, fontWeight: '800', marginRight: 8, backgroundColor: '#FFDCDD' },
   error: { flex: 1, color: '#C96567', fontSize: 10, lineHeight: 14 },
-  primary: { minHeight: 54, marginTop: 22, paddingHorizontal: 16, borderRadius: 16, backgroundColor: C.periwinkle, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', shadowColor: C.periwinkle, shadowOpacity: 0.25, shadowRadius: 12, shadowOffset: { width: 0, height: 6 }, elevation: 3 },
+  primary: { minHeight: 54, marginTop: 22, paddingHorizontal: 16, borderRadius: 16, backgroundColor: bookezColors.accentStrong, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', shadowColor: bookezColors.accentStrong, shadowOpacity: 0.25, shadowRadius: 12, shadowOffset: { width: 0, height: 6 }, elevation: 3 },
   primaryText: { color: '#FFF', fontSize: 11, fontWeight: '800' },
   primaryArrow: { color: '#FFF', fontSize: 19, marginLeft: 10, marginTop: -1 },
   disabled: { opacity: 0.55 },
@@ -8842,6 +9165,28 @@ const passwordResetS = StyleSheet.create({
   successState: { flex: 1, justifyContent: 'center', paddingBottom: 30 },
   successIcon: { width: 62, height: 62, borderRadius: 22, alignItems: 'center', justifyContent: 'center', backgroundColor: '#E5F4E8', borderWidth: 1, borderColor: '#CDE9D2', marginBottom: 24 },
   successIconText: { color: '#4D8B59', fontSize: 30, fontWeight: '800' },
+});
+
+const passwordResetStyleMap = passwordResetS as unknown as Record<string, unknown>;
+Object.entries({
+  brandMarkText: { color: bookezColors.textOnAccent },
+  requirementMark: { backgroundColor: bookezColors.surfaceMuted },
+  requirementMarkMet: { backgroundColor: bookezColors.successSoft },
+  requirementMarkText: { color: bookezColors.textMuted },
+  requirementMarkTextMet: { color: bookezColors.success },
+  requirementTextMet: { color: bookezColors.success },
+  matchHint: { color: bookezColors.destructive },
+  matchHintMet: { color: bookezColors.success },
+  errorBox: { backgroundColor: bookezColors.destructiveSoft, borderColor: bookezColors.destructive },
+  errorIcon: { color: bookezColors.destructive, backgroundColor: bookezColors.surfaceAccent },
+  error: { color: bookezColors.destructive },
+  primaryText: { color: bookezColors.textOnAccent },
+  primaryArrow: { color: bookezColors.textOnAccent },
+  footnote: { color: bookezColors.textMuted },
+  successIcon: { backgroundColor: bookezColors.successSoft, borderColor: bookezColors.success },
+  successIconText: { color: bookezColors.success },
+}).forEach(([key, override]) => {
+  passwordResetStyleMap[key] = [passwordResetStyleMap[key], override];
 });
 
 const imagePreviewS = StyleSheet.create({ chapterVisuals: { gap: 9 }, backCover: { marginTop: 20, paddingTop: 13, borderTopWidth: 1, borderTopColor: '#EEE7DD' }, backCoverLabel: { color: C.muted, fontSize: 7, letterSpacing: 0.8, fontWeight: '700' } });
@@ -8853,6 +9198,85 @@ const imageS = Object.assign(StyleSheet.create({
   placementToggle: { minHeight: 28, paddingHorizontal: 9, borderRadius: 9, backgroundColor: '#F0EEFF', alignItems: 'center' as const, justifyContent: 'center' as const },
   placementToggleText: { color: C.periwinkle, fontSize: 8, fontWeight: '700' as const },
   advancedPlacementLabel: { color: '#9A9CB1', fontSize: 7, marginTop: 8 },
+});
+
+const imageStyleMap = imageS as unknown as Record<string, unknown>;
+Object.entries({
+  card: { backgroundColor: bookezColors.surface, borderColor: bookezColors.border, shadowColor: '#000' },
+  cardIcon: { backgroundColor: bookezColors.accentSoft },
+  cardIconText: { color: bookezColors.secondaryAccent },
+  cardKicker: { color: bookezColors.secondaryAccent },
+  cardTitle: { color: bookezColors.textPrimary },
+  cardHint: { color: bookezColors.textSecondary },
+  addButton: { backgroundColor: bookezColors.accentSoft },
+  addButtonText: { color: bookezColors.secondaryAccent },
+  guideCard: { backgroundColor: bookezColors.surfaceRaised, borderColor: bookezColors.border },
+  guideEyebrow: { color: bookezColors.secondaryAccent },
+  guideTitle: { color: bookezColors.textPrimary },
+  guideIcon: { color: bookezColors.secondaryAccent, backgroundColor: bookezColors.accentSoft },
+  guideItemTitle: { color: bookezColors.textPrimary },
+  guideItemHint: { color: bookezColors.textSecondary },
+  coverSection: { backgroundColor: bookezColors.surfaceRaised, borderColor: bookezColors.border },
+  coverEyebrow: { color: bookezColors.secondaryAccent },
+  coverTitle: { color: bookezColors.textPrimary },
+  coverReady: { color: bookezColors.textMuted },
+  coverEmpty: { backgroundColor: bookezColors.surfaceMuted },
+  coverEmptyIcon: { backgroundColor: bookezColors.accentSoft },
+  coverEmptyIconText: { color: bookezColors.secondaryAccent },
+  coverName: { color: bookezColors.textPrimary },
+  coverHint: { color: bookezColors.textSecondary },
+  coverArrow: { color: bookezColors.secondaryAccent },
+  coverRow: { backgroundColor: bookezColors.surfaceMuted },
+  coverThumbnail: { backgroundColor: bookezColors.surfaceAccent },
+  coverReplaceButton: { backgroundColor: bookezColors.accentSoft },
+  coverReplaceText: { color: bookezColors.secondaryAccent },
+  coverRemoveButton: { backgroundColor: bookezColors.destructiveSoft },
+  coverRemoveText: { color: bookezColors.destructive },
+  hiddenCard: { backgroundColor: bookezColors.surfaceMuted, borderColor: bookezColors.border },
+  hiddenIcon: { backgroundColor: bookezColors.surfaceAccent },
+  hiddenIconText: { color: bookezColors.textMuted },
+  enableButton: { backgroundColor: bookezColors.accentSoft },
+  enableButtonText: { color: bookezColors.secondaryAccent },
+  emptyButton: { backgroundColor: bookezColors.surfaceMuted },
+  emptyIcon: { color: bookezColors.secondaryAccent },
+  emptyTitle: { color: bookezColors.textPrimary },
+  emptyHint: { color: bookezColors.textSecondary },
+  emptyArrow: { color: bookezColors.secondaryAccent },
+  imageRow: { backgroundColor: bookezColors.surfaceMuted },
+  thumbnail: { backgroundColor: bookezColors.surfaceAccent },
+  imageTitle: { color: bookezColors.textPrimary },
+  imageMeta: { color: bookezColors.textSecondary },
+  detailButton: { backgroundColor: bookezColors.accentSoft },
+  detailButtonText: { color: bookezColors.secondaryAccent },
+  captionButton: { backgroundColor: bookezColors.accentSoft },
+  captionButtonText: { color: bookezColors.accent },
+  replaceButton: { backgroundColor: bookezColors.warningSoft },
+  replaceButtonText: { color: bookezColors.warning },
+  removeButton: { backgroundColor: bookezColors.destructiveSoft },
+  removeButtonText: { color: bookezColors.destructive },
+  details: { borderTopColor: bookezColors.divider },
+  detailInput: { backgroundColor: bookezColors.surfaceRaised, borderColor: bookezColors.border, color: bookezColors.textPrimary },
+  detailLabel: { color: bookezColors.textMuted },
+  detailPill: { backgroundColor: bookezColors.surfaceRaised, borderColor: bookezColors.border },
+  detailPillSelected: { backgroundColor: bookezColors.accentSoft, borderColor: bookezColors.secondaryAccent },
+  detailPillText: { color: bookezColors.textSecondary },
+  detailPillTextSelected: { color: bookezColors.textPrimary },
+  detailSwitchTitle: { color: bookezColors.textPrimary },
+  detailSwitchHint: { color: bookezColors.textSecondary },
+  detailResolution: { color: bookezColors.textMuted },
+  preview: { backgroundColor: bookezColors.surfaceRaised },
+  previewPlaceholder: { borderColor: bookezColors.border },
+  previewImage: { backgroundColor: bookezColors.surfaceAccent },
+  previewCaption: { color: bookezColors.textSecondary },
+  previewCredit: { color: bookezColors.textMuted },
+  placeholderIcon: { color: bookezColors.secondaryAccent },
+  placeholderTitle: { color: bookezColors.textPrimary },
+  placeholderHint: { color: bookezColors.textSecondary },
+  placementToggle: { backgroundColor: bookezColors.accentSoft },
+  placementToggleText: { color: bookezColors.secondaryAccent },
+  advancedPlacementLabel: { color: bookezColors.textMuted },
+}).forEach(([key, override]) => {
+  imageStyleMap[key] = [imageStyleMap[key], override];
 });
 
 const imageScrollS = StyleSheet.create({
@@ -8881,6 +9305,20 @@ const imagePlacementS = StyleSheet.create({
   placementChoiceCheck: { position: 'absolute', top: 4, right: 5, color: C.periwinkle, fontSize: 9, fontWeight: '800' },
 });
 
+const imagePlacementStyleMap = imagePlacementS as unknown as Record<string, unknown>;
+Object.entries({
+  placementChoice: { backgroundColor: bookezColors.surfaceRaised, borderColor: bookezColors.border },
+  placementChoiceSelected: { backgroundColor: bookezColors.accentSoft, borderColor: bookezColors.secondaryAccent },
+  placementDiagram: { backgroundColor: bookezColors.surfaceMuted },
+  placementDiagramText: { color: bookezColors.textSecondary },
+  placementDiagramLarge: { color: bookezColors.secondaryAccent },
+  placementChoiceLabel: { color: bookezColors.textSecondary },
+  placementChoiceLabelSelected: { color: bookezColors.textPrimary },
+  placementChoiceCheck: { color: bookezColors.secondaryAccent },
+}).forEach(([key, override]) => {
+  imagePlacementStyleMap[key] = [imagePlacementStyleMap[key], override];
+});
+
 const mediaStyles = StyleSheet.create({
   conditionalStatsCard: { marginTop: 17, padding: 15, borderRadius: 21, backgroundColor: '#EAF4FF', borderWidth: 1, borderColor: '#D6EAF5' },
   conditionalStatsCardCitation: { marginTop: 12, padding: 15, borderRadius: 21, backgroundColor: '#F1F0FF', borderWidth: 1, borderColor: '#E3DFFA' },
@@ -8903,6 +9341,31 @@ const mediaStyles = StyleSheet.create({
   conditionalStatsCitation: { marginTop: 10, padding: 10, borderRadius: 13, backgroundColor: 'rgba(255,255,255,0.78)' },
   conditionalStatsCitationLabel: { color: C.periwinkle, fontSize: 6, letterSpacing: 0.7, fontWeight: '700' },
   conditionalStatsCitationText: { color: C.muted, fontSize: 8, lineHeight: 12, marginTop: 4 },
+});
+
+const mediaStyleMap = mediaStyles as unknown as Record<string, unknown>;
+Object.entries({
+  conditionalStatsCard: { backgroundColor: bookezColors.surfaceRaised, borderColor: bookezColors.border },
+  conditionalStatsCardCitation: { backgroundColor: bookezColors.surfaceAccent, borderColor: bookezColors.border },
+  conditionalStatsEyebrow: { color: bookezColors.secondaryAccent },
+  conditionalStatsEyebrowCitation: { color: bookezColors.secondaryAccent },
+  conditionalStatsTitle: { color: bookezColors.textPrimary },
+  conditionalStatsHint: { color: bookezColors.textSecondary },
+  conditionalStatsIcon: { color: bookezColors.secondaryAccent },
+  conditionalStatsIconCitation: { color: bookezColors.secondaryAccent },
+  conditionalStat: { backgroundColor: bookezColors.surfaceMuted },
+  conditionalStatValue: { color: bookezColors.textPrimary },
+  conditionalStatLabel: { color: bookezColors.textSecondary },
+  conditionalStatDetail: { color: bookezColors.textMuted },
+  conditionalStatsNote: { backgroundColor: bookezColors.surface, borderTopColor: bookezColors.divider },
+  conditionalStatsNoteIcon: { color: bookezColors.secondaryAccent },
+  conditionalStatsNoteText: { color: bookezColors.textSecondary },
+  conditionalStatsFootnote: { color: bookezColors.textMuted },
+  conditionalStatsCitation: { backgroundColor: bookezColors.surface },
+  conditionalStatsCitationLabel: { color: bookezColors.secondaryAccent },
+  conditionalStatsCitationText: { color: bookezColors.textSecondary },
+}).forEach(([key, override]) => {
+  mediaStyleMap[key] = [mediaStyleMap[key], override];
 });
 
 const paginationStyles = StyleSheet.create({
@@ -9004,8 +9467,54 @@ const onboardingS = StyleSheet.create({
   primaryButtonArrow: { color: '#FFF', fontSize: 17, marginLeft: 10 },
 });
 
+const onboardingStyleMap = onboardingS as unknown as Record<string, unknown>;
+Object.entries({
+  backdrop: { backgroundColor: 'rgba(4,10,9,0.78)' },
+  sheet: { backgroundColor: bookezColors.surface, shadowColor: '#000' },
+  overline: { color: bookezColors.secondaryAccent },
+  headerHint: { color: bookezColors.textMuted },
+  closeButton: { backgroundColor: bookezColors.surfaceMuted, borderWidth: 1, borderColor: bookezColors.border },
+  closeButtonText: { color: bookezColors.textPrimary },
+  heroGlow: { backgroundColor: bookezWithAlpha(bookezColors.secondaryAccent, 0.2) },
+  aiHero: { backgroundColor: bookezColors.surfaceAccent, borderColor: bookezColors.border },
+  aiOrb: { backgroundColor: bookezColors.accentSoft },
+  aiScan: { backgroundColor: bookezWithAlpha(bookezColors.secondaryAccent, 0.4) },
+  aiKicker: { color: bookezColors.secondaryAccent },
+  aiHeaderTitle: { color: bookezColors.textPrimary },
+  aiSpark: { backgroundColor: bookezColors.surfaceMuted },
+  aiSparkText: { color: bookezColors.secondaryAccent },
+  aiDraftCard: { backgroundColor: bookezColors.surfaceRaised, borderColor: bookezColors.border },
+  aiDraftLabel: { color: bookezColors.textSecondary },
+  aiSelectHint: { color: bookezColors.textMuted },
+  aiDraftText: { color: bookezColors.textPrimary },
+  aiSelectionLine: { backgroundColor: bookezColors.secondaryAccent },
+  aiTool: { backgroundColor: bookezColors.surfaceMuted, borderColor: bookezColors.border },
+  aiToolSelected: { backgroundColor: bookezColors.accent, borderColor: bookezColors.accent },
+  aiToolText: { color: bookezColors.textSecondary },
+  aiToolTextSelected: { color: bookezColors.textOnAccent },
+  aiMore: { backgroundColor: bookezColors.surfaceMuted },
+  aiMoreText: { color: bookezColors.textSecondary },
+  aiPreviewCard: { backgroundColor: bookezColors.surfaceRaised, borderColor: bookezColors.border, shadowColor: '#000' },
+  aiPreviewLabel: { color: bookezColors.secondaryAccent },
+  aiPreviewCheck: { color: bookezColors.success },
+  aiPreviewText: { color: bookezColors.textPrimary },
+  aiPreviewHint: { color: bookezColors.textMuted },
+  eyebrow: { color: bookezColors.secondaryAccent },
+  title: { color: bookezColors.textPrimary },
+  body: { color: bookezColors.textSecondary },
+  stepText: { color: bookezColors.textSecondary },
+  progressDot: { backgroundColor: bookezColors.surfaceMuted },
+  progressLabel: { color: bookezColors.textMuted },
+  secondaryButtonText: { color: bookezColors.textSecondary },
+  primaryButton: { backgroundColor: bookezColors.accentStrong },
+  primaryButtonText: { color: bookezColors.textOnAccent },
+  primaryButtonArrow: { color: bookezColors.textOnAccent },
+}).forEach(([key, override]) => {
+  onboardingStyleMap[key] = [onboardingStyleMap[key], override];
+});
+
 const s: any = Object.assign(StyleSheet.create({
-  accountActionCopy: { flex: 1, minWidth: 0, marginRight: 8 },
+  accountActionCopy: { flex: 1, minWidth: 0, marginRight: 8 }, accountEmailPanel: { paddingVertical: 14 }, accountEmailHeader: { flexDirection: 'row', alignItems: 'center' }, accountEmailKicker: { color: bookezColors.secondaryAccent, fontSize: 7, letterSpacing: 0.85, fontWeight: '800', marginBottom: 3 }, accountEmailValue: { color: bookezColors.textSecondary, fontSize: 9, lineHeight: 13, marginTop: 3 }, changeEmailButton: { minHeight: 39, marginTop: 12, paddingHorizontal: 12, borderRadius: bookezRadii.control, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: bookezColors.accentSoft, borderWidth: 1, borderColor: bookezColors.border }, changeEmailButtonText: { color: bookezColors.textPrimary, fontSize: 10, fontWeight: '800' }, changeEmailButtonArrow: { color: bookezColors.secondaryAccent, fontSize: 17, marginLeft: 8 },
   profileHero: { marginTop: 6, padding: 16, borderRadius: 24, backgroundColor: '#FFF', borderWidth: 1, borderColor: '#ECEAF4', shadowColor: '#706C98', shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 5 }, elevation: 2 }, profileHeroIdentity: { flexDirection: 'row', alignItems: 'center' }, profileHeroCopy: { flex: 1, minWidth: 0, marginLeft: 12 }, profileAvatarCompact: { width: 64, height: 64, borderRadius: 32 }, profileAvatarTextCompact: { fontSize: 24 }, profileHaloCompact: { width: 74, height: 74, borderRadius: 37 }, profileNameInHero: { marginTop: 3, fontSize: 20 }, profileOverline: { color: C.periwinkle, fontSize: 7, letterSpacing: 1, fontWeight: '700' }, profileMemberSince: { color: '#9A9CB1', fontSize: 8, marginTop: 4 }, profileEditButton: { minHeight: 35, marginTop: 14, borderRadius: 11, backgroundColor: '#F3F1FF', alignItems: 'center', justifyContent: 'center' }, profileEditButtonText: { color: C.periwinkle, fontSize: 9, fontWeight: '700' }, profileSnapshotCard: { marginTop: 13, padding: 15, borderRadius: 22, backgroundColor: '#F4F2FF', borderWidth: 1, borderColor: '#E5E1FA' }, profileSnapshotHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }, profileSectionEyebrow: { color: C.periwinkle, fontSize: 7, letterSpacing: 0.9, fontWeight: '700' }, profileSnapshotTitle: { color: C.ink, fontSize: 15, fontWeight: '700', marginTop: 4 }, profileSnapshotProject: { color: C.muted, fontSize: 8, fontWeight: '700' }, profileSnapshotGrid: { marginTop: 14, flexDirection: 'row', flexWrap: 'wrap', gap: 7 }, profileSnapshotMetric: { width: '48%', minHeight: 58, padding: 9, borderRadius: 14, backgroundColor: 'rgba(255,255,255,0.76)' }, profileSnapshotValue: { color: C.ink, fontSize: 16, fontWeight: '700' }, profileSnapshotLabel: { color: C.muted, fontSize: 6, letterSpacing: 0.6, fontWeight: '700', marginTop: 5 }, profileInlineAction: { minHeight: 33, marginTop: 11, paddingHorizontal: 9, borderRadius: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: 'rgba(255,255,255,0.58)' }, profileInlineActionText: { color: C.periwinkle, fontSize: 9, fontWeight: '700' }, profileInlineActionArrow: { color: C.periwinkle, fontSize: 16 }, profileEmptyAchievement: { marginTop: 11, padding: 10, borderRadius: 13, backgroundColor: '#FAF9FF' }, profileNextAchievement: { color: '#AA7A18', fontSize: 8, lineHeight: 12, marginTop: 5 }, profileEditSheet: { padding: 20, paddingBottom: 24, borderTopLeftRadius: 29, borderTopRightRadius: 29, backgroundColor: '#FBFAFF' }, profileEditTitle: { color: C.ink, fontSize: 25, fontWeight: '700', letterSpacing: -0.5, marginTop: 5 }, profileEditCopy: { color: C.muted, fontSize: 10, lineHeight: 15, marginTop: 7 }, profileEditInput: { minHeight: 47, marginTop: 16, paddingHorizontal: 13, borderRadius: 13, borderWidth: 1, borderColor: '#DCDCEA', color: C.ink, fontSize: 13, backgroundColor: '#FFF' }, profileEditError: { color: '#C96567', fontSize: 9, lineHeight: 13, marginTop: 8 }, profileSaveDisabled: { opacity: 0.6 }, aboutVersion: { color: '#9A9CB1', fontSize: 9, marginTop: 13 },
   specializedStatsCardMint: { backgroundColor: '#EFF9F1', borderColor: '#D7EBD9' }, specializedStatsCardRose: { backgroundColor: '#FFF1F0', borderColor: '#F2D6D6' }, chartLegend: { marginTop: 11, flexDirection: 'row', gap: 13 }, chartLegendItem: { flexDirection: 'row', alignItems: 'center', gap: 5 }, chartLegendDot: { width: 8, height: 8, borderRadius: 4 }, barPair: { height: 100, flexDirection: 'row', alignItems: 'flex-end', gap: 2 }, barTime: { width: 7, borderRadius: 5, backgroundColor: '#F2B9A1' },
   journeyNodeStack: { alignItems: 'center' }, journeyMiniDotRow: { minHeight: 27, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }, journeyMiniDot: { width: 21, height: 21, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F1F0F7', borderWidth: 2, borderColor: '#D8D7E5' }, journeyMiniDotComplete: { backgroundColor: '#E8F5E9', borderColor: '#B9DDBE' }, journeyMiniDotCurrent: { backgroundColor: '#FFF1E5', borderColor: '#F2CBB7' }, journeyMiniDotSelected: { borderColor: C.periwinkle, shadowColor: C.periwinkle, shadowOpacity: 0.35, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 2 }, journeyMiniDotText: { color: '#9899AD', fontSize: 7, fontWeight: '700' }, journeyMiniDotTextComplete: { color: '#4D8B59' }, journeyMiniDotLine: { width: 15, height: 2, backgroundColor: '#D8D7E5' }, journeyMiniDotLineComplete: { backgroundColor: '#C6C1F4' }, journeyMiniToBigLine: { width: 15, height: 2, backgroundColor: '#D8D7E5' }, journeyCheckpointParent: { color: '#9A9CB1', fontSize: 8, marginTop: 3 },
@@ -9122,8 +9631,65 @@ Object.assign(s, {
   navConstellationDotThree: { right: 9, bottom: 7 },
   planArt: { alignSelf: 'center' },
   planArtMotion: { width: 150, height: 92, alignSelf: 'center', position: 'relative' },
+  planArtLooseLeaf: { position: 'absolute', top: 17, right: 6, width: 67, height: 66 },
   planArtGlint: { position: 'absolute', top: 6, left: 0, width: 18, height: 18, alignItems: 'center', justifyContent: 'center' },
   planArtGlintText: { color: bookezColors.secondaryAccent, fontSize: 13, lineHeight: 16, textShadowColor: 'rgba(164,122,66,0.3)', textShadowRadius: 4 },
+  pageScene: { position: 'relative', alignSelf: 'stretch', width: '100%' },
+  pageSceneTopDeck: { position: 'absolute', top: -9, right: 36, left: 36, height: 10, zIndex: 0 },
+  pageSceneTopSheetBack: { position: 'absolute', top: 0, right: 16, left: 5, height: 5, borderTopLeftRadius: 8, borderTopRightRadius: 8, borderWidth: StyleSheet.hairlineWidth, borderBottomWidth: 0, borderColor: bookezColors.manuscriptEdge, backgroundColor: bookezColors.surfaceMuted, transform: [{ rotate: '-0.35deg' }] },
+  pageSceneTopSheetMiddle: { position: 'absolute', top: 2, right: 7, left: 12, height: 5, borderTopLeftRadius: 8, borderTopRightRadius: 8, borderWidth: StyleSheet.hairlineWidth, borderBottomWidth: 0, borderColor: bookezColors.manuscriptEdge, backgroundColor: bookezColors.manuscript, transform: [{ rotate: '0.25deg' }] },
+  pageSceneTopSheetFront: { position: 'absolute', top: 5, right: 0, left: 0, height: 5, borderTopLeftRadius: 9, borderTopRightRadius: 9, borderWidth: StyleSheet.hairlineWidth, borderBottomWidth: 0, borderColor: bookezColors.border, backgroundColor: bookezColors.surface },
+  pageSceneTopThread: { position: 'absolute', top: 1, right: 18, left: 18, height: StyleSheet.hairlineWidth, backgroundColor: bookezColors.secondaryAccent, opacity: 0.34 },
+  pageSceneEdge: { position: 'absolute', top: 0, bottom: 0, width: 16, zIndex: 20 },
+  pageSceneEdgeRight: { right: -12 },
+  pageSceneEdgeLeft: { left: -12 },
+  pageSceneSpark: { position: 'absolute', top: 4, width: 18, height: 18, zIndex: 21, alignItems: 'center', justifyContent: 'center' },
+  pageSceneSparkLeft: { left: -2 },
+  pageSceneSparkRight: { right: -2 },
+  pageSceneSparkText: { color: bookezColors.secondaryAccent, fontSize: 12, lineHeight: 15, textShadowColor: 'rgba(174,123,62,0.34)', textShadowRadius: 4 },
+  folioOrnament: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, zIndex: 0 },
+  folioBackSheet: { position: 'absolute', top: 4, right: 2, bottom: 3, left: 5, borderRadius: 16, borderWidth: StyleSheet.hairlineWidth, borderColor: bookezColors.manuscriptEdge, backgroundColor: bookezColors.surfaceMuted },
+  folioBackSheetInk: { borderColor: bookezColors.secondaryAccent, backgroundColor: bookezColors.textPrimary },
+  folioTopPage: { position: 'absolute', top: 1, right: 14, left: 20, height: 4, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: bookezColors.manuscriptEdge, borderTopLeftRadius: 8, borderTopRightRadius: 8, backgroundColor: bookezColors.surfaceRaised },
+  folioTopPageSecond: { top: 3, right: 24, left: 29, opacity: 0.42 },
+  folioTopPageInk: { borderTopColor: bookezColors.secondaryAccent, backgroundColor: bookezColors.textPrimary },
+  folioBevelHighlight: { position: 'absolute', top: 2, right: 15, left: 15, height: StyleSheet.hairlineWidth, backgroundColor: bookezColors.surfaceRaised },
+  folioBevelHighlightInk: { backgroundColor: '#6B7480' },
+  folioBevelShadow: { position: 'absolute', right: 15, bottom: 2, left: 15, height: 1, backgroundColor: bookezColors.manuscriptEdge },
+  folioBevelShadowInk: { backgroundColor: '#0B1728' },
+  folioSpineRail: { position: 'absolute', top: 18, bottom: 18, left: 4, width: 2, borderRadius: 1, borderLeftWidth: StyleSheet.hairlineWidth, borderRightWidth: StyleSheet.hairlineWidth, borderColor: bookezColors.manuscriptEdge, backgroundColor: bookezColors.surfaceMuted },
+  folioSpineRailInk: { borderColor: bookezColors.secondaryAccent, backgroundColor: '#0F2037' },
+  folioInsetFrame: { position: 'absolute', top: 5, right: 5, bottom: 5, left: 5, borderRadius: 15, borderWidth: StyleSheet.hairlineWidth, borderColor: bookezColors.manuscriptEdge },
+  folioInsetFrameInk: { borderColor: bookezColors.secondaryAccent },
+  folioTopRule: { position: 'absolute', top: 5, left: 18, width: 64, height: 1, borderRadius: 1, backgroundColor: bookezColors.secondaryAccent },
+  folioTopRuleInk: { backgroundColor: bookezColors.secondaryAccent },
+  folioPageEdge: { position: 'absolute', width: StyleSheet.hairlineWidth, borderRadius: 1, backgroundColor: bookezColors.manuscriptEdge, opacity: 0.52 },
+  folioPageEdgeOne: { top: 18, right: 4, bottom: 18 },
+  folioPageEdgeTwo: { top: 25, right: 8, bottom: 25, opacity: 0.34 },
+  folioPageEdgeInk: { backgroundColor: bookezColors.secondaryAccent, opacity: 0.42 },
+  folioBottomEdge: { position: 'absolute', right: 18, bottom: 4, left: 18, height: StyleSheet.hairlineWidth, borderRadius: 1, backgroundColor: bookezColors.manuscriptEdge, opacity: 0.42 },
+  folioCornerFold: { position: 'absolute', top: 5, right: 5, width: 13, height: 13, borderLeftWidth: StyleSheet.hairlineWidth, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: bookezColors.manuscriptEdge, borderBottomLeftRadius: 4, backgroundColor: bookezColors.surfaceMuted },
+  folioCornerFoldInk: { borderColor: bookezColors.secondaryAccent, backgroundColor: bookezColors.textPrimary },
+  folioBrassPin: { position: 'absolute', top: 6, right: 9, width: 10, height: 10, borderRadius: 5, alignItems: 'center', justifyContent: 'center', backgroundColor: bookezColors.secondaryAccentSoft, borderWidth: 1, borderColor: bookezColors.secondaryAccent, shadowColor: bookezColors.secondaryAccent, shadowOpacity: 0.28, shadowRadius: 3, shadowOffset: { width: 0, height: 1 } },
+  folioBrassPinCore: { width: 3, height: 3, borderRadius: 2, backgroundColor: bookezColors.secondaryAccent },
+  folioSweep: { position: 'absolute', top: 5, left: 0, width: 34, height: 1, borderRadius: 1, backgroundColor: '#F4D79A', shadowColor: bookezColors.secondaryAccent, shadowOpacity: 0.35, shadowRadius: 3, shadowOffset: { width: 0, height: 0 } },
+  folioSweepInk: { backgroundColor: '#E6C382' },
+  folioSpark: { position: 'absolute', top: -1, left: 13, width: 14, height: 14, alignItems: 'center', justifyContent: 'center' },
+  folioSparkText: { color: bookezColors.secondaryAccent, fontSize: 10, lineHeight: 12, textShadowColor: 'rgba(164,122,66,0.28)', textShadowRadius: 3 },
+  folioSparkTextInk: { color: '#D9B77C', textShadowColor: 'rgba(217,183,124,0.38)' },
+  libraryFolioHardware: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, zIndex: 1 },
+  libraryFolioSpine: { position: 'absolute', top: 7, bottom: 7, left: 6, width: 9, borderTopRightRadius: 3, borderBottomRightRadius: 3, borderLeftWidth: StyleSheet.hairlineWidth, borderRightWidth: 1, borderColor: bookezColors.secondaryAccent, opacity: 0.82 },
+  libraryFolioSpineRib: { position: 'absolute', left: 5, width: 11, height: 3, borderRadius: 2, backgroundColor: bookezColors.secondaryAccentSoft, borderWidth: StyleSheet.hairlineWidth, borderColor: bookezColors.secondaryAccent, opacity: 0.84 },
+  libraryFolioSpineRibTop: { top: 23 },
+  libraryFolioSpineRibMiddle: { top: '50%', marginTop: -2 },
+  libraryFolioSpineRibBottom: { bottom: 23 },
+  libraryFolioPageBlock: { position: 'absolute', top: 11, right: 3, bottom: 11, width: 5, overflow: 'hidden', borderLeftWidth: StyleSheet.hairlineWidth, borderColor: bookezColors.manuscriptEdge, backgroundColor: bookezColors.manuscript, opacity: 0.92 },
+  libraryFolioPageRule: { position: 'absolute', top: '26%', right: 0, left: 0, height: StyleSheet.hairlineWidth, backgroundColor: bookezColors.secondaryAccent, opacity: 0.4 },
+  libraryFolioPageRuleMiddle: { top: '52%', opacity: 0.28 },
+  libraryFolioPageRuleBottom: { top: '76%', opacity: 0.34 },
+  libraryFolioClasp: { position: 'absolute', top: '48%', right: 1, width: 25, height: 15, marginTop: -7, overflow: 'hidden', borderRadius: 5, borderWidth: StyleSheet.hairlineWidth, borderColor: bookezColors.secondaryAccent, alignItems: 'center', justifyContent: 'center', shadowColor: '#2A1B24', shadowOpacity: 0.18, shadowRadius: 3, shadowOffset: { width: 0, height: 2 }, elevation: 2 },
+  libraryFolioClaspStud: { width: 10, height: 10, borderRadius: 5, alignItems: 'center', justifyContent: 'center', backgroundColor: bookezColors.secondaryAccentSoft, borderWidth: 1, borderColor: bookezColors.secondaryAccent },
+  libraryFolioClaspStudCore: { width: 3, height: 3, borderRadius: 2, backgroundColor: bookezColors.secondaryAccent },
   statsConstellation: { position: 'absolute', top: 8, right: 10, width: 58, height: 30, opacity: 0.9 },
   statsConstellationLine: { position: 'absolute', top: 15, right: 9, width: 38, height: StyleSheet.hairlineWidth, backgroundColor: bookezColors.secondaryAccent },
   statsConstellationDot: { position: 'absolute', width: 3, height: 3, borderRadius: 2, backgroundColor: bookezColors.secondaryAccent, shadowColor: bookezColors.secondaryAccent, shadowOpacity: 0.5, shadowRadius: 3, shadowOffset: { width: 0, height: 0 } },
@@ -9682,9 +10248,9 @@ const exportEditorialS = StyleSheet.create({
   authorLabel: { color: bookezColors.secondaryAccent, fontFamily: bookezType.label.fontFamily },
   authorInput: { borderColor: bookezColors.border, color: bookezColors.textPrimary, fontFamily: bookezType.body.fontFamily },
   selectedSummary: { color: bookezColors.accent, fontFamily: bookezType.caption.fontFamily },
-  actionSection: { marginTop: bookezSpacing.lg, padding: bookezSpacing.md, borderRadius: bookezRadii.cardLarge, backgroundColor: bookezColors.textPrimary, borderColor: '#263B55', ...bookezShadows.lifted },
-  actionSectionLabel: { color: '#D9C49F', fontFamily: bookezType.label.fontFamily },
-  actionSectionTitle: { color: bookezColors.textOnAccent, fontFamily: bookezType.sectionTitle.fontFamily, fontSize: 19, lineHeight: 24, fontWeight: '600' },
+  actionSection: { marginTop: bookezSpacing.lg, padding: bookezSpacing.md, borderRadius: bookezRadii.cardLarge, backgroundColor: bookezColors.surfaceAccent, borderColor: bookezColors.border, ...bookezShadows.lifted },
+  actionSectionLabel: { color: bookezColors.secondaryAccent, fontFamily: bookezType.label.fontFamily },
+  actionSectionTitle: { color: bookezColors.textPrimary, fontFamily: bookezType.sectionTitle.fontFamily, fontSize: 19, lineHeight: 24, fontWeight: '600' },
   actionButton: { minHeight: 116, padding: bookezSpacing.sm, borderRadius: bookezRadii.card, backgroundColor: bookezColors.surface, borderColor: bookezColors.border },
   actionIcon: { color: bookezColors.accent, fontSize: 22 },
   actionTitle: { color: bookezColors.textPrimary, fontFamily: bookezType.button.fontFamily },
@@ -9739,14 +10305,14 @@ const statsEditorialS = StyleSheet.create({
   pillSelected: { backgroundColor: bookezColors.textPrimary, borderColor: bookezColors.textPrimary },
   pillText: { color: bookezColors.textSecondary, fontFamily: bookezType.button.fontFamily, fontSize: 11, lineHeight: 16 },
   pillTextSelected: { color: bookezColors.textOnAccent },
-  statsNumbers: { position: 'relative', marginTop: 20, padding: bookezSpacing.md, borderRadius: 20, backgroundColor: bookezColors.textPrimary, borderWidth: 1, borderColor: '#263B55', ...bookezShadows.lifted },
+  statsNumbers: { position: 'relative', marginTop: 20, padding: bookezSpacing.md, borderRadius: 20, backgroundColor: bookezColors.textPrimary, borderWidth: 1, borderColor: bookezColors.secondaryAccent, shadowColor: '#142238', shadowOpacity: 0.22, shadowRadius: 18, shadowOffset: { width: 0, height: 9 }, elevation: 6 },
   statsHeadlineMetric: { minWidth: 0 },
   statsHeadlineDivider: { backgroundColor: 'rgba(255,253,248,0.24)' },
   bigNumber: { color: bookezColors.textOnAccent, fontFamily: bookezType.display.fontFamily, fontSize: 32, lineHeight: 38, fontWeight: '600', letterSpacing: -0.5 },
   bigNumberLabel: { color: '#D9D2C5', fontFamily: bookezType.label.fontFamily, fontSize: 9, lineHeight: 13, letterSpacing: 0.9, fontWeight: '800', marginTop: 5 },
   statsMetricHint: { color: '#B8C2CF', fontFamily: bookezType.caption.fontFamily, fontSize: 11, lineHeight: 15, marginTop: 5 },
   statsMetricGrid: { marginTop: bookezSpacing.sm, gap: bookezSpacing.sm },
-  statsMetricCard: { minHeight: 108, padding: bookezSpacing.sm, borderRadius: 14, borderWidth: 1, borderColor: bookezColors.border, ...bookezShadows.subtle },
+  statsMetricCard: { position: 'relative', minHeight: 108, padding: bookezSpacing.sm, borderRadius: 14, borderWidth: 1, borderColor: bookezColors.border, shadowColor: '#493F35', shadowOpacity: 0.12, shadowRadius: 11, shadowOffset: { width: 0, height: 6 }, elevation: 3 },
   statsMetricCardLavender: { backgroundColor: bookezColors.surfaceAccent, borderColor: '#E8D4CF' },
   statsMetricCardWarm: { backgroundColor: bookezColors.manuscript, borderColor: bookezColors.manuscriptEdge },
   statsMetricCardSuccess: { backgroundColor: '#EEF1E7', borderColor: '#D5DEC9' },
@@ -9754,7 +10320,7 @@ const statsEditorialS = StyleSheet.create({
   statsMetricIcon: { color: bookezColors.accent, fontSize: 18 },
   statsMetricCardValue: { color: bookezColors.textPrimary, fontFamily: bookezType.sectionTitle.fontFamily, fontSize: 21, lineHeight: 27, fontWeight: '600', marginTop: 13 },
   statsMetricCardLabel: { color: bookezColors.textSecondary, fontFamily: bookezType.label.fontFamily, fontSize: 9, lineHeight: 13, letterSpacing: 0.65, fontWeight: '800', marginTop: 5 },
-  achievementOverviewCard: { marginTop: 24, padding: bookezSpacing.md, borderRadius: 20, backgroundColor: bookezColors.manuscript, borderWidth: 1, borderColor: bookezColors.manuscriptEdge, ...bookezShadows.subtle },
+  achievementOverviewCard: { position: 'relative', marginTop: 24, padding: bookezSpacing.md, borderRadius: 20, backgroundColor: bookezColors.manuscript, borderWidth: 1, borderColor: bookezColors.secondaryAccent, shadowColor: '#493F35', shadowOpacity: 0.12, shadowRadius: 14, shadowOffset: { width: 0, height: 7 }, elevation: 4 },
   achievementOverviewHeader: { alignItems: 'flex-start' },
   achievementOverviewIcon: { width: 38, height: 38, borderRadius: bookezRadii.control, backgroundColor: bookezColors.secondaryAccentSoft, borderWidth: 1, borderColor: '#E8D8B8' },
   achievementOverviewIconText: { color: bookezColors.secondaryAccent, fontSize: 18 },
@@ -9826,7 +10392,7 @@ const statsEditorialS = StyleSheet.create({
   achievementPaginationButton: { width: 32, height: 30, borderRadius: bookezRadii.control, backgroundColor: bookezColors.surfaceMuted },
   achievementPaginationButtonText: { color: bookezColors.accent, fontSize: 18 },
   achievementPaginationLabel: { color: bookezColors.textSecondary, fontFamily: bookezType.metadata.fontFamily, fontSize: 10, lineHeight: 14 },
-  chartCard: { marginTop: 24, backgroundColor: bookezColors.manuscript, borderRadius: 20, padding: bookezSpacing.md, borderWidth: 1, borderColor: bookezColors.manuscriptEdge, ...bookezShadows.subtle },
+  chartCard: { position: 'relative', marginTop: 24, backgroundColor: bookezColors.manuscript, borderRadius: 20, padding: bookezSpacing.md, borderWidth: 1, borderColor: bookezColors.secondaryAccent, shadowColor: '#493F35', shadowOpacity: 0.13, shadowRadius: 15, shadowOffset: { width: 0, height: 7 }, elevation: 4 },
   chartTitle: { color: bookezColors.textPrimary, fontFamily: bookezType.sectionTitle.fontFamily, fontSize: 19, lineHeight: 24, fontWeight: '600' },
   chartTotal: { color: bookezColors.accent, fontFamily: bookezType.button.fontFamily, fontSize: 12, lineHeight: 17 },
   chartLegend: { marginTop: 12 },
@@ -9923,7 +10489,7 @@ const statsEditorialS = StyleSheet.create({
 });
 
 const profileEditorialS = StyleSheet.create({
-  profileHero: { borderRadius: 20, backgroundColor: bookezColors.surface, borderColor: bookezColors.border, ...bookezShadows.subtle },
+  profileHero: { position: 'relative', borderRadius: 20, backgroundColor: bookezColors.surface, borderColor: bookezColors.secondaryAccent, shadowColor: '#493F35', shadowOpacity: 0.14, shadowRadius: 16, shadowOffset: { width: 0, height: 8 }, elevation: 4 },
   profileAvatar: { backgroundColor: bookezColors.surfaceAccent, shadowColor: '#493F35', shadowOpacity: 0.12 },
   profileAvatarText: { color: bookezColors.accent },
   profileHalo: { borderColor: bookezColors.surfaceRaised },
@@ -9933,7 +10499,7 @@ const profileEditorialS = StyleSheet.create({
   profileMemberSince: { color: bookezColors.textMuted, fontFamily: bookezType.caption.fontFamily },
   profileEditButton: { backgroundColor: bookezColors.accentSoft, borderWidth: 1, borderColor: '#E5C9D0' },
   profileEditButtonText: { color: bookezColors.accent, fontFamily: bookezType.button.fontFamily },
-  profileSnapshotCard: { borderRadius: 18, backgroundColor: bookezColors.manuscript, borderColor: bookezColors.manuscriptEdge, ...bookezShadows.subtle },
+  profileSnapshotCard: { position: 'relative', borderRadius: 18, backgroundColor: bookezColors.manuscript, borderColor: bookezColors.manuscriptEdge, shadowColor: '#493F35', shadowOpacity: 0.11, shadowRadius: 13, shadowOffset: { width: 0, height: 6 }, elevation: 3 },
   profileSectionEyebrow: { color: bookezColors.secondaryAccent },
   profileSnapshotTitle: { color: bookezColors.textPrimary, fontFamily: bookezType.sectionTitle.fontFamily, fontWeight: '600' },
   profileSnapshotProject: { color: bookezColors.textSecondary, fontFamily: bookezType.metadata.fontFamily },
@@ -9941,9 +10507,15 @@ const profileEditorialS = StyleSheet.create({
   profileSnapshotValue: { color: bookezColors.textPrimary, fontFamily: bookezType.sectionTitle.fontFamily, fontWeight: '600' },
   profileSnapshotLabel: { color: bookezColors.textSecondary, fontFamily: bookezType.label.fontFamily },
   preferenceTitle: { color: bookezColors.textPrimary, fontFamily: bookezType.sectionTitle.fontFamily, fontWeight: '600' },
-  preferences: { backgroundColor: bookezColors.surface, borderColor: bookezColors.border, borderWidth: 1 },
-  settingsCard: { backgroundColor: bookezColors.surface, borderColor: bookezColors.border, borderWidth: 1 },
-  accountCard: { backgroundColor: bookezColors.surface, borderColor: bookezColors.border, borderWidth: 1 },
+  preferences: { position: 'relative', backgroundColor: bookezColors.surface, borderColor: bookezColors.border, borderWidth: 1, shadowColor: '#493F35', shadowOpacity: 0.1, shadowRadius: 12, shadowOffset: { width: 0, height: 6 }, elevation: 3 },
+  settingsCard: { position: 'relative', backgroundColor: bookezColors.surface, borderColor: bookezColors.border, borderWidth: 1, shadowColor: '#493F35', shadowOpacity: 0.1, shadowRadius: 12, shadowOffset: { width: 0, height: 6 }, elevation: 3 },
+  accountCard: { position: 'relative', backgroundColor: bookezColors.surface, borderColor: bookezColors.border, borderWidth: 1, shadowColor: '#493F35', shadowOpacity: 0.1, shadowRadius: 12, shadowOffset: { width: 0, height: 6 }, elevation: 3 },
+  accountEmailPanel: { paddingVertical: bookezSpacing.sm },
+  accountEmailKicker: { color: bookezColors.secondaryAccent, fontFamily: bookezType.label.fontFamily },
+  accountEmailValue: { color: bookezColors.textSecondary, fontFamily: bookezType.caption.fontFamily },
+  changeEmailButton: { backgroundColor: bookezColors.accentSoft, borderColor: bookezColors.border },
+  changeEmailButtonText: { color: bookezColors.textPrimary, fontFamily: bookezType.button.fontFamily },
+  changeEmailButtonArrow: { color: bookezColors.secondaryAccent },
   settingsText: { color: bookezColors.textPrimary, fontFamily: bookezType.cardTitle.fontFamily },
   settingsSub: { color: bookezColors.textSecondary, fontFamily: bookezType.caption.fontFamily },
   settingsIconBlue: { backgroundColor: bookezColors.surfaceAccent },
@@ -9952,7 +10524,7 @@ const profileEditorialS = StyleSheet.create({
   settingsIconCoral: { backgroundColor: bookezColors.destructiveSoft },
   settingsIconText: { color: bookezColors.textPrimary },
   deleteText: { color: bookezColors.destructive, fontFamily: bookezType.button.fontFamily },
-  accountClosureCard: { marginTop: 16, padding: bookezSpacing.md, borderRadius: bookezRadii.card, backgroundColor: bookezColors.surfaceRaised, borderWidth: 1, borderColor: '#DEC8C2', ...bookezShadows.subtle },
+  accountClosureCard: { position: 'relative', marginTop: 16, padding: bookezSpacing.md, borderRadius: bookezRadii.card, backgroundColor: bookezColors.surfaceRaised, borderWidth: 1, borderColor: '#DEC8C2', shadowColor: '#493F35', shadowOpacity: 0.1, shadowRadius: 12, shadowOffset: { width: 0, height: 6 }, elevation: 3 },
   accountClosureRule: { flexDirection: 'row', alignItems: 'center', marginBottom: 14, opacity: 0.72 },
   accountClosureRuleLine: { flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: '#D9BCB5' },
   accountClosureRuleMark: { marginHorizontal: 8, color: bookezColors.destructive, fontFamily: bookezType.metadata.fontFamily, fontSize: 10 },
@@ -9971,7 +10543,7 @@ const profileEditorialS = StyleSheet.create({
   accountClosureButtonText: { color: bookezColors.destructive, fontFamily: bookezType.button.fontFamily, fontSize: 12, lineHeight: 17 },
   accountClosureButtonArrow: { color: bookezColors.destructive, fontSize: 18, lineHeight: 20 },
   profileFootnote: { color: bookezColors.textMuted, fontFamily: bookezType.caption.fontFamily },
-  onboardingProfileCard: { backgroundColor: bookezColors.accentSoft, borderColor: '#E5C9D0' },
+  onboardingProfileCard: { position: 'relative', backgroundColor: bookezColors.accentSoft, borderColor: '#D9B8BE', shadowColor: '#493F35', shadowOpacity: 0.12, shadowRadius: 13, shadowOffset: { width: 0, height: 6 }, elevation: 3 },
   onboardingProfileIcon: { backgroundColor: bookezColors.accentStrong },
   onboardingProfileKicker: { color: bookezColors.accent },
   onboardingProfileTitle: { color: bookezColors.textPrimary, fontFamily: bookezType.cardTitle.fontFamily },
@@ -9979,8 +10551,8 @@ const profileEditorialS = StyleSheet.create({
   onboardingProfileButton: { backgroundColor: bookezColors.surface, borderWidth: 1, borderColor: bookezColors.border },
   onboardingProfileButtonText: { color: bookezColors.textPrimary, fontFamily: bookezType.button.fontFamily },
   onboardingProfileButtonArrow: { color: bookezColors.accent },
-  notificationPanel: { backgroundColor: bookezColors.surface, borderColor: bookezColors.border, borderWidth: 1 },
-  voicePanel: { backgroundColor: bookezColors.surface, borderColor: bookezColors.border, borderWidth: 1 },
+  notificationPanel: { position: 'relative', backgroundColor: bookezColors.surface, borderColor: bookezColors.border, borderWidth: 1, shadowColor: '#493F35', shadowOpacity: 0.1, shadowRadius: 12, shadowOffset: { width: 0, height: 6 }, elevation: 3 },
+  voicePanel: { position: 'relative', backgroundColor: bookezColors.surface, borderColor: bookezColors.border, borderWidth: 1, shadowColor: '#493F35', shadowOpacity: 0.1, shadowRadius: 12, shadowOffset: { width: 0, height: 6 }, elevation: 3 },
   voicePanelIcon: { backgroundColor: bookezColors.secondaryAccentSoft },
   voicePanelIconText: { color: bookezColors.secondaryAccent },
   voicePanelKicker: { color: bookezColors.secondaryAccent },
@@ -10012,7 +10584,7 @@ const profileEditorialS = StyleSheet.create({
 });
 
 const profileSyncEditorialS = StyleSheet.create({
-  dropdown: { backgroundColor: bookezColors.surface, borderColor: bookezColors.border, ...bookezShadows.subtle },
+  dropdown: { position: 'relative', backgroundColor: bookezColors.surface, borderColor: bookezColors.border, shadowColor: '#493F35', shadowOpacity: 0.1, shadowRadius: 12, shadowOffset: { width: 0, height: 6 }, elevation: 3 },
   dropdownIcon: { backgroundColor: bookezColors.secondaryAccentSoft },
   dropdownIconText: { color: bookezColors.secondaryAccent },
   dropdownKicker: { color: bookezColors.secondaryAccent },
@@ -10071,5 +10643,413 @@ Object.entries(profileEditorialS).forEach(([key, style]) => {
 
 const profileSyncStyleMap = syncS as unknown as Record<string, unknown>;
 Object.entries(profileSyncEditorialS).forEach(([key, style]) => {
+  profileSyncStyleMap[key] = [profileSyncStyleMap[key], style];
+});
+
+// A few reference, citation, and writing-signature controls predate the
+// editorial screen maps above. Keep their existing geometry and interaction
+// states, but bring their surfaces into the same dark artifact register.
+const legacyDarkStyleMap = s as unknown as Record<string, unknown>;
+Object.entries({
+  referenceModeToggle: { backgroundColor: bookezColors.surfaceMuted, borderColor: bookezColors.border },
+  referenceModeOptionActive: { backgroundColor: bookezColors.surface, shadowColor: '#000' },
+  referenceModeOptionText: { color: bookezColors.textSecondary },
+  referenceModeOptionTextActive: { color: bookezColors.textPrimary },
+  citationUrlInput: { backgroundColor: bookezColors.surfaceRaised, borderColor: bookezColors.border, color: bookezColors.textPrimary },
+  citationLookupButton: { backgroundColor: bookezColors.secondaryAccent },
+  citationLookupText: { color: bookezColors.textOnAccent },
+  citationLocalNote: { color: bookezColors.textMuted },
+  citationLookupError: { color: bookezColors.destructive },
+  citationMetadataCard: { backgroundColor: bookezColors.surfaceAccent, borderColor: bookezColors.border },
+  citationMetadataLabel: { color: bookezColors.secondaryAccent },
+  citationMetadataTitle: { color: bookezColors.textPrimary },
+  citationMetadataDetail: { color: bookezColors.textSecondary },
+  citationManualToggle: { backgroundColor: bookezColors.surfaceMuted, borderColor: bookezColors.border },
+  citationManualToggleText: { color: bookezColors.secondaryAccent },
+  citationManualToggleArrow: { color: bookezColors.secondaryAccent },
+  citationReviewEditButton: { backgroundColor: bookezColors.surfaceMuted, borderColor: bookezColors.border },
+  citationReviewEditText: { color: bookezColors.textPrimary },
+  imageCitationReviewCard: { backgroundColor: bookezColors.surfaceAccent, borderColor: bookezColors.border },
+  imageCitationPreview: { backgroundColor: bookezColors.manuscriptEdge },
+  imageCitationSavedList: { backgroundColor: bookezColors.surfaceMuted, borderColor: bookezColors.border },
+  imageCitationSavedRow: { borderTopColor: bookezColors.divider },
+  imageCitationSavedThumb: { backgroundColor: bookezColors.surfaceAccent },
+  citationGeneratorCard: { backgroundColor: bookezColors.surface, borderColor: bookezColors.border },
+  citationIcon: { backgroundColor: bookezColors.secondaryAccent },
+  citationIconText: { color: bookezColors.textOnAccent },
+  citationEyebrow: { color: bookezColors.secondaryAccent },
+  citationTitle: { color: bookezColors.textPrimary },
+  citationHint: { color: bookezColors.textSecondary },
+  citationProjectLabel: { color: bookezColors.textMuted },
+  citationFieldLabel: { color: bookezColors.secondaryAccent },
+  citationChoice: { backgroundColor: bookezColors.surfaceRaised, borderColor: bookezColors.border },
+  citationChoiceActive: { backgroundColor: bookezColors.accent, borderColor: bookezColors.accent },
+  citationChoiceText: { color: bookezColors.textSecondary },
+  citationChoiceTextActive: { color: bookezColors.textOnAccent },
+  citationInput: { backgroundColor: bookezColors.surfaceRaised, borderColor: bookezColors.border, color: bookezColors.textPrimary },
+  citationInputHalf: { backgroundColor: bookezColors.surfaceRaised, borderColor: bookezColors.border, color: bookezColors.textPrimary },
+  citationExample: { color: bookezColors.textMuted },
+  citationGenerateButton: { backgroundColor: bookezColors.accentStrong },
+  citationGenerateText: { color: bookezColors.textOnAccent },
+  citationGenerateArrow: { color: bookezColors.textOnAccent },
+  citationResult: { backgroundColor: bookezColors.surfaceRaised, borderColor: bookezColors.border },
+  citationResultLabel: { color: bookezColors.secondaryAccent },
+  citationResultText: { color: bookezColors.textPrimary },
+  citationAddButton: { backgroundColor: bookezColors.accentSoft },
+  citationAddButtonAdded: { backgroundColor: bookezColors.successSoft },
+  citationAddText: { color: bookezColors.textPrimary },
+  citationExisting: { color: bookezColors.textSecondary },
+  stylePreferencesCard: { backgroundColor: bookezColors.surface, borderColor: bookezColors.border, shadowColor: '#000' },
+  stylePreferencesHeader: { borderBottomColor: bookezColors.divider },
+  stylePreferencesEyebrow: { color: bookezColors.secondaryAccent },
+  stylePreferencesTitle: { color: bookezColors.textPrimary },
+  stylePreferencesHint: { color: bookezColors.textSecondary },
+  stylePreferencesIcon: { color: bookezColors.secondaryAccent },
+  stylePreferenceTile: { backgroundColor: bookezColors.surfaceMuted, borderColor: bookezColors.border },
+  stylePreferenceTilePlan: { backgroundColor: bookezColors.surfaceMuted, borderColor: bookezColors.border },
+  stylePreferenceTileSession: { backgroundColor: bookezColors.surfaceAccent, borderColor: bookezColors.border },
+  stylePreferenceIcon: { backgroundColor: bookezColors.accentSoft },
+  stylePreferenceIconPlan: { backgroundColor: bookezColors.secondaryAccentSoft },
+  stylePreferenceIconSession: { backgroundColor: bookezColors.accentSoft },
+  stylePreferenceIconText: { color: bookezColors.secondaryAccent },
+  stylePreferenceLabel: { color: bookezColors.textSecondary },
+  stylePreferenceValue: { color: bookezColors.textPrimary },
+  stylePreferenceDetail: { color: bookezColors.textMuted },
+  librarySourcesRow: { backgroundColor: bookezColors.surfaceRaised, borderColor: bookezColors.border },
+  librarySourcesIcon: { backgroundColor: bookezColors.accentSoft },
+  librarySourcesIconText: { color: bookezColors.secondaryAccent },
+  librarySourcesTitle: { color: bookezColors.textPrimary },
+  librarySourcesHint: { color: bookezColors.textSecondary },
+  librarySourcesArrow: { color: bookezColors.secondaryAccent },
+}).forEach(([key, override]) => {
+  legacyDarkStyleMap[key] = [legacyDarkStyleMap[key], override];
+});
+
+const ancientChromeS = StyleSheet.create({
+  page: { backgroundColor: ancientGameColors.night },
+  orb: { backgroundColor: ancientGameColors.brass, opacity: 0.055 },
+  navShell: { backgroundColor: '#0D1515', borderColor: ancientGameColors.brassDark, borderWidth: 1, shadowColor: '#000', shadowOpacity: 0.55, shadowRadius: 16, shadowOffset: { width: 0, height: 7 } },
+  navNode: { backgroundColor: ancientGameColors.panel, borderColor: '#2A332E' },
+  navNodeActive: { backgroundColor: '#2B2519', borderColor: ancientGameColors.brass, shadowColor: ancientGameColors.gold, shadowOpacity: 0.25 },
+  navActiveHalo: { backgroundColor: ancientGameColors.gold },
+  navLabel: { color: '#817A67' },
+  navLabelActive: { color: ancientGameColors.goldPale },
+  navWorkflowBreak: { borderLeftColor: '#3B3425' },
+});
+
+// The route and future/reached nodes are shared by every tab. Keep these
+// shared styles in the same dark register as the active node so the tab bar
+// cannot fall back to the former pale editorial controls on another screen.
+Object.assign(s, {
+  navNodeReached: { backgroundColor: '#201F19', borderColor: '#5B4929' },
+  navNodeFuture: { backgroundColor: '#141B19', borderColor: '#3B3B30' },
+  navConnectorSegment: { backgroundColor: '#4A4434' },
+  navConnectorSegmentReached: { backgroundColor: ancientGameColors.brass, shadowColor: ancientGameColors.gold },
+  navTravelLight: { backgroundColor: ancientGameColors.goldPale, shadowColor: ancientGameColors.gold },
+  navRouteLightCore: { backgroundColor: ancientGameColors.goldPale },
+});
+
+const statsAncientS = StyleSheet.create({
+  statsHero: { paddingTop: 11, paddingBottom: 3 },
+  statsOverline: { color: ancientGameColors.brass, letterSpacing: 1.5 },
+  statsTitle: { color: ancientGameColors.goldPale, textShadowColor: 'rgba(0,0,0,0.85)', textShadowOffset: { width: 0, height: 2 }, textShadowRadius: 3 },
+  statsSubtitle: { color: ancientGameColors.bone },
+  statsJourneyButton: { backgroundColor: ancientGameColors.panel, borderColor: ancientGameColors.brassDark, borderRadius: 9, shadowColor: '#000', shadowOpacity: 0.42, shadowRadius: 5, shadowOffset: { width: 0, height: 3 } },
+  statsJourneyButtonText: { color: ancientGameColors.gold },
+  statsJourneyButtonArrow: { color: ancientGameColors.gold },
+  statsBookName: { color: ancientGameColors.muted },
+  statsScopeToggle: { padding: 3, borderRadius: 10, backgroundColor: '#090F0F', borderColor: ancientGameColors.brassDark, shadowColor: '#000', shadowOpacity: 0.34, shadowRadius: 5, shadowOffset: { width: 0, height: 3 } },
+  statsScopeOption: { borderRadius: 7 },
+  statsScopeOptionActive: { backgroundColor: '#282319', borderWidth: 1, borderColor: ancientGameColors.brass, shadowColor: ancientGameColors.gold, shadowOpacity: 0.12, shadowRadius: 4, shadowOffset: { width: 0, height: 1 } },
+  statsScopeOptionText: { color: ancientGameColors.muted },
+  statsScopeOptionTextActive: { color: ancientGameColors.goldPale },
+  statsProjectOption: { backgroundColor: ancientGameColors.panel, borderColor: ancientGameColors.brassDark, borderRadius: 9 },
+  statsProjectOptionActive: { backgroundColor: '#2D281C', borderColor: ancientGameColors.gold },
+  statsProjectOptionText: { color: ancientGameColors.muted },
+  statsProjectOptionTextActive: { color: ancientGameColors.goldPale },
+  rangeRow: { gap: 7, marginTop: 15 },
+  pill: { minHeight: 36, borderRadius: 8, backgroundColor: '#111918', borderColor: '#5E482A', shadowColor: '#000', shadowOpacity: 0.4, shadowRadius: 4, shadowOffset: { width: 0, height: 3 } },
+  pillSelected: { backgroundColor: ancientGameColors.parchment, borderColor: ancientGameColors.goldPale, shadowColor: ancientGameColors.gold, shadowOpacity: 0.18 },
+  pillText: { color: ancientGameColors.muted, fontFamily: bookezType.sectionTitle.fontFamily, fontSize: 12 },
+  pillTextSelected: { color: ancientGameColors.parchmentInk, textShadowColor: 'rgba(255,238,191,0.45)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 1 },
+  statsNumbers: { marginTop: 18, padding: 17, borderRadius: 12, backgroundColor: ancientGameColors.parchmentLight, borderWidth: 2, borderColor: ancientGameColors.brassDark, shadowColor: '#000', shadowOpacity: 0.62, shadowRadius: 13, shadowOffset: { width: 0, height: 8 }, elevation: 7 },
+  statsHeadlineDivider: { backgroundColor: 'rgba(67,47,25,0.38)' },
+  bigNumber: { color: ancientGameColors.parchmentInk, textShadowColor: 'rgba(255,242,200,0.45)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 1 },
+  bigNumberLabel: { color: '#47361F' },
+  statsMetricHint: { color: '#654E2D' },
+  statsMetricCard: { minHeight: 106, borderRadius: 10, borderColor: ancientGameColors.brassDark, shadowColor: '#000', shadowOpacity: 0.48, shadowRadius: 7, shadowOffset: { width: 0, height: 5 }, elevation: 4 },
+  statsMetricCardLavender: { backgroundColor: '#222326', borderColor: '#67553B' },
+  statsMetricCardWarm: { backgroundColor: ancientGameColors.rust, borderColor: '#765034' },
+  statsMetricCardSuccess: { backgroundColor: ancientGameColors.moss, borderColor: '#5E6847' },
+  statsMetricCardBlue: { backgroundColor: ancientGameColors.teal, borderColor: '#48645C' },
+  statsMetricIcon: { color: ancientGameColors.gold },
+  statsMetricCardValue: { color: ancientGameColors.goldPale, textShadowColor: '#000', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 2 },
+  statsMetricCardLabel: { color: ancientGameColors.muted },
+  achievementOverviewCard: { backgroundColor: ancientGameColors.panel, borderColor: ancientGameColors.brass, borderRadius: 12, shadowColor: '#000', shadowOpacity: 0.48 },
+  achievementOverviewIcon: { backgroundColor: '#2E291E', borderColor: ancientGameColors.brass },
+  achievementOverviewEyebrow: { color: ancientGameColors.brass },
+  achievementOverviewTitle: { color: ancientGameColors.goldPale },
+  achievementOverviewHint: { color: ancientGameColors.muted },
+  achievementOverviewCount: { backgroundColor: '#0D1514', borderColor: ancientGameColors.brassDark },
+  achievementOverviewCountValue: { color: ancientGameColors.goldPale },
+  achievementOverviewCountLabel: { color: ancientGameColors.muted },
+  achievementOverviewTrack: { backgroundColor: '#090E0E' },
+  achievementOverviewFill: { backgroundColor: ancientGameColors.gold },
+  achievementOverviewStats: { borderTopColor: '#493B27' },
+  achievementOverviewStatLabel: { color: ancientGameColors.brass },
+  achievementOverviewStatValue: { color: ancientGameColors.goldPale },
+  achievementOverviewStatDetail: { color: ancientGameColors.muted },
+  achievementOverviewDivider: { backgroundColor: '#493B27' },
+  achievementOverviewNext: { backgroundColor: '#111917', borderColor: ancientGameColors.brassDark },
+  achievementOverviewNextIcon: { backgroundColor: '#2A301F' },
+  achievementOverviewNextIconText: { color: ancientGameColors.gold },
+  achievementOverviewNextLabel: { color: ancientGameColors.brass },
+  achievementOverviewNextTitle: { color: ancientGameColors.bone },
+  achievementOverviewNextDetail: { color: ancientGameColors.muted },
+  statsSectionTitle: { color: ancientGameColors.goldPale },
+  statsCardHint: { color: ancientGameColors.muted },
+  statsSectionCount: { color: ancientGameColors.gold },
+  achievementCard: { backgroundColor: ancientGameColors.panel, borderColor: ancientGameColors.brassDark, borderRadius: 11 },
+  achievementCardAllTime: { backgroundColor: ancientGameColors.panel, borderColor: ancientGameColors.brassDark, borderRadius: 11 },
+  achievementSubsectionLabel: { color: ancientGameColors.brass },
+  achievementSummaryItem: { backgroundColor: '#0E1615', borderColor: '#493B27', borderRadius: 9 },
+  achievementSummaryValue: { color: ancientGameColors.goldPale },
+  achievementSummaryLabel: { color: ancientGameColors.brass },
+  achievementSummaryDetail: { color: ancientGameColors.muted },
+  achievementRow: { backgroundColor: '#111918', borderColor: '#3D3427', borderRadius: 9 },
+  achievementRowLocked: { backgroundColor: '#0C1313', opacity: 0.72 },
+  achievementIcon: { backgroundColor: '#25251C' },
+  achievementIconEarned: { backgroundColor: '#34331E' },
+  achievementIconText: { color: ancientGameColors.gold },
+  achievementIconTextLocked: { color: '#6E6858' },
+  achievementTitle: { color: ancientGameColors.bone },
+  achievementTitleLocked: { color: ancientGameColors.muted },
+  achievementDetail: { color: ancientGameColors.muted },
+  achievementStateEarned: { color: ancientGameColors.gold },
+  achievementStateLocked: { color: '#6E6858' },
+  achievementFilter: { backgroundColor: '#0D1514', borderColor: '#493B27', borderRadius: 8 },
+  achievementFilterSelected: { backgroundColor: '#332A19', borderColor: ancientGameColors.brass },
+  achievementFilterText: { color: ancientGameColors.muted },
+  achievementFilterTextSelected: { color: ancientGameColors.goldPale },
+  chartCard: { backgroundColor: ancientGameColors.panel, borderColor: ancientGameColors.brass, borderRadius: 12, shadowColor: '#000', shadowOpacity: 0.5 },
+  chartTitle: { color: ancientGameColors.goldPale },
+  chartTotal: { color: ancientGameColors.gold },
+  chartLegendText: { color: ancientGameColors.muted },
+  bar: { backgroundColor: ancientGameColors.gold },
+  barActive: { backgroundColor: '#C17C4D' },
+  barTime: { backgroundColor: '#7E956D' },
+  barLabel: { color: ancientGameColors.muted },
+  statsEmptyHint: { color: ancientGameColors.muted },
+  statsDayRow: { backgroundColor: ancientGameColors.panel, borderColor: '#4B3D29', borderRadius: 9, shadowColor: '#000', shadowOpacity: 0.25 },
+  statsDayTitle: { color: ancientGameColors.bone },
+  statsDaySub: { color: ancientGameColors.muted },
+  statsDayValue: { color: ancientGameColors.goldPale },
+  statsDayLabel: { color: ancientGameColors.brass },
+  statsEmptyCard: { backgroundColor: ancientGameColors.panel, borderColor: ancientGameColors.brassDark, borderRadius: 10 },
+  statsEmptyIcon: { color: ancientGameColors.gold },
+  statsEmptyTitle: { color: ancientGameColors.goldPale },
+  statsEmptyCopy: { color: ancientGameColors.muted },
+  statsBreakdownCard: { backgroundColor: ancientGameColors.panel, borderColor: ancientGameColors.brassDark, borderRadius: 11, shadowColor: '#000', shadowOpacity: 0.35 },
+  inputMixTrack: { backgroundColor: '#090E0E' },
+  inputMixDictation: { backgroundColor: '#87966C' },
+  inputMixWriting: { backgroundColor: ancientGameColors.gold },
+  inputMixLabel: { color: ancientGameColors.muted },
+  inputMixValue: { color: ancientGameColors.goldPale },
+  dictationStatsCard: { backgroundColor: ancientGameColors.rust, borderColor: '#765034', borderRadius: 11 },
+  dictationStatsEyebrow: { color: ancientGameColors.brass },
+  dictationStatsTitle: { color: ancientGameColors.goldPale },
+  dictationStatsHint: { color: ancientGameColors.muted },
+  dictationStatsIcon: { backgroundColor: '#2A211B', borderWidth: 1, borderColor: ancientGameColors.brassDark },
+  dictationStatsRow: { borderTopColor: '#674831' },
+  dictationStatValue: { color: ancientGameColors.goldPale },
+  dictationStatLabel: { color: '#C09A64' },
+  dictationStatsEmpty: { color: ancientGameColors.muted, borderTopColor: '#674831' },
+  specializedStatsCard: { backgroundColor: ancientGameColors.panel, borderColor: ancientGameColors.brassDark, borderRadius: 11 },
+  specializedStatsCardWarm: { backgroundColor: ancientGameColors.rust, borderColor: '#765034' },
+  specializedStatsCardMint: { backgroundColor: ancientGameColors.moss, borderColor: '#5E6847' },
+  specializedStatsCardRose: { backgroundColor: '#302225', borderColor: '#704E51' },
+  specializedStatsEyebrow: { color: ancientGameColors.brass },
+  specializedStatsTitle: { color: ancientGameColors.goldPale },
+  specializedStatsSubtitle: { color: ancientGameColors.muted },
+  specializedStat: { backgroundColor: '#0E1615', borderColor: '#493B27', borderRadius: 8 },
+  specializedStatLabel: { color: ancientGameColors.brass },
+  specializedStatValue: { color: ancientGameColors.goldPale },
+  specializedStatDetail: { color: ancientGameColors.muted },
+  statsInsightCard: { backgroundColor: '#2D281C', borderWidth: 1, borderColor: ancientGameColors.brassDark, borderRadius: 10 },
+  statsInsightEyebrow: { color: ancientGameColors.brass },
+  statsInsightTitle: { color: ancientGameColors.goldPale },
+  statsInsightCopy: { color: ancientGameColors.muted },
+  statsInsightMetric: { borderTopColor: '#5A482D' },
+  statsInsightMetricLabel: { color: ancientGameColors.brass },
+  statsInsightMetricValue: { color: ancientGameColors.goldPale },
+  statsBookCard: { backgroundColor: ancientGameColors.panel, borderColor: ancientGameColors.brassDark, borderRadius: 11, shadowColor: '#000', shadowOpacity: 0.32 },
+  statsBookCardDivider: { backgroundColor: '#493B27' },
+  statsBookCardLabel: { color: ancientGameColors.brass },
+  statsBookCardValue: { color: ancientGameColors.goldPale },
+  statsBookCardMetric: { backgroundColor: '#0E1615', borderWidth: 1, borderColor: '#403727', borderRadius: 8 },
+  statsBookCardMetricExpanded: { backgroundColor: '#2D281C', borderColor: ancientGameColors.brass },
+  statsBookCardAction: { color: ancientGameColors.gold },
+  conditionalStatsCard: { backgroundColor: ancientGameColors.moss, borderColor: '#5E6847', borderRadius: 11 },
+  conditionalStatsCardCitation: { backgroundColor: '#302225', borderColor: '#704E51', borderRadius: 11 },
+  conditionalStatsEyebrow: { color: ancientGameColors.brass },
+  conditionalStatsEyebrowCitation: { color: ancientGameColors.brass },
+  conditionalStatsTitle: { color: ancientGameColors.goldPale },
+  conditionalStatsHint: { color: ancientGameColors.muted },
+  conditionalStat: { backgroundColor: '#111918', borderColor: '#493B27' },
+  conditionalStatValue: { color: ancientGameColors.goldPale },
+  conditionalStatLabel: { color: ancientGameColors.brass },
+  conditionalStatDetail: { color: ancientGameColors.muted },
+});
+
+const profileAncientS = StyleSheet.create({
+  profileHero: { marginTop: 7, padding: 15, borderRadius: 12, backgroundColor: ancientGameColors.panel, borderWidth: 1.5, borderColor: ancientGameColors.brass, shadowColor: '#000', shadowOpacity: 0.58, shadowRadius: 14, shadowOffset: { width: 0, height: 8 }, elevation: 7 },
+  profileAvatar: { backgroundColor: '#201C14', borderWidth: 2, borderColor: ancientGameColors.brass, shadowColor: ancientGameColors.gold, shadowOpacity: 0.18 },
+  profileAvatarText: { color: ancientGameColors.goldPale, fontFamily: bookezType.pageTitle.fontFamily },
+  profileHalo: { borderColor: '#4F3D25' },
+  profileOverline: { color: ancientGameColors.brass, letterSpacing: 1.15 },
+  profileName: { color: ancientGameColors.goldPale, textShadowColor: '#000', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 2 },
+  profileEmail: { color: ancientGameColors.bone },
+  profileMemberSince: { color: ancientGameColors.muted },
+  profileEditButton: { backgroundColor: '#251F16', borderColor: ancientGameColors.brassDark, borderRadius: 8, shadowColor: '#000', shadowOpacity: 0.36, shadowRadius: 4, shadowOffset: { width: 0, height: 3 } },
+  profileEditButtonText: { color: ancientGameColors.goldPale, fontFamily: bookezType.sectionTitle.fontFamily, fontSize: 11 },
+  preferenceTitle: { marginTop: 26, marginBottom: 9, color: ancientGameColors.brass, fontFamily: bookezType.label.fontFamily, fontSize: 10, lineHeight: 14, letterSpacing: 1.15, fontWeight: '800', textTransform: 'uppercase' },
+  onboardingProfileCard: { backgroundColor: ancientGameColors.panel, borderColor: ancientGameColors.brassDark, borderRadius: 11, shadowColor: '#000', shadowOpacity: 0.42, overflow: 'hidden' },
+  onboardingProfileGlow: { backgroundColor: 'rgba(215,180,107,0.06)' },
+  onboardingProfileIcon: { backgroundColor: '#30281A', borderWidth: 1, borderColor: ancientGameColors.brass },
+  onboardingProfileIconText: { color: ancientGameColors.goldPale },
+  onboardingProfileKicker: { color: ancientGameColors.brass },
+  onboardingProfileTitle: { color: ancientGameColors.goldPale },
+  onboardingProfileSub: { color: ancientGameColors.muted },
+  onboardingProfileButton: { backgroundColor: '#0D1514', borderColor: ancientGameColors.brassDark, borderRadius: 8 },
+  onboardingProfileButtonText: { color: ancientGameColors.bone, fontFamily: bookezType.sectionTitle.fontFamily },
+  onboardingProfileButtonArrow: { color: ancientGameColors.gold },
+  notificationPanel: { backgroundColor: ancientGameColors.panel, borderColor: ancientGameColors.brassDark, borderRadius: 11, shadowColor: '#000', shadowOpacity: 0.42 },
+  notificationBell: { backgroundColor: '#2D281C', borderWidth: 1, borderColor: ancientGameColors.brassDark },
+  notificationBellText: { color: ancientGameColors.gold },
+  notificationTitle: { color: ancientGameColors.goldPale, fontFamily: bookezType.sectionTitle.fontFamily },
+  notificationSub: { color: ancientGameColors.muted },
+  notificationPanelBody: { borderTopColor: '#493B27' },
+  notificationPanelHint: { color: ancientGameColors.muted },
+  notificationSmartCard: { backgroundColor: '#111918', borderColor: ancientGameColors.brassDark, borderRadius: 9 },
+  notificationSmartIcon: { backgroundColor: '#2D281C', borderWidth: 1, borderColor: ancientGameColors.brass },
+  notificationSmartIconText: { color: ancientGameColors.goldPale },
+  notificationSmartTitle: { color: ancientGameColors.bone },
+  notificationSmartDescription: { color: ancientGameColors.muted },
+  notificationSmartPreview: { color: ancientGameColors.gold },
+  notificationReminder: { backgroundColor: '#0E1615', borderColor: '#493B27', borderRadius: 9 },
+  notificationReminderExpanded: { borderColor: ancientGameColors.brass },
+  notificationReminderIcon: { backgroundColor: '#202622' },
+  notificationReminderIconActive: { backgroundColor: '#302A1C' },
+  notificationReminderIconText: { color: ancientGameColors.gold },
+  notificationReminderLabel: { color: ancientGameColors.bone },
+  notificationReminderMeta: { color: ancientGameColors.muted },
+  notificationReminderChevron: { color: ancientGameColors.brass },
+  notificationReminderEditor: { borderTopColor: '#493B27' },
+  notificationFieldLabel: { color: ancientGameColors.brass },
+  notificationInput: { backgroundColor: '#0A1111', borderColor: '#493B27', color: ancientGameColors.bone, borderRadius: 8 },
+  notificationFrequencyChoice: { backgroundColor: '#111918', borderColor: '#493B27', borderRadius: 7 },
+  notificationFrequencyChoiceActive: { backgroundColor: '#332A19', borderColor: ancientGameColors.brass },
+  notificationFrequencyText: { color: ancientGameColors.muted },
+  notificationFrequencyTextActive: { color: ancientGameColors.goldPale },
+  notificationDay: { backgroundColor: '#111918', borderRadius: 7, borderWidth: 1, borderColor: '#3D3427' },
+  notificationDayActive: { backgroundColor: ancientGameColors.brass, borderColor: ancientGameColors.gold },
+  notificationDayText: { color: ancientGameColors.muted },
+  notificationDayTextActive: { color: ancientGameColors.parchmentInk },
+  notificationReminderDaysHint: { color: ancientGameColors.muted },
+  notificationAddButton: { backgroundColor: '#0D1514', borderColor: ancientGameColors.brass, borderRadius: 8 },
+  notificationAddIcon: { color: ancientGameColors.gold },
+  notificationAddText: { color: ancientGameColors.goldPale },
+  notificationDisabledCopy: { color: ancientGameColors.muted },
+  voicePanel: { backgroundColor: ancientGameColors.panel, borderColor: ancientGameColors.brassDark, borderRadius: 11, shadowColor: '#000', shadowOpacity: 0.42 },
+  voicePanelIcon: { backgroundColor: '#2D281C', borderWidth: 1, borderColor: ancientGameColors.brassDark },
+  voicePanelIconText: { color: ancientGameColors.gold },
+  voicePanelKicker: { color: ancientGameColors.brass },
+  voicePanelTitle: { color: ancientGameColors.goldPale, fontFamily: bookezType.sectionTitle.fontFamily },
+  voicePanelStatus: { color: ancientGameColors.muted },
+  voicePanelChevron: { color: ancientGameColors.gold },
+  voicePanelBody: { borderTopColor: '#493B27' },
+  voicePanelHint: { color: ancientGameColors.muted },
+  voicePickerTrigger: { backgroundColor: '#0D1514', borderColor: ancientGameColors.brassDark, borderRadius: 8 },
+  voicePickerTriggerIcon: { backgroundColor: '#2D281C' },
+  voicePickerTriggerIconText: { color: ancientGameColors.gold },
+  voicePickerTriggerLabel: { color: ancientGameColors.brass },
+  voicePickerTriggerValue: { color: ancientGameColors.bone },
+  voicePickerTriggerArrow: { color: ancientGameColors.gold },
+  voicePreviewButton: { backgroundColor: '#2D281C', borderWidth: 1, borderColor: ancientGameColors.brassDark, borderRadius: 8 },
+  voicePreviewButtonIcon: { color: ancientGameColors.gold },
+  voicePreviewButtonText: { color: ancientGameColors.goldPale },
+  settingsCard: { backgroundColor: ancientGameColors.panel, borderColor: ancientGameColors.brassDark, borderRadius: 11, shadowColor: '#000', shadowOpacity: 0.42 },
+  accountCard: { backgroundColor: ancientGameColors.panel, borderColor: ancientGameColors.brassDark, borderRadius: 11, shadowColor: '#000', shadowOpacity: 0.42 },
+  accountEmailPanel: { paddingVertical: 12 },
+  accountEmailKicker: { color: ancientGameColors.brass },
+  accountEmailValue: { color: ancientGameColors.bone },
+  changeEmailButton: { backgroundColor: '#2D281C', borderColor: ancientGameColors.brassDark, borderRadius: 8 },
+  changeEmailButtonText: { color: ancientGameColors.goldPale, fontFamily: bookezType.sectionTitle.fontFamily },
+  changeEmailButtonArrow: { color: ancientGameColors.gold },
+  settingsText: { color: ancientGameColors.bone, fontFamily: bookezType.sectionTitle.fontFamily },
+  settingsSub: { color: ancientGameColors.muted },
+  settingsIconBlue: { backgroundColor: ancientGameColors.teal, borderWidth: 1, borderColor: '#48645C' },
+  settingsIconGold: { backgroundColor: '#302A1C', borderWidth: 1, borderColor: ancientGameColors.brassDark },
+  settingsIconSage: { backgroundColor: ancientGameColors.moss, borderWidth: 1, borderColor: '#5E6847' },
+  settingsIconCoral: { backgroundColor: ancientGameColors.rust, borderWidth: 1, borderColor: '#765034' },
+  settingsIconText: { color: ancientGameColors.goldPale },
+  prefLine: { backgroundColor: '#493B27' },
+  chevron: { color: ancientGameColors.gold },
+  profileFootnote: { color: ancientGameColors.muted },
+  accountClosureCard: { backgroundColor: '#271C19', borderColor: '#764E42', borderRadius: 11, shadowColor: '#000', shadowOpacity: 0.42 },
+  accountClosureRuleLine: { backgroundColor: '#68483F' },
+  accountClosureRuleMark: { color: ancientGameColors.danger },
+  accountClosureSeal: { backgroundColor: '#35221F', borderColor: '#8A5A4E' },
+  accountClosureSealText: { color: ancientGameColors.danger },
+  accountClosureKicker: { color: ancientGameColors.danger },
+  accountClosureTitle: { color: ancientGameColors.bone },
+  accountClosureDescription: { color: ancientGameColors.muted },
+  accountClosureNotice: { backgroundColor: '#321F1D' },
+  accountClosureNoticeMark: { color: ancientGameColors.danger },
+  accountClosureNoticeText: { color: '#CBA89E' },
+  accountClosureButton: { backgroundColor: '#171413', borderColor: '#8A5A4E', borderRadius: 8 },
+  accountClosureButtonText: { color: '#D99A88' },
+  accountClosureButtonArrow: { color: '#D99A88' },
+});
+
+const profileSyncAncientS = StyleSheet.create({
+  dropdown: { backgroundColor: ancientGameColors.panel, borderColor: ancientGameColors.brassDark, borderRadius: 11, shadowColor: '#000', shadowOpacity: 0.42 },
+  dropdownIcon: { backgroundColor: '#2D281C', borderWidth: 1, borderColor: ancientGameColors.brassDark },
+  dropdownIconText: { color: ancientGameColors.gold },
+  dropdownKicker: { color: ancientGameColors.brass },
+  dropdownTitle: { color: ancientGameColors.goldPale, fontFamily: bookezType.sectionTitle.fontFamily },
+  dropdownStatus: { color: ancientGameColors.muted },
+  dropdownChevron: { color: ancientGameColors.gold },
+  dropdownBody: { borderTopColor: '#493B27' },
+  card: { backgroundColor: '#0E1615', borderColor: ancientGameColors.brassDark, borderRadius: 9 },
+  cardIcon: { backgroundColor: '#2D281C' },
+  cardIconText: { color: ancientGameColors.gold },
+  cardKicker: { color: ancientGameColors.brass },
+  cardTitle: { color: ancientGameColors.bone, fontFamily: bookezType.sectionTitle.fontFamily },
+  cardDescription: { color: ancientGameColors.muted },
+  storagePreview: { backgroundColor: ancientGameColors.panel, borderColor: '#493B27', borderRadius: 8 },
+  storagePreviewDivider: { backgroundColor: '#493B27' },
+  storagePreviewLabel: { color: ancientGameColors.brass },
+  storagePreviewValue: { color: ancientGameColors.goldPale },
+  storagePreviewMeta: { color: ancientGameColors.muted },
+  secondaryAction: { backgroundColor: '#111918', borderColor: ancientGameColors.brassDark, borderRadius: 8 },
+  secondaryActionText: { color: ancientGameColors.bone },
+  secondaryActionArrow: { color: ancientGameColors.gold },
+  nowButton: { backgroundColor: ancientGameColors.brass, borderRadius: 8 },
+  nowButtonText: { color: ancientGameColors.parchmentInk },
+  accountButton: { backgroundColor: '#2D281C', borderRadius: 8 },
+  accountButtonText: { color: ancientGameColors.bone },
+  accountArrow: { color: ancientGameColors.gold },
+});
+
+Object.entries(statsAncientS).forEach(([key, style]) => {
+  s[key] = [s[key], style];
+});
+
+Object.entries(profileAncientS).forEach(([key, style]) => {
+  s[key] = [s[key], style];
+});
+
+Object.entries(profileSyncAncientS).forEach(([key, style]) => {
   profileSyncStyleMap[key] = [profileSyncStyleMap[key], style];
 });

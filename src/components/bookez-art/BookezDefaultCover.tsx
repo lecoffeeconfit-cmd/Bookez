@@ -99,10 +99,26 @@ export function BookezDefaultCover({ type, width, height, animated = false, styl
   const gleamTravel = gleam.interpolate({ inputRange: [0, 1], outputRange: [-measuredWidth * 0.85, measuredWidth * 1.15] });
   const gleamOpacity = gleam.interpolate({ inputRange: [0, 0.12, 0.55, 0.9, 1], outputRange: [0, 0.08, 0.2, 0.06, 0] });
 
-  return <View style={[styles.cover, { width: rootWidth, height: rootHeight, borderRadius: Math.max(6, measuredWidth * 0.14) }, style]}>
+  const pageBlockWidth = Math.max(3, measuredWidth * 0.085);
+  const coverRadius = Math.max(6, measuredWidth * 0.14);
+
+  return <View style={[styles.cover, { width: rootWidth, height: rootHeight, borderRadius: coverRadius }, style]}>
     <LinearGradient colors={[palette.start, palette.end]} start={{ x: 0.08, y: 0 }} end={{ x: 0.95, y: 1 }} style={StyleSheet.absoluteFill} />
+    <LinearGradient pointerEvents="none" colors={[bookezWithAlpha('#FFF7E7', 0.12), 'rgba(255,247,231,0)', bookezWithAlpha('#111827', 0.18)]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={StyleSheet.absoluteFill} />
+    <View pointerEvents="none" style={[styles.pageBlock, { width: pageBlockWidth, backgroundColor: bookezColors.manuscript, borderLeftColor: bookezWithAlpha(palette.accent, 0.42) }]}>
+      <View style={[styles.pageRule, styles.pageRuleOne, { backgroundColor: bookezWithAlpha(palette.end, 0.32) }]} />
+      <View style={[styles.pageRule, styles.pageRuleTwo, { backgroundColor: bookezWithAlpha(palette.end, 0.24) }]} />
+      <View style={[styles.pageRule, styles.pageRuleThree, { backgroundColor: bookezWithAlpha(palette.end, 0.2) }]} />
+    </View>
     <View pointerEvents="none" style={[styles.spine, { width: Math.max(4, measuredWidth * 0.11), backgroundColor: bookezWithAlpha('#161524', 0.22), borderRightColor: bookezWithAlpha(palette.accent, 0.45) }]} />
-    <View pointerEvents="none" style={[styles.frame, { borderRadius: Math.max(4, measuredWidth * 0.1), borderColor: bookezWithAlpha(palette.accent, 0.72) }]} />
+    <View pointerEvents="none" style={[styles.spineHinge, { left: Math.max(4, measuredWidth * 0.11), backgroundColor: bookezWithAlpha(palette.accent, 0.28) }]} />
+    <View pointerEvents="none" style={styles.spineRibs}>
+      <View style={[styles.spineRib, { backgroundColor: bookezWithAlpha(palette.accent, 0.48) }]} />
+      <View style={[styles.spineRib, { backgroundColor: bookezWithAlpha(palette.accent, 0.36) }]} />
+      <View style={[styles.spineRib, { backgroundColor: bookezWithAlpha(palette.accent, 0.48) }]} />
+    </View>
+    <View pointerEvents="none" style={[styles.frame, { right: pageBlockWidth + 2, borderRadius: Math.max(4, measuredWidth * 0.1), borderColor: bookezWithAlpha(palette.accent, 0.72) }]} />
+    <View pointerEvents="none" style={[styles.innerFrame, { right: pageBlockWidth + 5, borderColor: bookezWithAlpha(palette.accent, 0.25) }]} />
     <CoverMotif kind={palette.motif} accent={palette.accent} />
     <View pointerEvents="none" style={[styles.sigil, { width: iconSize + 7, height: iconSize + 7, borderRadius: (iconSize + 7) / 2, borderColor: bookezWithAlpha(palette.accent, 0.58), backgroundColor: bookezWithAlpha('#182236', 0.13) }]}>
       <BookezMysticIcon name={palette.glyph} size={iconSize} surface="bare" tone={bookezColors.textOnAccent} animated={animated} />
@@ -110,14 +126,25 @@ export function BookezDefaultCover({ type, width, height, animated = false, styl
     {!compact && <Text numberOfLines={1} pointerEvents="none" style={[styles.label, { color: palette.accent, fontSize: Math.max(4.5, measuredWidth * 0.085) }]}>{palette.label}</Text>}
     <View pointerEvents="none" style={[styles.cornerTop, { borderColor: bookezWithAlpha(palette.accent, 0.78) }]} />
     <View pointerEvents="none" style={[styles.cornerBottom, { borderColor: bookezWithAlpha(palette.accent, 0.78) }]} />
+    {!compact && <View pointerEvents="none" style={[styles.clasp, { right: pageBlockWidth - 1, borderColor: bookezWithAlpha(palette.accent, 0.58), backgroundColor: bookezWithAlpha(palette.end, 0.86) }]}><LinearGradient colors={[bookezWithAlpha(palette.accent, 0.35), 'rgba(255,255,255,0)', bookezWithAlpha('#111827', 0.2)]} start={{ x: 0, y: 0 }} end={{ x: 0, y: 1 }} style={StyleSheet.absoluteFill} /><View style={[styles.claspStud, { borderColor: palette.accent, backgroundColor: bookezWithAlpha(palette.accent, 0.42) }]}><View style={[styles.claspStudCore, { backgroundColor: palette.accent }]} /></View></View>}
+    <View pointerEvents="none" style={[styles.coverFoot, { right: pageBlockWidth, backgroundColor: bookezWithAlpha(palette.accent, 0.42) }]} />
     {!reduceMotion && <Animated.View pointerEvents="none" style={[styles.gleam, { width: Math.max(8, measuredWidth * 0.24), opacity: gleamOpacity, transform: [{ translateX: gleamTravel }, { rotate: '-18deg' }] }]}><LinearGradient colors={['rgba(255,248,226,0)', bookezWithAlpha(palette.accent, 0.8), 'rgba(255,248,226,0)']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={StyleSheet.absoluteFill} /></Animated.View>}
   </View>;
 }
 
 const styles = StyleSheet.create({
   cover: { position: 'relative', overflow: 'hidden', alignItems: 'center', justifyContent: 'center', borderWidth: StyleSheet.hairlineWidth, borderColor: bookezColors.manuscriptEdge, shadowColor: '#241D26', shadowOpacity: 0.18, shadowRadius: 5, shadowOffset: { width: 0, height: 3 }, elevation: 2 },
+  pageBlock: { position: 'absolute', top: 3, right: 0, bottom: 3, overflow: 'hidden', borderLeftWidth: StyleSheet.hairlineWidth },
+  pageRule: { position: 'absolute', right: 0, left: 0, height: StyleSheet.hairlineWidth },
+  pageRuleOne: { top: '27%' },
+  pageRuleTwo: { top: '52%' },
+  pageRuleThree: { top: '74%' },
   spine: { position: 'absolute', top: 0, bottom: 0, left: 0, borderRightWidth: StyleSheet.hairlineWidth },
+  spineHinge: { position: 'absolute', top: 0, bottom: 0, width: StyleSheet.hairlineWidth },
+  spineRibs: { position: 'absolute', top: 5, bottom: 5, left: 1, justifyContent: 'space-between' },
+  spineRib: { width: 4, height: 1, borderRadius: 1 },
   frame: { position: 'absolute', top: 4, right: 4, bottom: 4, left: 5, borderWidth: StyleSheet.hairlineWidth },
+  innerFrame: { position: 'absolute', top: 7, bottom: 7, left: 8, borderWidth: StyleSheet.hairlineWidth, borderRadius: 4 },
   sigil: { alignItems: 'center', justifyContent: 'center', borderWidth: StyleSheet.hairlineWidth },
   label: { position: 'absolute', right: 5, bottom: 5, left: 7, fontWeight: '800', letterSpacing: 0.7, textAlign: 'center' },
   band: { position: 'absolute', top: '27%', right: 4, left: 5, height: '45%', borderTopWidth: StyleSheet.hairlineWidth, borderBottomWidth: StyleSheet.hairlineWidth },
@@ -133,5 +160,9 @@ const styles = StyleSheet.create({
   diamond: { position: 'absolute', top: '12%', width: '54%', aspectRatio: 1, borderWidth: StyleSheet.hairlineWidth, transform: [{ rotate: '45deg' }], opacity: 0.52 },
   cornerTop: { position: 'absolute', top: 7, left: 8, width: 6, height: 6, borderTopWidth: StyleSheet.hairlineWidth, borderLeftWidth: StyleSheet.hairlineWidth },
   cornerBottom: { position: 'absolute', right: 6, bottom: 7, width: 6, height: 6, borderRightWidth: StyleSheet.hairlineWidth, borderBottomWidth: StyleSheet.hairlineWidth },
+  clasp: { position: 'absolute', top: '44%', width: 13, height: 11, marginTop: -5, overflow: 'hidden', borderWidth: StyleSheet.hairlineWidth, borderRadius: 3, alignItems: 'center', justifyContent: 'center', shadowColor: '#17131A', shadowOpacity: 0.2, shadowRadius: 2, shadowOffset: { width: 0, height: 1 } },
+  claspStud: { width: 6, height: 6, borderRadius: 3, borderWidth: StyleSheet.hairlineWidth, alignItems: 'center', justifyContent: 'center' },
+  claspStudCore: { width: 2, height: 2, borderRadius: 1 },
+  coverFoot: { position: 'absolute', right: 0, bottom: 2, left: 4, height: StyleSheet.hairlineWidth, opacity: 0.56 },
   gleam: { position: 'absolute', top: -18, bottom: -18, left: 0, zIndex: 8 },
 });
