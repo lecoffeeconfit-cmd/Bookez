@@ -407,12 +407,12 @@ Object.assign(s, {
 
 // Feedback sheets are shared by Community and can be opened from several
 // entry points. Keep their existing geometry while bringing every surface and
-// control into the same dark, artifact-inspired register as the main screens.
+// control into the same light editorial register as the main screens.
 Object.entries({
   readerResponse: { backgroundColor: bookezColors.surfaceRaised },
   publicReaderCard: { backgroundColor: bookezColors.surfaceRaised, borderColor: bookezColors.border },
   authorReply: { backgroundColor: bookezColors.surfaceRaised },
-  shade: { backgroundColor: 'rgba(4,10,9,0.72)' },
+  shade: { backgroundColor: 'rgba(16,36,62,0.24)' },
   sheet: { backgroundColor: bookezColors.surface },
   handle: { backgroundColor: bookezColors.manuscriptEdge },
   option: { backgroundColor: bookezColors.surfaceRaised, borderColor: bookezColors.border },

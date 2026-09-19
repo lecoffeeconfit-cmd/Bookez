@@ -38,7 +38,7 @@
       [
         "expo-notifications",
         {
-          "color": "#8B8AE8",
+          "color": "#681B3A",
           "defaultChannel": "bookez-writing"
         }
       ],

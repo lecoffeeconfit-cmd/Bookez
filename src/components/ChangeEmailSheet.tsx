@@ -145,7 +145,7 @@ export default function ChangeEmailSheet({ visible, currentEmail, onClose, onEma
 }
 
 const emailS = StyleSheet.create({
-  shade: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(4,10,9,0.78)' },
+  shade: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(16,36,62,0.28)' },
   dismiss: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 },
   keyboard: { maxHeight: '93%' },
   sheet: { overflow: 'hidden', borderTopLeftRadius: bookezRadii.sheet, borderTopRightRadius: bookezRadii.sheet, borderWidth: 1, borderBottomWidth: 0, borderColor: bookezColors.border, backgroundColor: bookezColors.surface, ...bookezShadows.lifted },

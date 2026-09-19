@@ -371,7 +371,7 @@ Object.entries({
   launcherLabel: { color: bookezColors.textPrimary },
   launcherHint: { color: bookezColors.textSecondary },
   launcherArrow: { color: bookezColors.secondaryAccent },
-  compactLauncher: { backgroundColor: bookezColors.accentStrong, borderColor: bookezColors.border, shadowColor: '#000' },
+  compactLauncher: { backgroundColor: bookezColors.accentStrong, borderColor: bookezColors.border, shadowColor: '#756654' },
   compactLauncherIcon: { color: bookezColors.textOnAccent },
   introCard: { backgroundColor: bookezColors.surfaceRaised, borderColor: bookezColors.border },
   introIcon: { backgroundColor: bookezColors.accent },
@@ -381,8 +381,8 @@ Object.entries({
   introText: { color: bookezColors.textSecondary },
   introDismiss: { backgroundColor: bookezColors.surfaceMuted, borderWidth: 1, borderColor: bookezColors.border },
   introDismissText: { color: bookezColors.textPrimary },
-  menuShade: { backgroundColor: 'rgba(4,10,9,0.72)' },
-  sheetShade: { backgroundColor: 'rgba(4,10,9,0.72)' },
+  menuShade: { backgroundColor: 'rgba(16,36,62,0.24)' },
+  sheetShade: { backgroundColor: 'rgba(16,36,62,0.24)' },
   handle: { backgroundColor: bookezColors.manuscriptEdge },
   sheet: { backgroundColor: bookezColors.surface },
   sheetKicker: { color: bookezColors.secondaryAccent },
@@ -486,7 +486,7 @@ Object.entries({
 });
 
 const editorialStyles = StyleSheet.create({
-  launcher: { backgroundColor: bookezColors.accentSoft, borderColor: '#E5C9D0' },
+  launcher: { backgroundColor: bookezColors.accentSoft, borderColor: bookezColors.burgundySoft },
   launcherIcon: { backgroundColor: bookezColors.accent },
   compactLauncher: { backgroundColor: bookezColors.accentStrong, borderColor: bookezColors.accent },
   compactLauncherIcon: { color: bookezColors.textOnAccent },

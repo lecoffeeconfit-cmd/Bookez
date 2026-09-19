@@ -212,7 +212,7 @@ function WriterAvatar({ profile, large = false }: { profile: CommunityWriterProf
 function WriterBookCard({ book, compact = false, artifact = false }: { book: CommunityWriterBook; compact?: boolean; artifact?: boolean }) {
   const title = book.title?.trim() || 'Untitled project';
   const progress = Math.max(0, Math.min(100, book.completionPercent ?? 0));
-  return <View style={[wS.bookCard, compact && wS.bookCardCompact, artifact && wS.bookCardArtifact]}><View style={[wS.bookCover, compact && wS.bookCoverCompact, { backgroundColor: book.coverColor }]}>{book.coverImageUri ? <Image source={{ uri: book.coverImageUri }} style={wS.bookCoverImage} resizeMode="cover" /> : <><Text style={wS.bookCoverMark}>{title.slice(0, 1).toUpperCase()}</Text><Text style={wS.bookCoverLabel}>{book.genre ?? 'BOOK'}</Text></>}</View><Text numberOfLines={2} style={[wS.bookTitle, compact && wS.bookTitleCompact, artifact && wS.bookTitleArtifact]}>{title}</Text><Text numberOfLines={1} style={[wS.bookMeta, artifact && wS.mutedArtifact]}>{book.genre ?? book.projectType ?? book.stage ?? 'Writing project'}</Text><View style={[wS.bookProgressTrack, artifact && wS.trackArtifact]}><View style={[wS.bookProgressFill, { width: `${Math.max(progress, progress ? 2 : 0)}%`, backgroundColor: artifact ? '#D7B46B' : book.completed ? C.gold : C.periwinkle }]} /></View><Text style={[wS.bookProgressText, artifact && wS.mutedArtifact]}>{book.completed ? book.finishedLabel ?? 'Completed' : `${Math.round(progress)}% in progress`}</Text></View>;
+  return <View style={[wS.bookCard, compact && wS.bookCardCompact, artifact && wS.bookCardArtifact]}><View style={[wS.bookCover, compact && wS.bookCoverCompact, { backgroundColor: book.coverColor }]}>{book.coverImageUri ? <Image source={{ uri: book.coverImageUri }} style={wS.bookCoverImage} resizeMode="cover" /> : <><Text style={wS.bookCoverMark}>{title.slice(0, 1).toUpperCase()}</Text><Text style={wS.bookCoverLabel}>{book.genre ?? 'BOOK'}</Text></>}</View><Text numberOfLines={2} style={[wS.bookTitle, compact && wS.bookTitleCompact, artifact && wS.bookTitleArtifact]}>{title}</Text><Text numberOfLines={1} style={[wS.bookMeta, artifact && wS.mutedArtifact]}>{book.genre ?? book.projectType ?? book.stage ?? 'Writing project'}</Text><View style={[wS.bookProgressTrack, artifact && wS.trackArtifact]}><View style={[wS.bookProgressFill, { width: `${Math.max(progress, progress ? 2 : 0)}%`, backgroundColor: artifact ? bookezColors.secondaryAccent : book.completed ? C.gold : C.periwinkle }]} /></View><Text style={[wS.bookProgressText, artifact && wS.mutedArtifact]}>{book.completed ? book.finishedLabel ?? 'Completed' : `${Math.round(progress)}% in progress`}</Text></View>;
 }
 
 function Stat({ value, label, artifact = false }: { value: string; label: string; artifact?: boolean }) {
@@ -233,7 +233,7 @@ export function WriterProfileSummaryCard({ userId, refreshKey, onEdit, artifact 
   }, [refreshKey, userId]);
 
   if (!userId) return null;
-  return <View style={[wS.summaryCard, artifact && wS.summaryCardArtifact]}><View style={wS.summaryHeader}><View style={wS.summaryHeaderCopy}><Text style={[wS.overline, artifact && wS.overlineArtifact]}>PUBLIC PROFILE</Text><Text style={[wS.summaryTitle, artifact && wS.summaryTitleArtifact]}>{profile?.displayName ?? 'Your writing profile'}</Text></View>{onEdit && <Pressable onPress={onEdit} style={[wS.editButton, artifact && wS.editButtonArtifact]} accessibilityRole="button"><Text style={[wS.editButtonText, artifact && wS.editButtonTextArtifact]}>Edit</Text></Pressable>}</View>{loading && !profile ? <View style={wS.summaryLoading}><ActivityIndicator color={artifact ? '#D7B46B' : C.periwinkle} /><Text style={[wS.summaryLoadingText, artifact && wS.mutedArtifact]}>Gathering your public writing…</Text></View> : error ? <Text style={[wS.summaryError, artifact && wS.mutedArtifact]}>{error}</Text> : profile ? <><Text style={[wS.summaryBio, artifact && wS.mutedArtifact]}>{profile.bio || 'Add a short bio so other writers know what kind of work you enjoy making.'}</Text><Text style={[wS.joined, artifact && wS.mutedArtifact]}>{joinedLabel(profile.joinedAt)}</Text><View style={wS.statsRow}><Stat value={String(profile.stats.booksWritten)} label="Public books" artifact={artifact} /><Stat value={String(profile.stats.followers)} label="Followers" artifact={artifact} /><Stat value={String(profile.stats.following)} label="Following" artifact={artifact} /></View><Text style={[wS.summaryStatLine, artifact && wS.mutedArtifact]}>{formatCount(profile.stats.wordsWritten)} words shared · {profile.stats.booksCompleted} completed</Text>{profile.books.length ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={wS.bookRail}>{profile.books.map((book) => <WriterBookCard key={book.id} book={book} compact artifact={artifact} />)}</ScrollView> : <View style={[wS.empty, artifact && wS.emptyArtifact]}><Text style={[wS.emptyTitle, artifact && wS.bookTitleArtifact]}>Your public shelf is empty</Text><Text style={[wS.emptyCopy, artifact && wS.mutedArtifact]}>Choose a book in Community sharing when you’re ready for it to appear here.</Text></View>}</> : null}</View>;
+  return <View style={[wS.summaryCard, artifact && wS.summaryCardArtifact]}><View style={wS.summaryHeader}><View style={wS.summaryHeaderCopy}><Text style={[wS.overline, artifact && wS.overlineArtifact]}>PUBLIC PROFILE</Text><Text style={[wS.summaryTitle, artifact && wS.summaryTitleArtifact]}>{profile?.displayName ?? 'Your writing profile'}</Text></View>{onEdit && <Pressable onPress={onEdit} style={[wS.editButton, artifact && wS.editButtonArtifact]} accessibilityRole="button"><Text style={[wS.editButtonText, artifact && wS.editButtonTextArtifact]}>Edit</Text></Pressable>}</View>{loading && !profile ? <View style={wS.summaryLoading}><ActivityIndicator color={artifact ? bookezColors.secondaryAccent : C.periwinkle} /><Text style={[wS.summaryLoadingText, artifact && wS.mutedArtifact]}>Gathering your public writing…</Text></View> : error ? <Text style={[wS.summaryError, artifact && wS.mutedArtifact]}>{error}</Text> : profile ? <><Text style={[wS.summaryBio, artifact && wS.mutedArtifact]}>{profile.bio || 'Add a short bio so other writers know what kind of work you enjoy making.'}</Text><Text style={[wS.joined, artifact && wS.mutedArtifact]}>{joinedLabel(profile.joinedAt)}</Text><View style={wS.statsRow}><Stat value={String(profile.stats.booksWritten)} label="Public books" artifact={artifact} /><Stat value={String(profile.stats.followers)} label="Followers" artifact={artifact} /><Stat value={String(profile.stats.following)} label="Following" artifact={artifact} /></View><Text style={[wS.summaryStatLine, artifact && wS.mutedArtifact]}>{formatCount(profile.stats.wordsWritten)} words shared · {profile.stats.booksCompleted} completed</Text>{profile.books.length ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={wS.bookRail}>{profile.books.map((book) => <WriterBookCard key={book.id} book={book} compact artifact={artifact} />)}</ScrollView> : <View style={[wS.empty, artifact && wS.emptyArtifact]}><Text style={[wS.emptyTitle, artifact && wS.bookTitleArtifact]}>Your public shelf is empty</Text><Text style={[wS.emptyCopy, artifact && wS.mutedArtifact]}>Choose a book in Community sharing when you’re ready for it to appear here.</Text></View>}</> : null}</View>;
 }
 
 export function WriterProfileSheet({ visible, userId, viewerId, fallback, onClose, onFollowChanged }: { visible: boolean; userId: string | null; viewerId: string | null; fallback?: CommunityWriterFallback | null; onClose: () => void; onFollowChanged?: (userId: string, following: boolean) => void }) {
@@ -273,30 +273,30 @@ export function WriterProfileSheet({ visible, userId, viewerId, fallback, onClos
 
 const wS = StyleSheet.create({
   summaryCard: { marginTop: 13, padding: 15, borderRadius: 18, backgroundColor: bookezColors.manuscript, borderWidth: 1, borderColor: bookezColors.manuscriptEdge },
-  summaryCardArtifact: { borderRadius: 11, backgroundColor: '#17201E', borderColor: '#76572D', shadowColor: '#000', shadowOpacity: 0.46, shadowRadius: 9, shadowOffset: { width: 0, height: 6 }, elevation: 4 },
+  summaryCardArtifact: { borderRadius: 11, backgroundColor: bookezColors.surface, borderColor: bookezColors.border, shadowColor: '#756654', shadowOpacity: 0.46, shadowRadius: 9, shadowOffset: { width: 0, height: 6 }, elevation: 4 },
   summaryHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 },
   summaryHeaderCopy: { flex: 1, minWidth: 0 },
   overline: { color: C.periwinkle, fontSize: 7, letterSpacing: 0.9, fontWeight: '800' },
-  overlineArtifact: { color: '#A97C3E', letterSpacing: 1.1 },
+  overlineArtifact: { color: bookezColors.secondaryAccent, letterSpacing: 1.1 },
   summaryTitle: { color: C.ink, fontSize: 16, fontWeight: '800', marginTop: 4 },
-  summaryTitleArtifact: { color: '#E8D19A', fontFamily: bookezType.sectionTitle.fontFamily, fontWeight: '600' },
+  summaryTitleArtifact: { color: bookezColors.textPrimary, fontFamily: bookezType.sectionTitle.fontFamily, fontWeight: '600' },
   editButton: { minHeight: 28, paddingHorizontal: 10, borderRadius: 9, backgroundColor: bookezColors.surface, borderWidth: 1, borderColor: bookezColors.border, justifyContent: 'center' },
-  editButtonArtifact: { borderRadius: 7, backgroundColor: '#0D1514', borderColor: '#76572D' },
+  editButtonArtifact: { borderRadius: 7, backgroundColor: bookezColors.accentSoft, borderColor: bookezColors.border },
   editButtonText: { color: C.periwinkle, fontSize: 8, fontWeight: '800' },
-  editButtonTextArtifact: { color: '#D7B46B' },
+  editButtonTextArtifact: { color: bookezColors.accent },
   summaryBio: { color: C.muted, fontSize: 9, lineHeight: 14, marginTop: 10 },
   joined: { color: bookezColors.textMuted, fontSize: 8, marginTop: 6 },
   statsRow: { marginTop: 13, flexDirection: 'row', gap: 7 },
   stat: { flex: 1, minWidth: 0, padding: 9, borderRadius: 12, backgroundColor: bookezColors.surface, borderWidth: 1, borderColor: bookezColors.border },
-  statArtifact: { borderRadius: 8, backgroundColor: '#0D1514', borderColor: '#493B27' },
+  statArtifact: { borderRadius: 8, backgroundColor: bookezColors.surfaceRaised, borderColor: bookezColors.border },
   statValue: { color: C.ink, fontSize: 14, fontWeight: '800' },
-  statValueArtifact: { color: '#E8D19A', fontFamily: bookezType.sectionTitle.fontFamily, fontWeight: '600' },
+  statValueArtifact: { color: bookezColors.textPrimary, fontFamily: bookezType.sectionTitle.fontFamily, fontWeight: '600' },
   statLabel: { color: C.muted, fontSize: 6, letterSpacing: 0.5, fontWeight: '800', marginTop: 4 },
-  statLabelArtifact: { color: '#A97C3E', letterSpacing: 0.65 },
+  statLabelArtifact: { color: bookezColors.textMuted, letterSpacing: 0.65 },
   summaryStatLine: { color: C.muted, fontSize: 8, textAlign: 'center', marginTop: 8 },
   bookRail: { paddingTop: 12, paddingBottom: 2, gap: 8 },
   bookCard: { width: 174, padding: 9, borderRadius: 15, backgroundColor: bookezColors.surface, borderWidth: 1, borderColor: bookezColors.border },
-  bookCardArtifact: { borderRadius: 9, backgroundColor: '#0D1514', borderColor: '#493B27' },
+  bookCardArtifact: { borderRadius: 9, backgroundColor: bookezColors.surfaceRaised, borderColor: bookezColors.border },
   bookCardCompact: { width: 145, padding: 8 },
   bookCover: { width: 72, height: 94, borderRadius: 12, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
   bookCoverCompact: { width: 58, height: 76, borderRadius: 10 },
@@ -308,17 +308,17 @@ const wS = StyleSheet.create({
   bookTitleCompact: { fontSize: 9, lineHeight: 12, marginTop: 6 },
   bookMeta: { color: C.muted, fontSize: 7, marginTop: 3 },
   bookProgressTrack: { height: 4, marginTop: 8, borderRadius: 2, backgroundColor: bookezColors.manuscriptEdge, overflow: 'hidden' },
-  trackArtifact: { backgroundColor: '#080E0F' },
+  trackArtifact: { backgroundColor: bookezColors.surfaceMuted },
   bookProgressFill: { height: '100%', borderRadius: 2 },
   bookProgressText: { color: bookezColors.textMuted, fontSize: 7, marginTop: 4 },
   summaryLoading: { minHeight: 70, alignItems: 'center', justifyContent: 'center' },
   summaryLoadingText: { color: C.muted, fontSize: 8, marginTop: 7 },
   summaryError: { color: C.muted, fontSize: 9, lineHeight: 14, marginTop: 10 },
   empty: { marginTop: 11, padding: 11, borderRadius: 13, backgroundColor: bookezColors.surface, borderWidth: 1, borderColor: bookezColors.border },
-  emptyArtifact: { borderRadius: 8, backgroundColor: '#0D1514', borderColor: '#493B27' },
+  emptyArtifact: { borderRadius: 8, backgroundColor: bookezColors.surfaceRaised, borderColor: bookezColors.border },
   emptyTitle: { color: C.ink, fontSize: 9, fontWeight: '800' },
   emptyCopy: { color: C.muted, fontSize: 8, lineHeight: 12, marginTop: 4 },
-  mutedArtifact: { color: '#A99D80' },
+  mutedArtifact: { color: bookezColors.textSecondary },
   shade: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(32,41,84,0.28)' },
   dismiss: { ...StyleSheet.absoluteFill },
   sheet: { maxHeight: '92%', padding: 20, paddingBottom: 24, borderTopLeftRadius: 29, borderTopRightRadius: 29, backgroundColor: C.cream },

@@ -237,8 +237,8 @@ const cardTones: Record<NonNullable<BookezCardProps['tone']>, ViewStyle> = {
   default: { backgroundColor: bookezColors.surfaceRaised, borderColor: bookezColors.border },
   subtle: { backgroundColor: bookezColors.surfaceMuted, borderColor: bookezColors.divider },
   manuscript: { backgroundColor: bookezColors.manuscript, borderColor: bookezColors.manuscriptEdge },
-  accent: { backgroundColor: bookezColors.accentSoft, borderColor: '#E5C9D0' },
-  success: { backgroundColor: bookezColors.successSoft, borderColor: '#C8DEC6' },
+  accent: { backgroundColor: bookezColors.accentSoft, borderColor: bookezColors.burgundySoft },
+  success: { backgroundColor: bookezColors.successSoft, borderColor: bookezColors.borderWarm },
 };
 
 type BookezSectionHeaderProps = {
@@ -333,9 +333,9 @@ export function BookezChip({ label, selected, onPress, tone = 'accent', style }:
 }
 
 const chipTones = {
-  accent: { container: { backgroundColor: bookezColors.accentSoft, borderColor: '#E5C9D0' }, text: { color: bookezColors.accent } },
+  accent: { container: { backgroundColor: bookezColors.accentSoft, borderColor: bookezColors.burgundySoft }, text: { color: bookezColors.accent } },
   neutral: { container: { backgroundColor: bookezColors.surfaceMuted, borderColor: bookezColors.border }, text: { color: bookezColors.textSecondary } },
-  success: { container: { backgroundColor: bookezColors.successSoft, borderColor: '#C8DEC6' }, text: { color: bookezColors.success } },
+  success: { container: { backgroundColor: bookezColors.successSoft, borderColor: bookezColors.borderWarm }, text: { color: bookezColors.success } },
 } satisfies Record<string, { container: ViewStyle; text: TextStyle }>;
 
 type BookezToolbarControlProps = Omit<BookezIconButtonProps, 'variant'> & { active?: boolean };
@@ -410,9 +410,9 @@ export function BookezStatTile({ label, value, detail, tone = 'default', style }
 
 const statTones: Record<NonNullable<BookezStatTileProps['tone']>, ViewStyle> = {
   default: { backgroundColor: bookezColors.surfaceRaised, borderColor: bookezColors.border },
-  accent: { backgroundColor: bookezColors.accentSoft, borderColor: '#E5C9D0' },
-  success: { backgroundColor: bookezColors.successSoft, borderColor: '#C8DEC6' },
-  warm: { backgroundColor: bookezColors.secondaryAccentSoft, borderColor: '#E8D8B6' },
+  accent: { backgroundColor: bookezColors.accentSoft, borderColor: bookezColors.burgundySoft },
+  success: { backgroundColor: bookezColors.successSoft, borderColor: bookezColors.borderWarm },
+  warm: { backgroundColor: bookezColors.secondaryAccentSoft, borderColor: bookezColors.goldSoft },
 };
 
 type BookezProgressBarProps = {
@@ -453,7 +453,7 @@ const progressTones: Record<NonNullable<BookezProgressBarProps['tone']>, ViewSty
 const styles = StyleSheet.create({
   disabled: { opacity: 0.5 },
   icon: { fontWeight: '700', textAlign: 'center' },
-  button: { minHeight: 46, paddingHorizontal: bookezSpacing.md, borderRadius: bookezRadii.control, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
+  button: { minHeight: 46, paddingHorizontal: bookezSpacing.md, borderRadius: bookezRadii.control, borderWidth: 1, alignItems: 'center', justifyContent: 'center', ...bookezShadows.button },
   buttonCompact: { minHeight: 36, paddingHorizontal: bookezSpacing.sm, borderRadius: 10 },
   buttonFullWidth: { alignSelf: 'stretch' },
   buttonContent: { minHeight: 18, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },

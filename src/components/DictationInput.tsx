@@ -261,7 +261,7 @@ const s = StyleSheet.create({
   manuscriptActionRail: { right: 11, bottom: 14, zIndex: 6 },
   button: { width: 31, height: 31, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: bookezColors.surfaceMuted, borderWidth: 1, borderColor: bookezColors.border },
   buttonListening: { backgroundColor: bookezColors.destructiveSoft, borderColor: bookezColors.destructive },
-  buttonEditorial: { backgroundColor: bookezColors.accentSoft, borderColor: '#D7AEB9' },
+  buttonEditorial: { backgroundColor: bookezColors.accentSoft, borderColor: bookezColors.borderStrong },
   buttonListeningEditorial: { backgroundColor: bookezColors.accentStrong, borderColor: bookezColors.accentStrong },
   icon: { color: bookezColors.secondaryAccent, fontSize: 13, lineHeight: 16 },
   iconEditorial: { color: bookezColors.accent },
