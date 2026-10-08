@@ -12,8 +12,8 @@ type ArtProps = {
 };
 
 const artDefaults = {
-  color: '#1A2B43',
-  accent: '#AE7B3E',
+  color: '#667A60',
+  accent: '#5B1830',
   strokeWidth: 1.6,
 };
 
@@ -68,7 +68,7 @@ export function BookezPlanningFolio({ width = 154, height = 94, color = artDefau
       <SvgLinearGradient id="bookezPlanningHardware" x1="0" y1="0" x2="1" y2="1">
         <Stop offset="0" stopColor={bookezColors.secondaryAccentSoft} />
         <Stop offset="0.45" stopColor={accent} />
-        <Stop offset="1" stopColor="#765128" />
+        <Stop offset="1" stopColor="#5B1830" />
       </SvgLinearGradient>
     </Defs>
 
@@ -90,9 +90,9 @@ export function BookezPlanningFolio({ width = 154, height = 94, color = artDefau
     </G>
 
     <Path d="m20 26 10 1-9 9zM140 22l-10 2 9 8z" fill={bookezColors.secondaryAccentSoft} stroke={accent} strokeWidth={strokeWidth * 0.52} strokeOpacity={0.7} />
-    <Path d="M82 8v21" stroke="#765128" strokeWidth={strokeWidth * 0.85} strokeLinecap="round" />
+    <Path d="M82 8v21" stroke="#5B1830" strokeWidth={strokeWidth * 0.85} strokeLinecap="round" />
     <Ellipse cx="84" cy="10" rx="8" ry="4" fill={bookezWithAlpha(color, 0.14)} />
-    <Ellipse cx="82" cy="8" rx="7" ry="4" fill="url(#bookezPlanningHardware)" stroke="#765128" strokeWidth={strokeWidth * 0.65} />
+    <Ellipse cx="82" cy="8" rx="7" ry="4" fill="url(#bookezPlanningHardware)" stroke="#5B1830" strokeWidth={strokeWidth * 0.65} />
     <Circle cx="80" cy="6.8" r="1.25" fill={bookezColors.surfaceRaised} fillOpacity={0.72} />
   </Svg>;
 }
@@ -105,53 +105,53 @@ export function BookezPlanningLeaf({ width = 70, height = 68, color = artDefault
   </Svg>;
 }
 
-export function BookezManuscriptFolio({ width = 176, height = 106, color = '#F2E5CE', accent = '#B78A4B', strokeWidth = artDefaults.strokeWidth, style }: ArtProps) {
+export function BookezManuscriptFolio({ width = 176, height = 106, color = '#FFF8EE', accent = '#5B1830', strokeWidth = artDefaults.strokeWidth, style }: ArtProps) {
   return <Svg width={width} height={height} viewBox="0 0 176 106" style={style} accessible={false}>
     <Defs>
       <SvgLinearGradient id="bookezManuscriptPaper" x1="0" y1="0" x2="1" y2="1">
-        <Stop offset="0" stopColor="#F7E9CB" />
-        <Stop offset="0.58" stopColor="#DFC293" />
-        <Stop offset="1" stopColor="#B98F5E" />
+        <Stop offset="0" stopColor="#A47A42" />
+        <Stop offset="0.58" stopColor="#5B1830" />
+        <Stop offset="1" stopColor="#5B1830" />
       </SvgLinearGradient>
       <SvgLinearGradient id="bookezManuscriptPin" x1="0" y1="0" x2="1" y2="1">
-        <Stop offset="0" stopColor="#F0CB77" />
+        <Stop offset="0" stopColor="#5B1830" />
         <Stop offset="0.5" stopColor={accent} />
-        <Stop offset="1" stopColor="#69431F" />
+        <Stop offset="1" stopColor="#5B1830" />
       </SvgLinearGradient>
       <SvgLinearGradient id="bookezManuscriptFeather" x1="0" y1="0" x2="1" y2="1">
-        <Stop offset="0" stopColor="#FFF7E7" />
-        <Stop offset="0.56" stopColor="#D8C6A5" />
+        <Stop offset="0" stopColor="#FFF8EE" />
+        <Stop offset="0.56" stopColor="#A47A42" />
         <Stop offset="1" stopColor={accent} />
       </SvgLinearGradient>
     </Defs>
 
-    <Ellipse cx="91" cy="94" rx="69" ry="7" fill="#050B11" fillOpacity={0.34} />
-    <Path d="M29 34 139 26l7 59-110 8z" fill="#A87945" stroke="#65451F" strokeWidth={strokeWidth * 0.78} strokeLinejoin="round" />
-    <Path d="m25 28 112 3-2 58-113-3z" fill="#C69B62" stroke="#76522C" strokeWidth={strokeWidth * 0.82} strokeLinejoin="round" />
-    <Path d="m34 23 108 8-7 57L27 80z" fill="#D3AE78" stroke="#76522C" strokeWidth={strokeWidth * 0.74} strokeLinejoin="round" />
-    <Path d="M31 31c34-6 70-5 108 2l-4 53c-35-5-70-4-105 3z" fill="url(#bookezManuscriptPaper)" stroke="#72502B" strokeWidth={strokeWidth} strokeLinejoin="round" />
+    <Ellipse cx="91" cy="94" rx="69" ry="7" fill="#667A60" fillOpacity={0.34} />
+    <Path d="M29 34 139 26l7 59-110 8z" fill="#5B1830" stroke="#5B1830" strokeWidth={strokeWidth * 0.78} strokeLinejoin="round" />
+    <Path d="m25 28 112 3-2 58-113-3z" fill="#5B1830" stroke="#5B1830" strokeWidth={strokeWidth * 0.82} strokeLinejoin="round" />
+    <Path d="m34 23 108 8-7 57L27 80z" fill="#5B1830" stroke="#5B1830" strokeWidth={strokeWidth * 0.74} strokeLinejoin="round" />
+    <Path d="M31 31c34-6 70-5 108 2l-4 53c-35-5-70-4-105 3z" fill="url(#bookezManuscriptPaper)" stroke="#5B1830" strokeWidth={strokeWidth} strokeLinejoin="round" />
 
-    <G fill="none" stroke="#735737" strokeLinecap="round" strokeOpacity={0.54} strokeWidth={strokeWidth * 0.58}>
+    <G fill="none" stroke="#5B1830" strokeLinecap="round" strokeOpacity={0.54} strokeWidth={strokeWidth * 0.58}>
       <Path d="M39 46c27-3 56-2 87 1M38 55c29-3 59-2 89 1M37 64c21-2 45-2 70 0M37 73c31-3 60-2 89 1" />
       <Path d="M74 40v41M112 42v41" strokeOpacity={0.28} />
     </G>
-    <Path d="M68 39c10-2 22-2 34 0" fill="none" stroke="#7D572C" strokeLinecap="round" strokeWidth={strokeWidth * 0.72} strokeOpacity={0.72} />
-    <Path d="M42 52c8-3 15-2 22 1m-20 9c7-2 14-2 21 0m53-8c4-1 8-1 12 0m-14 9c5-1 10-1 15 0" fill="none" stroke="#8E6942" strokeLinecap="round" strokeWidth={strokeWidth * 0.74} strokeOpacity={0.68} />
+    <Path d="M68 39c10-2 22-2 34 0" fill="none" stroke="#5B1830" strokeLinecap="round" strokeWidth={strokeWidth * 0.72} strokeOpacity={0.72} />
+    <Path d="M42 52c8-3 15-2 22 1m-20 9c7-2 14-2 21 0m53-8c4-1 8-1 12 0m-14 9c5-1 10-1 15 0" fill="none" stroke="#5B1830" strokeLinecap="round" strokeWidth={strokeWidth * 0.74} strokeOpacity={0.68} />
 
-    <Path d="M91 15v21" stroke="#6B461F" strokeWidth={strokeWidth * 0.95} strokeLinecap="round" />
-    <Ellipse cx="94" cy="19" rx="9" ry="4.6" fill="#0B1117" fillOpacity={0.3} />
-    <Ellipse cx="91" cy="15" rx="8" ry="4.8" fill="url(#bookezManuscriptPin)" stroke="#563719" strokeWidth={strokeWidth * 0.72} />
-    <Circle cx="89" cy="13.8" r="1.4" fill="#FFF2C8" fillOpacity={0.7} />
+    <Path d="M91 15v21" stroke="#5B1830" strokeWidth={strokeWidth * 0.95} strokeLinecap="round" />
+    <Ellipse cx="94" cy="19" rx="9" ry="4.6" fill="#667A60" fillOpacity={0.3} />
+    <Ellipse cx="91" cy="15" rx="8" ry="4.8" fill="url(#bookezManuscriptPin)" stroke="#5B1830" strokeWidth={strokeWidth * 0.72} />
+    <Circle cx="89" cy="13.8" r="1.4" fill="#FFF8EE" fillOpacity={0.7} />
 
     <G fill="none" strokeLinecap="round" strokeLinejoin="round">
       <Path d="M127 70c10-19 18-38 30-60 7 13 5 26-5 38-7 9-15 16-25 22z" fill="url(#bookezManuscriptFeather)" fillOpacity={0.92} stroke={color} strokeWidth={strokeWidth} />
-      <Path d="M127 70c11-20 20-42 30-60M132 61c9-7 16-14 22-23m-18 16 12-2m-8-5 13-4m-9-4 12-5m-8-3 10-6" stroke="#6F5D47" strokeWidth={strokeWidth * 0.72} />
+      <Path d="M127 70c11-20 20-42 30-60M132 61c9-7 16-14 22-23m-18 16 12-2m-8-5 13-4m-9-4 12-5m-8-3 10-6" stroke="#5B1830" strokeWidth={strokeWidth * 0.72} />
       <Path d="m127 70-9 19m9-19 8 8" stroke={accent} strokeWidth={strokeWidth * 0.9} />
     </G>
   </Svg>;
 }
 
-export function BookezQuill({ width = 72, height = 88, color = '#6C2940', accent = '#AE7B3E', strokeWidth = artDefaults.strokeWidth, style }: ArtProps) {
+export function BookezQuill({ width = 72, height = 88, color = '#5B1830', accent = '#5B1830', strokeWidth = artDefaults.strokeWidth, style }: ArtProps) {
   return <Svg width={width} height={height} viewBox="0 0 72 88" style={style} accessible={false}>
     <G fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
       <Path d="M17 70C28 55 36 36 48 7c10 9 12 22 5 35-8 14-21 22-36 28z" fill={accent} fillOpacity={0.13} />
@@ -159,10 +159,13 @@ export function BookezQuill({ width = 72, height = 88, color = '#6C2940', accent
       <Path d="M17 70 9 82m8-12 10 7m-10-7 15-1" />
       <Path d="M9 82c8-2 16-4 23-8" stroke={accent} />
     </G>
+    <Path d="M48 14c3 10 1 20-4 30M42 27c-3 9-7 18-12 26" fill="none" stroke={accent} strokeWidth={strokeWidth * 0.78} strokeLinecap="round" strokeOpacity={0.74} />
+    <Path d="m10 79-3 5 6-2" fill={accent} fillOpacity={0.75} stroke={color} strokeWidth={strokeWidth * 0.6} strokeLinejoin="round" />
+    <Circle cx="30" cy="74" r="1.2" fill={accent} fillOpacity={0.72} />
   </Svg>;
 }
 
-export function BookezManuscript({ width = 180, height = 48, color = '#1A2B43', accent = '#AE7B3E', strokeWidth = 1.2, style }: ArtProps) {
+export function BookezManuscript({ width = 180, height = 48, color = '#667A60', accent = '#5B1830', strokeWidth = 1.2, style }: ArtProps) {
   return <Svg width={width} height={height} viewBox="0 0 180 48" style={style} accessible={false}>
     <G fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
       <Path d="M7 11c13-3 20 2 31 0s18-3 29 0 18 3 29 0 18-3 29 0 18 3 38 0M7 37c13 3 20-2 31 0s18 3 29 0 18-3 29 0 18 3 29 0 18-3 38 0" stroke={accent} strokeOpacity={0.85} />
@@ -172,14 +175,14 @@ export function BookezManuscript({ width = 180, height = 48, color = '#1A2B43', 
   </Svg>;
 }
 
-export function BookezBookmark({ width = 30, height = 46, color = '#AE7B3E', style }: ArtProps) {
+export function BookezBookmark({ width = 30, height = 46, color = '#5B1830', style }: ArtProps) {
   return <Svg width={width} height={height} viewBox="0 0 30 46" style={style} accessible={false}>
-    <Path d="M4 2h22v40l-11-8L4 42z" fill={color} fillOpacity={0.88} stroke="#76552E" strokeWidth={1.2} strokeLinejoin="round" />
-    <Path d="M8 5h14M8 9h14" stroke="#F8F1E5" strokeOpacity={0.45} strokeWidth={1} strokeLinecap="round" />
+    <Path d="M4 2h22v40l-11-8L4 42z" fill={color} fillOpacity={0.88} stroke="#5B1830" strokeWidth={1.2} strokeLinejoin="round" />
+    <Path d="M8 5h14M8 9h14" stroke="#FFF8EE" strokeOpacity={0.45} strokeWidth={1} strokeLinecap="round" />
   </Svg>;
 }
 
-export function BookezAchievementSeal({ width = 60, height = 60, color = '#5F7F61', accent = '#AE7B3E', strokeWidth = 1.5, style }: ArtProps) {
+export function BookezAchievementSeal({ width = 60, height = 60, color = '#667A60', accent = '#5B1830', strokeWidth = 1.5, style }: ArtProps) {
   return <Svg width={width} height={height} viewBox="0 0 60 60" style={style} accessible={false}>
     <Circle cx="30" cy="30" r="25" fill={color} fillOpacity={0.1} stroke={color} strokeWidth={strokeWidth} />
     <Circle cx="30" cy="30" r="20" fill="none" stroke={accent} strokeWidth={1} strokeDasharray="1 4" />
@@ -191,7 +194,7 @@ export function BookezAchievementSeal({ width = 60, height = 60, color = '#5F7F6
   </Svg>;
 }
 
-export function BookezJourneyMarker({ width = 56, height = 56, color = '#5F7F61', accent = '#AE7B3E', strokeWidth = 1.5, style }: ArtProps) {
+export function BookezJourneyMarker({ width = 56, height = 56, color = '#667A60', accent = '#5B1830', strokeWidth = 1.5, style }: ArtProps) {
   return <Svg width={width} height={height} viewBox="0 0 56 56" style={style} accessible={false}>
     <Circle cx="28" cy="28" r="23" fill={color} fillOpacity={0.1} stroke={color} strokeWidth={strokeWidth} />
     <G fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
@@ -203,7 +206,7 @@ export function BookezJourneyMarker({ width = 56, height = 56, color = '#5F7F61'
   </Svg>;
 }
 
-export function BookezCommunityMark({ width = 76, height = 58, color = '#7466A8', accent = '#AE7B3E', strokeWidth = 1.5, style }: ArtProps) {
+export function BookezCommunityMark({ width = 76, height = 58, color = '#667A60', accent = '#5B1830', strokeWidth = 1.5, style }: ArtProps) {
   return <Svg width={width} height={height} viewBox="0 0 76 58" style={style} accessible={false}>
     <G fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
       <Circle cx="25" cy="18" r="6" fill={color} fillOpacity={0.1} />
@@ -215,7 +218,7 @@ export function BookezCommunityMark({ width = 76, height = 58, color = '#7466A8'
   </Svg>;
 }
 
-export function BookezPublishingBook({ width = 74, height = 64, color = '#6C2940', accent = '#AE7B3E', strokeWidth = 1.5, style }: ArtProps) {
+export function BookezPublishingBook({ width = 74, height = 64, color = '#5B1830', accent = '#5B1830', strokeWidth = 1.5, style }: ArtProps) {
   return <Svg width={width} height={height} viewBox="0 0 74 64" style={style} accessible={false}>
     <G fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
       <Path d="M11 14c13-4 23-2 30 4v34c-8-5-18-6-30-2z" fill={color} fillOpacity={0.08} />
@@ -227,7 +230,7 @@ export function BookezPublishingBook({ width = 74, height = 64, color = '#6C2940
   </Svg>;
 }
 
-export function BookezFlourish({ width = 180, height = 22, color = '#AE7B3E', style }: ArtProps) {
+export function BookezFlourish({ width = 180, height = 22, color = '#5B1830', style }: ArtProps) {
   return <Svg width={width} height={height} viewBox="0 0 180 22" style={style} accessible={false}>
     <G fill="none" stroke={color} strokeWidth={1.1} strokeLinecap="round">
       <Path d="M3 11h50c9 0 10-8 18-8 8 0 8 16 16 16s8-16 16-16c8 0 9 8 18 8h56" strokeOpacity={0.75} />

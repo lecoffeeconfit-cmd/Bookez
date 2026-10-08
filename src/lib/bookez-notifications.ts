@@ -46,7 +46,7 @@ export async function requestBookezNotificationPermissions(): Promise<boolean> {
       description: 'Gentle reminders to keep your books moving.',
       importance: Notifications.AndroidImportance.DEFAULT,
       vibrationPattern: [0, 180, 120, 180],
-      lightColor: '#681B3A',
+      lightColor: '#5B1830',
       sound: 'default',
     });
   }

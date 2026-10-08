@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, Image, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
 import { supabase } from '../lib/supabase';
-import { bookezColors, bookezType } from '../theme/bookez';
+import { bookezColors, bookezPlaceholderCoverGradient, bookezType } from '../theme/bookez';
 
 const C = {
   ink: bookezColors.textPrimary,
@@ -107,7 +108,7 @@ function normalizeBook(value: unknown, index: number): CommunityWriterBook | nul
     publicStatus: asString(row.public_status) ?? asString(row.publicStatus),
     completed: asBoolean(row.completed),
     finishedLabel: asString(row.finished_label) ?? asString(row.finishedLabel),
-    coverColor: asString(row.cover_color) ?? '#5B638E',
+    coverColor: asString(row.cover_color) ?? '#667A60',
     coverImagePath: asString(row.cover_image_path),
     updatedAt: asString(row.updated_at) ?? asString(row.updatedAt) ?? undefined,
   };
@@ -153,7 +154,7 @@ function fallbackProfile(fallback: CommunityWriterFallback): CommunityWriterProf
     publicStatus: book.publicStatus ?? null,
     completed: Boolean(book.completed),
     finishedLabel: book.finishedLabel ?? null,
-    coverColor: book.coverColor ?? '#5B638E',
+    coverColor: book.coverColor ?? '#667A60',
     coverImagePath: null,
     coverImageUri: book.coverImageUri,
   }] : [];
@@ -212,7 +213,7 @@ function WriterAvatar({ profile, large = false }: { profile: CommunityWriterProf
 function WriterBookCard({ book, compact = false, artifact = false }: { book: CommunityWriterBook; compact?: boolean; artifact?: boolean }) {
   const title = book.title?.trim() || 'Untitled project';
   const progress = Math.max(0, Math.min(100, book.completionPercent ?? 0));
-  return <View style={[wS.bookCard, compact && wS.bookCardCompact, artifact && wS.bookCardArtifact]}><View style={[wS.bookCover, compact && wS.bookCoverCompact, { backgroundColor: book.coverColor }]}>{book.coverImageUri ? <Image source={{ uri: book.coverImageUri }} style={wS.bookCoverImage} resizeMode="cover" /> : <><Text style={wS.bookCoverMark}>{title.slice(0, 1).toUpperCase()}</Text><Text style={wS.bookCoverLabel}>{book.genre ?? 'BOOK'}</Text></>}</View><Text numberOfLines={2} style={[wS.bookTitle, compact && wS.bookTitleCompact, artifact && wS.bookTitleArtifact]}>{title}</Text><Text numberOfLines={1} style={[wS.bookMeta, artifact && wS.mutedArtifact]}>{book.genre ?? book.projectType ?? book.stage ?? 'Writing project'}</Text><View style={[wS.bookProgressTrack, artifact && wS.trackArtifact]}><View style={[wS.bookProgressFill, { width: `${Math.max(progress, progress ? 2 : 0)}%`, backgroundColor: artifact ? bookezColors.secondaryAccent : book.completed ? C.gold : C.periwinkle }]} /></View><Text style={[wS.bookProgressText, artifact && wS.mutedArtifact]}>{book.completed ? book.finishedLabel ?? 'Completed' : `${Math.round(progress)}% in progress`}</Text></View>;
+  return <View style={[wS.bookCard, compact && wS.bookCardCompact, artifact && wS.bookCardArtifact]}><View style={[wS.bookCover, compact && wS.bookCoverCompact, { backgroundColor: book.coverColor }]}>{book.coverImageUri && <Image source={{ uri: book.coverImageUri }} style={wS.bookCoverImage} resizeMode="cover" />}<LinearGradient pointerEvents="none" colors={bookezPlaceholderCoverGradient} locations={[0, 0.16, 0.52]} style={wS.bookCoverLight} />{!book.coverImageUri && <><Text style={wS.bookCoverMark}>{title.slice(0, 1).toUpperCase()}</Text><Text style={wS.bookCoverLabel}>{book.genre ?? 'BOOK'}</Text></>}</View><Text numberOfLines={2} style={[wS.bookTitle, compact && wS.bookTitleCompact, artifact && wS.bookTitleArtifact]}>{title}</Text><Text numberOfLines={1} style={[wS.bookMeta, artifact && wS.mutedArtifact]}>{book.genre ?? book.projectType ?? book.stage ?? 'Writing project'}</Text><View style={[wS.bookProgressTrack, artifact && wS.trackArtifact]}><View style={[wS.bookProgressFill, { width: `${Math.max(progress, progress ? 2 : 0)}%`, backgroundColor: artifact ? bookezColors.secondaryAccent : book.completed ? C.gold : C.periwinkle }]} /></View><Text style={[wS.bookProgressText, artifact && wS.mutedArtifact]}>{book.completed ? book.finishedLabel ?? 'Completed' : `${Math.round(progress)}% in progress`}</Text></View>;
 }
 
 function Stat({ value, label, artifact = false }: { value: string; label: string; artifact?: boolean }) {
@@ -273,7 +274,7 @@ export function WriterProfileSheet({ visible, userId, viewerId, fallback, onClos
 
 const wS = StyleSheet.create({
   summaryCard: { marginTop: 13, padding: 15, borderRadius: 18, backgroundColor: bookezColors.manuscript, borderWidth: 1, borderColor: bookezColors.manuscriptEdge },
-  summaryCardArtifact: { borderRadius: 11, backgroundColor: bookezColors.surface, borderColor: bookezColors.border, shadowColor: '#756654', shadowOpacity: 0.46, shadowRadius: 9, shadowOffset: { width: 0, height: 6 }, elevation: 4 },
+  summaryCardArtifact: { borderRadius: 11, backgroundColor: bookezColors.surface, borderColor: bookezColors.border, shadowColor: '#493F35', shadowOpacity: 0.46, shadowRadius: 9, shadowOffset: { width: 0, height: 6 }, elevation: 4 },
   summaryHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 },
   summaryHeaderCopy: { flex: 1, minWidth: 0 },
   overline: { color: C.periwinkle, fontSize: 7, letterSpacing: 0.9, fontWeight: '800' },
@@ -301,10 +302,11 @@ const wS = StyleSheet.create({
   bookCover: { width: 72, height: 94, borderRadius: 12, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
   bookCoverCompact: { width: 58, height: 76, borderRadius: 10 },
   bookCoverImage: { ...StyleSheet.absoluteFill, width: undefined, height: undefined },
-  bookCoverMark: { color: 'rgba(255,255,255,0.9)', fontSize: 22, fontWeight: '800' },
-  bookCoverLabel: { color: 'rgba(255,255,255,0.78)', fontSize: 5, letterSpacing: 0.7, fontWeight: '800', marginTop: 3 },
+  bookCoverLight: { ...StyleSheet.absoluteFill, zIndex: 1, elevation: 1 },
+  bookCoverMark: { color: 'rgba(255,248,238,0.9)', fontSize: 22, fontWeight: '800', zIndex: 2 },
+  bookCoverLabel: { color: 'rgba(255,248,238,0.78)', fontSize: 5, letterSpacing: 0.7, fontWeight: '800', marginTop: 3, zIndex: 2 },
   bookTitle: { color: C.ink, fontSize: 11, lineHeight: 14, fontWeight: '800', marginTop: 8 },
-  bookTitleArtifact: { color: '#E4D8BA' },
+  bookTitleArtifact: { color: '#89877F' },
   bookTitleCompact: { fontSize: 9, lineHeight: 12, marginTop: 6 },
   bookMeta: { color: C.muted, fontSize: 7, marginTop: 3 },
   bookProgressTrack: { height: 4, marginTop: 8, borderRadius: 2, backgroundColor: bookezColors.manuscriptEdge, overflow: 'hidden' },
@@ -319,7 +321,7 @@ const wS = StyleSheet.create({
   emptyTitle: { color: C.ink, fontSize: 9, fontWeight: '800' },
   emptyCopy: { color: C.muted, fontSize: 8, lineHeight: 12, marginTop: 4 },
   mutedArtifact: { color: bookezColors.textSecondary },
-  shade: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(32,41,84,0.28)' },
+  shade: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(19,36,61,0.28)' },
   dismiss: { ...StyleSheet.absoluteFill },
   sheet: { maxHeight: '92%', padding: 20, paddingBottom: 24, borderTopLeftRadius: 29, borderTopRightRadius: 29, backgroundColor: C.cream },
   handle: { alignSelf: 'center', width: 36, height: 4, borderRadius: 2, backgroundColor: bookezColors.manuscriptEdge, marginBottom: 13 },
@@ -340,7 +342,7 @@ const wS = StyleSheet.create({
   followButton: { minHeight: 42, marginTop: 15, borderRadius: 13, backgroundColor: C.periwinkle, alignItems: 'center', justifyContent: 'center' },
   followingButton: { backgroundColor: bookezColors.surface, borderWidth: 1, borderColor: bookezColors.border },
   disabledButton: { opacity: 0.65 },
-  followButtonText: { color: '#FFF', fontSize: 9, fontWeight: '800' },
+  followButtonText: { color: '#FFF8EE', fontSize: 9, fontWeight: '800' },
   followingButtonText: { color: C.periwinkle },
   selfPill: { minHeight: 35, marginTop: 15, borderRadius: 11, backgroundColor: bookezColors.secondaryAccentSoft, borderWidth: 1, borderColor: bookezColors.manuscriptEdge, alignItems: 'center', justifyContent: 'center' },
   selfPillText: { color: C.periwinkle, fontSize: 8, fontWeight: '800' },
@@ -354,5 +356,5 @@ const wS = StyleSheet.create({
   errorTitle: { color: C.ink, fontSize: 14, fontWeight: '800' },
   errorCopy: { color: C.muted, fontSize: 9, lineHeight: 14, textAlign: 'center', marginTop: 6 },
   primaryButton: { minWidth: 120, minHeight: 42, marginTop: 17, paddingHorizontal: 14, borderRadius: 13, backgroundColor: C.periwinkle, alignItems: 'center', justifyContent: 'center' },
-  primaryButtonText: { color: '#FFF', fontSize: 9, fontWeight: '800' },
+  primaryButtonText: { color: '#FFF8EE', fontSize: 9, fontWeight: '800' },
 });

@@ -9,33 +9,33 @@ import { Platform, type TextStyle, type ViewStyle } from 'react-native';
  */
 
 const bookezPalette = {
-  appBackground: '#F6F0E4',
-  surfacePrimary: '#FFFBF4',
-  surfaceSecondary: '#F3E9D8',
-  surfaceRaised: '#FFFDF8',
-  surfaceTint: '#EFE3CF',
-  inkPrimary: '#102F50',
-  inkSecondary: '#34465A',
-  inkMuted: '#736D63',
-  burgundy: '#73143A',
-  burgundyDeep: '#5B0F2E',
-  burgundySoft: '#EEDCE4',
-  gold: '#BA8D45',
-  goldDark: '#97703A',
-  goldSoft: '#E8D5AE',
-  borderWarm: '#D8C8AB',
-  borderStrong: '#B99760',
-  divider: '#DED1BC',
-  sage: '#5F765B',
-  sageSoft: '#DEE7D8',
-  amethyst: '#6E5A9F',
-  amethystSoft: '#E6DFF2',
-  dustyBlue: '#487287',
-  dustyBlueSoft: '#DAE7EA',
-  rose: '#945269',
-  roseSoft: '#EEDDE3',
-  shadowWarm: '#6C5438',
-  shadowDeep: '#402E22',
+  appBackground: '#F5EEE1',
+  surfacePrimary: '#FAF6ED',
+  surfaceSecondary: '#EAE1D4',
+  surfaceRaised: '#F9F4EA',
+  surfaceTint: '#EFE6D8',
+  inkPrimary: '#13243D',
+  inkSecondary: '#5E6877',
+  inkMuted: '#89877F',
+  burgundy: '#5B1830',
+  burgundyDeep: '#461326',
+  burgundySoft: '#F1E1E3',
+  gold: '#A47A42',
+  goldDark: '#9D743C',
+  goldSoft: '#EFE4D0',
+  borderWarm: '#DDCDB5',
+  borderStrong: '#DDCDB5',
+  divider: '#E8DECE',
+  sage: '#667A60',
+  sageSoft: '#E6ECDF',
+  amethyst: '#8E83B5',
+  amethystSoft: '#D6C9DE',
+  dustyBlue: '#B8D0D4',
+  dustyBlueSoft: '#B8D0D4',
+  rose: '#9E575A',
+  roseSoft: '#F2E0DE',
+  shadowWarm: '#493F35',
+  shadowDeep: '#493F35',
 } as const;
 
 export const bookezColors = {
@@ -43,13 +43,13 @@ export const bookezColors = {
   surface: bookezPalette.surfacePrimary,
   surfaceRaised: bookezPalette.surfaceRaised,
   surfaceMuted: bookezPalette.surfaceSecondary,
-  surfaceAccent: bookezPalette.roseSoft,
-  manuscript: bookezPalette.surfaceSecondary,
+  surfaceAccent: '#F3E7E1',
+  manuscript: bookezPalette.surfaceTint,
   manuscriptEdge: bookezPalette.borderStrong,
   textPrimary: bookezPalette.inkPrimary,
   textSecondary: bookezPalette.inkSecondary,
   textMuted: bookezPalette.inkMuted,
-  textOnAccent: bookezPalette.surfacePrimary,
+  textOnAccent: '#FFF8EE',
   border: bookezPalette.borderWarm,
   divider: bookezPalette.divider,
   accent: bookezPalette.burgundy,
@@ -60,13 +60,13 @@ export const bookezColors = {
   success: bookezPalette.sage,
   successSoft: bookezPalette.sageSoft,
   warning: bookezPalette.goldDark,
-  warningSoft: bookezPalette.goldSoft,
+  warningSoft: '#F0E5D1',
   destructive: bookezPalette.rose,
   destructiveSoft: bookezPalette.roseSoft,
-  selection: bookezPalette.goldSoft,
-  focusRing: bookezPalette.gold,
-  white: bookezPalette.surfacePrimary,
-  black: bookezPalette.inkPrimary,
+  selection: '#E9DEC8',
+  focusRing: '#8B6170',
+  white: '#FFF8EE',
+  black: '#000000',
   // Explicit names for new surfaces and future components.
   appBackground: bookezPalette.appBackground,
   surfacePrimary: bookezPalette.surfacePrimary,
@@ -96,10 +96,10 @@ export const bookezColors = {
   // Semantic aliases for new surfaces. Keep screen code readable without
   // introducing a second palette vocabulary.
   surfaceElevated: bookezPalette.surfaceRaised,
-  parchment: bookezPalette.surfaceSecondary,
+  parchment: bookezPalette.surfaceTint,
   parchmentDark: bookezPalette.borderStrong,
   parchmentInk: bookezPalette.inkPrimary,
-  rust: '#F4E4D7',
+  rust: bookezPalette.goldSoft,
   goldMuted: bookezPalette.goldDark,
   forest: bookezPalette.sageSoft,
 } as const;
@@ -110,17 +110,17 @@ export const bookezColors = {
  * the editorial tokens above are adopted screen by screen.
  */
 export const bookezLegacyColors = {
-  ink: bookezPalette.inkPrimary,
-  muted: bookezPalette.inkSecondary,
-  periwinkle: bookezPalette.burgundy,
-  sky: bookezPalette.dustyBlue,
-  lavender: bookezPalette.amethyst,
-  sage: bookezPalette.sage,
-  peach: bookezPalette.gold,
-  coral: bookezPalette.rose,
-  gold: bookezPalette.gold,
-  paper: bookezPalette.appBackground,
-  white: bookezPalette.surfacePrimary,
+  ink: '#13243D',
+  muted: '#68707B',
+  periwinkle: '#8E83B5',
+  sky: '#B8D0D4',
+  lavender: '#D6C9DE',
+  sage: '#A9B99C',
+  peach: '#E8C2A7',
+  coral: '#C7817E',
+  gold: '#B18A53',
+  paper: '#F5EEE1',
+  white: '#FFF8EE',
 } as const;
 
 export const bookezSpacing = {
@@ -319,6 +319,12 @@ export const bookezWithAlpha = (hex: string, alpha: number) => {
   const value = normalized.length === 3 ? normalized.split('').map((part) => part + part).join('') : normalized;
   return `rgba(${parseInt(value.slice(0, 2), 16)}, ${parseInt(value.slice(2, 4), 16)}, ${parseInt(value.slice(4, 6), 16)}, ${alpha})`;
 };
+
+export const bookezPlaceholderCoverGradient = [
+  bookezWithAlpha(bookezColors.accent, 0.99),
+  bookezWithAlpha(bookezColors.textOnAccent, 0.58),
+  bookezWithAlpha(bookezColors.textOnAccent, 0),
+] as const;
 
 export const bookezTheme = {
   colors: bookezColors,

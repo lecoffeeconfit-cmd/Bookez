@@ -188,7 +188,7 @@ export function BookezButton({ label, onPress, variant = 'primary', icon, disabl
 }
 
 const buttonColors: Record<BookezButtonVariant, { background: string; border: string; text: string }> = {
-  primary: { background: bookezColors.accent, border: bookezColors.accent, text: bookezColors.textOnAccent },
+  primary: { background: bookezColors.accent, border: bookezColors.secondaryAccent, text: bookezColors.textOnAccent },
   secondary: { background: bookezColors.surfaceRaised, border: bookezColors.border, text: bookezColors.textPrimary },
   quiet: { background: 'transparent', border: 'transparent', text: bookezColors.accent },
   destructive: { background: bookezColors.destructiveSoft, border: bookezColors.destructiveSoft, text: bookezColors.destructive },

@@ -20,6 +20,14 @@ for (const operation of operations) {
 }
 
 assert.match(service, /requireOptionalNativeModule\('BookezAIWriting'\)/, 'The client should load the native writing module safely.');
+assert.match(service, /providerRoute\(preference/, 'Provider routing must be centralized.');
+assert.match(service, /if \(route === 'unavailable'\) throw/, 'Phone-only mode must not silently spend cloud credits.');
+assert.match(service, /if \(provider === 'device'\)/, 'A resolved phone request must call the native model.');
+assert.match(component, /if \(provider === 'cloud'\) await recordUsage\(mode, providerPreference === 'auto'\)/, 'Only cloud requests should consume Bookez credits, with the automatic reserve protected.');
+for (const operation of ['project-scan', 'project-edit', 'project-add']) {
+  assert.ok(swift.includes(`"${operation}":`), `Apple on-device AI should handle ${operation}.`);
+  assert.ok(kotlin.includes(`"${operation}" ->`), `Android on-device AI should handle ${operation}.`);
+}
 assert.deepEqual(moduleConfig.platforms, ['apple', 'android']);
 assert.deepEqual(moduleConfig.apple.modules, ['BookezAIWritingModule']);
 assert.deepEqual(moduleConfig.android.modules, ['expo.modules.bookezaiwriting.BookezAIWritingModule']);

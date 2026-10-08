@@ -32,6 +32,7 @@ export type BookezAIWritingRequest = {
     notes?: string;
     compass?: string;
     bookIdea?: string;
+    pointOfView?: string;
     plotThread?: string;
     characters?: string;
     chapterSummaries?: string;

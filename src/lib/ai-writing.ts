@@ -1,5 +1,9 @@
 import { requireOptionalNativeModule } from 'expo';
 import { supabase } from './supabase';
+import { deviceSourceLimit, providerRoute, type AIProviderPreference, type AIResolvedProvider } from './ai-provider';
+
+export { AI_PROVIDER_STORAGE_KEY, deviceSourceLimit } from './ai-provider';
+export type { AIProviderPreference, AIResolvedProvider } from './ai-provider';
 
 export type AIWritingOperation =
   | 'continue'
@@ -12,6 +16,8 @@ export type AIWritingOperation =
   | 'notes-to-prose'
   | 'brainstorm'
   | 'ask';
+
+export type AIProjectOperation = 'project-scan' | 'project-edit' | 'project-add';
 
 export type AIWritingContextMode = 'auto' | 'page' | 'nearby' | 'book-aware';
 
@@ -27,6 +33,8 @@ export type AIWritingContext = {
   compass?: string;
   /** Book-level planning memory. Sent only for book-aware requests. */
   bookIdea?: string;
+  /** A compact book-level POV anchor also kept for Nearby requests. */
+  pointOfView?: string;
   plotThread?: string;
   characters?: string;
   chapterSummaries?: string;
@@ -38,7 +46,7 @@ export type AIWritingContext = {
 };
 
 export type AIWritingRequest = {
-  operation: AIWritingOperation;
+  operation: AIWritingOperation | AIProjectOperation;
   text: string;
   instruction?: string;
   context: AIWritingContext;
@@ -51,6 +59,12 @@ export type AIWritingResponse = {
   ideas?: Array<{ title: string; detail: string }>;
   /** Concise writing feedback for section questions. */
   feedback?: string;
+};
+
+const withoutContextNotes = (notes: string | undefined, duplicateLabels: string[]) => {
+  if (!notes) return notes;
+  const labels = duplicateLabels.map((label) => `${label.toLowerCase()}:`);
+  return notes.split('\n').filter((line) => !labels.some((label) => line.toLowerCase().startsWith(label))).join('\n');
 };
 
 /**
@@ -75,15 +89,19 @@ export const prepareAIWritingContext = (context: AIWritingContext, mode: AIWriti
       chapterTitle: context.chapterTitle,
       chapterPlan: context.chapterPlan,
       nearbyText: context.nearbyText,
-      notes: context.notes,
+      notes: withoutContextNotes(context.notes, ['Point of view']),
       compass: context.compass,
       projectTitle: context.projectTitle,
       projectType: context.projectType,
+      pointOfView: context.pointOfView,
       toneSample: context.toneSample,
       currentSectionSummary: context.currentSectionSummary,
     };
   }
-  return base;
+  return {
+    ...base,
+    notes: withoutContextNotes(context.notes, ['Core concept', 'Point of view', 'Outline · throughline', 'Characters', 'Character goals & motivations']),
+  };
 };
 
 type NativeAIWritingModule = {
@@ -153,8 +171,19 @@ export const AIWritingService = {
     try { return (await nativeModule.getAvailabilityReason?.()) ?? 'On-device AI isn’t available on this device.'; }
     catch { return 'On-device AI isn’t available on this device.'; }
   },
-  async generate(request: AIWritingRequest) {
-    if (await nativeIsAvailable() && nativeModule?.generate) return nativeModule.generate(request);
+  async resolveProvider(preference: AIProviderPreference = 'auto', request?: AIWritingRequest): Promise<AIResolvedProvider> {
+    if (preference === 'cloud') return 'cloud';
+    const route = providerRoute(preference, Boolean(await nativeIsAvailable() && nativeModule?.generate), Boolean(request && request.text.length > deviceSourceLimit(request.operation)));
+    if (route === 'unavailable') throw new Error(await this.getAvailabilityReason());
+    if (route === 'too-long') throw new Error(`This passage is too long for phone AI. Select a shorter passage (up to ${deviceSourceLimit(request?.operation ?? 'rewrite')} characters) or choose Bookez credits.`);
+    return route;
+  },
+  async generate(request: AIWritingRequest, preference: AIProviderPreference = 'auto') {
+    const provider = await this.resolveProvider(preference, request);
+    if (provider === 'device') {
+      if (!nativeModule?.generate) throw new Error('On-device AI requires a current Bookez app build.');
+      return nativeModule.generate(request);
+    }
     return cloudGenerate(request);
   },
   async cancel() {

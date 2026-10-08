@@ -44,23 +44,23 @@ type GlyphName =
   | 'workbook';
 
 const antiqueTones = {
-  plum: '#67263F',
-  violet: '#5F568D',
-  blue: '#3E657E',
-  teal: '#3F716F',
-  sage: '#596C53',
+  plum: '#5B1830',
+  violet: '#5B1830',
+  blue: '#667A60',
+  teal: '#667A60',
+  sage: '#667A60',
   rust: '#8A5C45',
-  gold: '#98703B',
+  gold: '#A47A42',
 } as const;
 
 const antiqueAccents = {
-  plum: '#C58C88',
-  violet: '#B8A0CE',
-  blue: '#8EB4BE',
-  teal: '#91B09B',
-  sage: '#C1A56B',
-  rust: '#C69378',
-  gold: '#A97A8A',
+  plum: '#EFE6D8',
+  violet: '#EFE6D8',
+  blue: '#89877F',
+  teal: '#89877F',
+  sage: '#A47A42',
+  rust: '#EFE6D8',
+  gold: '#EFE6D8',
 } as const;
 
 const glyphByName: Record<string, GlyphName> = {
@@ -296,7 +296,7 @@ export function BookezMysticIcon({ name, size = 36, tone, surface = 'parchment',
     height: size,
     borderRadius: radius,
     backgroundColor: bare ? 'transparent' : jewel ? resolvedTone : bookezColors.secondaryAccentSoft,
-    borderColor: bare ? 'transparent' : jewel ? bookezWithAlpha('#D9BA79', 0.7) : bookezWithAlpha(resolvedTone, 0.42),
+    borderColor: bare ? 'transparent' : jewel ? bookezWithAlpha('#A47A42', 0.7) : bookezWithAlpha(resolvedTone, 0.42),
     borderWidth: bare ? 0 : 1,
   }, jewel && styles.jewelShadow, style]}>
     {jewel && <Animated.View pointerEvents="none" style={[styles.jewelAura, { width: size * 0.7, height: size * 0.7, borderRadius: size * 0.35, backgroundColor: bookezWithAlpha(resolvedAccent, 0.14) }, animated && !reduceMotion && { opacity: auraOpacity, transform: [{ scale: auraScale }] }]} />}
@@ -304,7 +304,7 @@ export function BookezMysticIcon({ name, size = 36, tone, surface = 'parchment',
     <Animated.View style={[styles.glyphMotion, animated && !reduceMotion && { transform: [{ translateY: enchantedLift }, { rotate: enchantedTurn }, { scale: enchantedScale }] }]}><MysticGlyph name={resolveGlyph(name)} size={glyphSize} color={glyphColor} accent={accent} /></Animated.View>
     {animated && !reduceMotion && <><Animated.View pointerEvents="none" style={[styles.mote, styles.moteOne, { backgroundColor: resolvedAccent, opacity: enchantment.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0.15, 0.62, 0.24] }), transform: [{ translateY: enchantment.interpolate({ inputRange: [0, 1], outputRange: [2, -2] }) }, { scale: enchantment.interpolate({ inputRange: [0, 1], outputRange: [0.65, 1] }) }] }]} /><Animated.View pointerEvents="none" style={[styles.mote, styles.moteTwo, { backgroundColor: bookezColors.textOnAccent, opacity: enchantment.interpolate({ inputRange: [0, 0.55, 1], outputRange: [0.08, 0.38, 0.14] }), transform: [{ translateY: enchantment.interpolate({ inputRange: [0, 1], outputRange: [-1, 2] }) }] }]} /></>}
     {animated && !reduceMotion && <Animated.View pointerEvents="none" style={[styles.glint, { opacity: glint, transform: [{ scale: glintScale }, { rotate: '-8deg' }] }]}>
-      <Svg width={Math.max(8, size * 0.24)} height={Math.max(8, size * 0.24)} viewBox="0 0 12 12" accessible={false}><Polygon points="6,0.5 7.4,4.6 11.5,6 7.4,7.4 6,11.5 4.6,7.4 0.5,6 4.6,4.6" fill={jewel ? '#FFF3D3' : accent} /></Svg>
+      <Svg width={Math.max(8, size * 0.24)} height={Math.max(8, size * 0.24)} viewBox="0 0 12 12" accessible={false}><Polygon points="6,0.5 7.4,4.6 11.5,6 7.4,7.4 6,11.5 4.6,7.4 0.5,6 4.6,4.6" fill={jewel ? '#EFE6D8' : accent} /></Svg>
     </Animated.View>}
   </View>;
 }
@@ -314,7 +314,7 @@ const styles = StyleSheet.create({
   jewelAura: { position: 'absolute' },
   innerRing: { position: 'absolute', top: 3, right: 3, bottom: 3, left: 3, borderWidth: 1 },
   glyphMotion: { alignItems: 'center', justifyContent: 'center' },
-  jewelShadow: { shadowColor: '#342630', shadowOpacity: 0.16, shadowRadius: 5, shadowOffset: { width: 0, height: 2 }, elevation: 2 },
+  jewelShadow: { shadowColor: '#493F35', shadowOpacity: 0.16, shadowRadius: 5, shadowOffset: { width: 0, height: 2 }, elevation: 2 },
   mote: { position: 'absolute', width: 2.5, height: 2.5, borderRadius: 2 },
   moteOne: { top: 5, left: 6 },
   moteTwo: { right: 6, bottom: 5, width: 1.5, height: 1.5 },

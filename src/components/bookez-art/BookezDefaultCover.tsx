@@ -22,9 +22,9 @@ type CoverPalette = {
 };
 
 const fallbackPalette: CoverPalette = {
-  start: '#314A68',
-  end: '#1B2D47',
-  accent: '#AE9AC8',
+  start: '#667A60',
+  end: '#667A60',
+  accent: '#667A60',
   glyph: 'Custom Project',
   label: 'CUSTOM',
   motif: 'diamond',
@@ -32,17 +32,17 @@ const fallbackPalette: CoverPalette = {
 
 function coverPaletteFor(type: string): CoverPalette {
   const normalized = type.toLowerCase();
-  if (normalized.includes('nonfiction')) return { start: '#417478', end: '#244C58', accent: '#9CBBA9', glyph: 'section-brief', label: 'NONFICTION', motif: 'rules' };
-  if (normalized.includes('fiction')) return { start: '#5D4B82', end: '#343052', accent: '#B7A2D0', glyph: 'Fiction Book', label: 'FICTION', motif: 'stars' };
-  if (normalized.includes('memoir') || normalized.includes('biography')) return { start: '#7B4053', end: '#4E293A', accent: '#CCA08E', glyph: 'Memoir & Biography', label: 'MEMOIR', motif: 'arch' };
-  if (normalized.includes('children')) return { start: '#4A6D91', end: '#384C75', accent: '#CFB370', glyph: 'Children’s Book', label: 'STORY', motif: 'moon' };
-  if (normalized.includes('poetry')) return { start: '#704265', end: '#432D50', accent: '#C3A0B8', glyph: 'Poetry Collection', label: 'POETRY', motif: 'stars' };
-  if (normalized.includes('journal') || normalized.includes('diary')) return { start: '#62735B', end: '#3B554C', accent: '#C2B178', glyph: 'writing-rhythm', label: 'JOURNAL', motif: 'rules' };
-  if (normalized.includes('workbook')) return { start: '#555F88', end: '#353C62', accent: '#A9B9B5', glyph: 'Workbook', label: 'WORKBOOK', motif: 'band' };
-  if (normalized.includes('guide') || normalized.includes('manual')) return { start: '#3E6B79', end: '#294C61', accent: '#B7A36E', glyph: 'Guide or Manual', label: 'GUIDE', motif: 'diamond' };
-  if (normalized.includes('essay')) return { start: '#68516E', end: '#423747', accent: '#BFA88A', glyph: 'find-across-book', label: 'ESSAYS', motif: 'arch' };
-  if (normalized.includes('script')) return { start: '#865947', end: '#57382F', accent: '#D0A175', glyph: 'Script', label: 'SCRIPT', motif: 'band' };
-  if (normalized.includes('speech') || normalized.includes('presentation')) return { start: '#793349', end: '#4F2034', accent: '#C7A46B', glyph: 'Speech or Presentation', label: 'SPEECH', motif: 'arch' };
+  if (normalized.includes('nonfiction')) return { start: '#667A60', end: '#667A60', accent: '#667A60', glyph: 'section-brief', label: 'NONFICTION', motif: 'rules' };
+  if (normalized.includes('fiction')) return { start: '#667A60', end: '#667A60', accent: '#667A60', glyph: 'Fiction Book', label: 'FICTION', motif: 'stars' };
+  if (normalized.includes('memoir') || normalized.includes('biography')) return { start: '#5B1830', end: '#5B1830', accent: '#5B1830', glyph: 'Memoir & Biography', label: 'MEMOIR', motif: 'arch' };
+  if (normalized.includes('children')) return { start: '#667A60', end: '#667A60', accent: '#5B1830', glyph: 'Children’s Book', label: 'STORY', motif: 'moon' };
+  if (normalized.includes('poetry')) return { start: '#5B1830', end: '#667A60', accent: '#5B1830', glyph: 'Poetry Collection', label: 'POETRY', motif: 'stars' };
+  if (normalized.includes('journal') || normalized.includes('diary')) return { start: '#667A60', end: '#667A60', accent: '#A47A42', glyph: 'writing-rhythm', label: 'JOURNAL', motif: 'rules' };
+  if (normalized.includes('workbook')) return { start: '#667A60', end: '#667A60', accent: '#89877F', glyph: 'Workbook', label: 'WORKBOOK', motif: 'band' };
+  if (normalized.includes('guide') || normalized.includes('manual')) return { start: '#667A60', end: '#667A60', accent: '#5B1830', glyph: 'Guide or Manual', label: 'GUIDE', motif: 'diamond' };
+  if (normalized.includes('essay')) return { start: '#5B1830', end: '#5B1830', accent: '#5B1830', glyph: 'find-across-book', label: 'ESSAYS', motif: 'arch' };
+  if (normalized.includes('script')) return { start: '#5B1830', end: '#5B1830', accent: '#5B1830', glyph: 'Script', label: 'SCRIPT', motif: 'band' };
+  if (normalized.includes('speech') || normalized.includes('presentation')) return { start: '#5B1830', end: '#5B1830', accent: '#5B1830', glyph: 'Speech or Presentation', label: 'SPEECH', motif: 'arch' };
   if (normalized.includes('custom')) return fallbackPalette;
   return fallbackPalette;
 }
@@ -104,13 +104,13 @@ export function BookezDefaultCover({ type, width, height, animated = false, styl
 
   return <View style={[styles.cover, { width: rootWidth, height: rootHeight, borderRadius: coverRadius }, style]}>
     <LinearGradient colors={[palette.start, palette.end]} start={{ x: 0.08, y: 0 }} end={{ x: 0.95, y: 1 }} style={StyleSheet.absoluteFill} />
-    <LinearGradient pointerEvents="none" colors={[bookezWithAlpha('#FFF7E7', 0.12), 'rgba(255,247,231,0)', bookezWithAlpha('#111827', 0.18)]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={StyleSheet.absoluteFill} />
+    <LinearGradient pointerEvents="none" colors={[bookezWithAlpha('#F9F4EA', 0.12), 'rgba(255,248,238,0)', bookezWithAlpha('#F5EEE1', 0.18)]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={StyleSheet.absoluteFill} />
     <View pointerEvents="none" style={[styles.pageBlock, { width: pageBlockWidth, backgroundColor: bookezColors.manuscript, borderLeftColor: bookezWithAlpha(palette.accent, 0.42) }]}>
       <View style={[styles.pageRule, styles.pageRuleOne, { backgroundColor: bookezWithAlpha(palette.end, 0.32) }]} />
       <View style={[styles.pageRule, styles.pageRuleTwo, { backgroundColor: bookezWithAlpha(palette.end, 0.24) }]} />
       <View style={[styles.pageRule, styles.pageRuleThree, { backgroundColor: bookezWithAlpha(palette.end, 0.2) }]} />
     </View>
-    <View pointerEvents="none" style={[styles.spine, { width: Math.max(4, measuredWidth * 0.11), backgroundColor: bookezWithAlpha('#161524', 0.22), borderRightColor: bookezWithAlpha(palette.accent, 0.45) }]} />
+    <View pointerEvents="none" style={[styles.spine, { width: Math.max(4, measuredWidth * 0.11), backgroundColor: bookezWithAlpha('#F5EEE1', 0.22), borderRightColor: bookezWithAlpha(palette.accent, 0.45) }]} />
     <View pointerEvents="none" style={[styles.spineHinge, { left: Math.max(4, measuredWidth * 0.11), backgroundColor: bookezWithAlpha(palette.accent, 0.28) }]} />
     <View pointerEvents="none" style={styles.spineRibs}>
       <View style={[styles.spineRib, { backgroundColor: bookezWithAlpha(palette.accent, 0.48) }]} />
@@ -120,20 +120,20 @@ export function BookezDefaultCover({ type, width, height, animated = false, styl
     <View pointerEvents="none" style={[styles.frame, { right: pageBlockWidth + 2, borderRadius: Math.max(4, measuredWidth * 0.1), borderColor: bookezWithAlpha(palette.accent, 0.72) }]} />
     <View pointerEvents="none" style={[styles.innerFrame, { right: pageBlockWidth + 5, borderColor: bookezWithAlpha(palette.accent, 0.25) }]} />
     <CoverMotif kind={palette.motif} accent={palette.accent} />
-    <View pointerEvents="none" style={[styles.sigil, { width: iconSize + 7, height: iconSize + 7, borderRadius: (iconSize + 7) / 2, borderColor: bookezWithAlpha(palette.accent, 0.58), backgroundColor: bookezWithAlpha('#182236', 0.13) }]}>
+    <View pointerEvents="none" style={[styles.sigil, { width: iconSize + 7, height: iconSize + 7, borderRadius: (iconSize + 7) / 2, borderColor: bookezWithAlpha(palette.accent, 0.58), backgroundColor: bookezWithAlpha('#F5EEE1', 0.13) }]}>
       <BookezMysticIcon name={palette.glyph} size={iconSize} surface="bare" tone={bookezColors.textOnAccent} animated={animated} />
     </View>
     {!compact && <Text numberOfLines={1} pointerEvents="none" style={[styles.label, { color: palette.accent, fontSize: Math.max(4.5, measuredWidth * 0.085) }]}>{palette.label}</Text>}
     <View pointerEvents="none" style={[styles.cornerTop, { borderColor: bookezWithAlpha(palette.accent, 0.78) }]} />
     <View pointerEvents="none" style={[styles.cornerBottom, { borderColor: bookezWithAlpha(palette.accent, 0.78) }]} />
-    {!compact && <View pointerEvents="none" style={[styles.clasp, { right: pageBlockWidth - 1, borderColor: bookezWithAlpha(palette.accent, 0.58), backgroundColor: bookezWithAlpha(palette.end, 0.86) }]}><LinearGradient colors={[bookezWithAlpha(palette.accent, 0.35), 'rgba(255,255,255,0)', bookezWithAlpha('#111827', 0.2)]} start={{ x: 0, y: 0 }} end={{ x: 0, y: 1 }} style={StyleSheet.absoluteFill} /><View style={[styles.claspStud, { borderColor: palette.accent, backgroundColor: bookezWithAlpha(palette.accent, 0.42) }]}><View style={[styles.claspStudCore, { backgroundColor: palette.accent }]} /></View></View>}
+    {!compact && <View pointerEvents="none" style={[styles.clasp, { right: pageBlockWidth - 1, borderColor: bookezWithAlpha(palette.accent, 0.58), backgroundColor: bookezWithAlpha(palette.end, 0.86) }]}><LinearGradient colors={[bookezWithAlpha(palette.accent, 0.35), 'rgba(255,248,238,0)', bookezWithAlpha('#F5EEE1', 0.2)]} start={{ x: 0, y: 0 }} end={{ x: 0, y: 1 }} style={StyleSheet.absoluteFill} /><View style={[styles.claspStud, { borderColor: palette.accent, backgroundColor: bookezWithAlpha(palette.accent, 0.42) }]}><View style={[styles.claspStudCore, { backgroundColor: palette.accent }]} /></View></View>}
     <View pointerEvents="none" style={[styles.coverFoot, { right: pageBlockWidth, backgroundColor: bookezWithAlpha(palette.accent, 0.42) }]} />
-    {!reduceMotion && <Animated.View pointerEvents="none" style={[styles.gleam, { width: Math.max(8, measuredWidth * 0.24), opacity: gleamOpacity, transform: [{ translateX: gleamTravel }, { rotate: '-18deg' }] }]}><LinearGradient colors={['rgba(255,248,226,0)', bookezWithAlpha(palette.accent, 0.8), 'rgba(255,248,226,0)']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={StyleSheet.absoluteFill} /></Animated.View>}
+    {!reduceMotion && <Animated.View pointerEvents="none" style={[styles.gleam, { width: Math.max(8, measuredWidth * 0.24), opacity: gleamOpacity, transform: [{ translateX: gleamTravel }, { rotate: '-18deg' }] }]}><LinearGradient colors={['rgba(255,248,238,0)', bookezWithAlpha(palette.accent, 0.8), 'rgba(255,248,238,0)']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={StyleSheet.absoluteFill} /></Animated.View>}
   </View>;
 }
 
 const styles = StyleSheet.create({
-  cover: { position: 'relative', overflow: 'hidden', alignItems: 'center', justifyContent: 'center', borderWidth: StyleSheet.hairlineWidth, borderColor: bookezColors.manuscriptEdge, shadowColor: '#241D26', shadowOpacity: 0.18, shadowRadius: 5, shadowOffset: { width: 0, height: 3 }, elevation: 2 },
+  cover: { position: 'relative', overflow: 'hidden', alignItems: 'center', justifyContent: 'center', borderWidth: StyleSheet.hairlineWidth, borderColor: bookezColors.manuscriptEdge, shadowColor: '#493F35', shadowOpacity: 0.18, shadowRadius: 5, shadowOffset: { width: 0, height: 3 }, elevation: 2 },
   pageBlock: { position: 'absolute', top: 3, right: 0, bottom: 3, overflow: 'hidden', borderLeftWidth: StyleSheet.hairlineWidth },
   pageRule: { position: 'absolute', right: 0, left: 0, height: StyleSheet.hairlineWidth },
   pageRuleOne: { top: '27%' },
@@ -160,7 +160,7 @@ const styles = StyleSheet.create({
   diamond: { position: 'absolute', top: '12%', width: '54%', aspectRatio: 1, borderWidth: StyleSheet.hairlineWidth, transform: [{ rotate: '45deg' }], opacity: 0.52 },
   cornerTop: { position: 'absolute', top: 7, left: 8, width: 6, height: 6, borderTopWidth: StyleSheet.hairlineWidth, borderLeftWidth: StyleSheet.hairlineWidth },
   cornerBottom: { position: 'absolute', right: 6, bottom: 7, width: 6, height: 6, borderRightWidth: StyleSheet.hairlineWidth, borderBottomWidth: StyleSheet.hairlineWidth },
-  clasp: { position: 'absolute', top: '44%', width: 13, height: 11, marginTop: -5, overflow: 'hidden', borderWidth: StyleSheet.hairlineWidth, borderRadius: 3, alignItems: 'center', justifyContent: 'center', shadowColor: '#17131A', shadowOpacity: 0.2, shadowRadius: 2, shadowOffset: { width: 0, height: 1 } },
+  clasp: { position: 'absolute', top: '44%', width: 13, height: 11, marginTop: -5, overflow: 'hidden', borderWidth: StyleSheet.hairlineWidth, borderRadius: 3, alignItems: 'center', justifyContent: 'center', shadowColor: '#493F35', shadowOpacity: 0.2, shadowRadius: 2, shadowOffset: { width: 0, height: 1 } },
   claspStud: { width: 6, height: 6, borderRadius: 3, borderWidth: StyleSheet.hairlineWidth, alignItems: 'center', justifyContent: 'center' },
   claspStudCore: { width: 2, height: 2, borderRadius: 1 },
   coverFoot: { position: 'absolute', right: 0, bottom: 2, left: 4, height: StyleSheet.hairlineWidth, opacity: 0.56 },

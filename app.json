@@ -61,11 +61,22 @@
       "expo-sharing",
       "expo-mail-composer",
       "expo-apple-authentication",
-      "expo-web-browser"
+      "expo-web-browser",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#101E34",
+          "image": "./assets/icon.png",
+          "imageWidth": 188,
+          "resizeMode": "contain"
+        }
+      ]
     ],
     "android": {
       "package": "com.lecoffeeconfit.bookme",
-      "permissions": ["SCHEDULE_EXACT_ALARM"],
+      "permissions": [
+        "SCHEDULE_EXACT_ALARM"
+      ],
       "versionCode": 1,
       "predictiveBackGestureEnabled": false
     },

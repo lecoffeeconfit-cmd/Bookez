@@ -79,15 +79,15 @@ function ManuscriptSurface({ pulseKey, sceneKey }: { pulseKey: string; sceneKey:
     ],
   }]}>
     <View pointerEvents="none" style={s.manuscriptPageStack} />
-    <LinearGradient pointerEvents="none" colors={['#FBF6EC', '#F5EBDD', '#FAF3E7']} start={{ x: 0.05, y: 0 }} end={{ x: 0.92, y: 1 }} style={s.manuscriptPaper} />
-    <LinearGradient pointerEvents="none" colors={['rgba(133,96,55,0.16)', 'rgba(133,96,55,0.035)', 'rgba(133,96,55,0)']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={s.manuscriptEdgeLeft} />
-    <LinearGradient pointerEvents="none" colors={['rgba(133,96,55,0)', 'rgba(133,96,55,0.03)', 'rgba(133,96,55,0.14)']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={s.manuscriptEdgeRight} />
-    <LinearGradient pointerEvents="none" colors={['rgba(133,96,55,0)', 'rgba(133,96,55,0.11)']} start={{ x: 0, y: 0 }} end={{ x: 0, y: 1 }} style={s.manuscriptEdgeBottom} />
+    <LinearGradient pointerEvents="none" colors={['#F9F4EA', '#F9F4EA', '#F9F4EA']} start={{ x: 0.05, y: 0 }} end={{ x: 0.92, y: 1 }} style={s.manuscriptPaper} />
+    <LinearGradient pointerEvents="none" colors={['rgba(91,24,48,0.16)', 'rgba(91,24,48,0.035)', 'rgba(91,24,48,0)']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={s.manuscriptEdgeLeft} />
+    <LinearGradient pointerEvents="none" colors={['rgba(91,24,48,0)', 'rgba(91,24,48,0.03)', 'rgba(91,24,48,0.14)']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={s.manuscriptEdgeRight} />
+    <LinearGradient pointerEvents="none" colors={['rgba(91,24,48,0)', 'rgba(91,24,48,0.11)']} start={{ x: 0, y: 0 }} end={{ x: 0, y: 1 }} style={s.manuscriptEdgeBottom} />
     <View pointerEvents="none" style={s.manuscriptPatinaOne} />
     <View pointerEvents="none" style={s.manuscriptPatinaTwo} />
     <View pointerEvents="none" style={s.manuscriptPatinaThree} />
     <Animated.View pointerEvents="none" style={[s.manuscriptBookmark, { transform: [{ translateY: pull.interpolate({ inputRange: [0, 1], outputRange: [0, 4] }) }, { rotate: pull.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '1.5deg'] }) }, { scale: pull.interpolate({ inputRange: [0, 1], outputRange: [1, 1.02] }) }] }]}><BookezBookmark width={22} height={35} color={bookezColors.secondaryAccent} /></Animated.View>
-    <Animated.View style={[s.manuscriptSaveGleam, { opacity: gleam.interpolate({ inputRange: [0, 0.18, 0.72, 1], outputRange: [0, 0.72, 0.34, 0] }), transform: [{ translateX: gleam.interpolate({ inputRange: [0, 1], outputRange: [-18, 82] }) }] }]}><LinearGradient colors={['rgba(177,133,67,0)', 'rgba(177,133,67,0.8)', 'rgba(255,245,204,0.9)', 'rgba(177,133,67,0)']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={StyleSheet.absoluteFill} /></Animated.View>
+    <Animated.View style={[s.manuscriptSaveGleam, { opacity: gleam.interpolate({ inputRange: [0, 0.18, 0.72, 1], outputRange: [0, 0.72, 0.34, 0] }), transform: [{ translateX: gleam.interpolate({ inputRange: [0, 1], outputRange: [-18, 82] }) }] }]}><LinearGradient colors={['rgba(91,24,48,0)', 'rgba(91,24,48,0.8)', 'rgba(255,248,238,0.9)', 'rgba(91,24,48,0)']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={StyleSheet.absoluteFill} /></Animated.View>
     <View pointerEvents="none" style={s.manuscriptRule}><BookezManuscript width={155} height={18} color={bookezColors.textPrimary} accent={bookezColors.manuscriptEdge} /></View>
   </Animated.View>;
 }
@@ -248,9 +248,9 @@ const s = StyleSheet.create({
   manuscriptEdgeLeft: { position: 'absolute', top: 4, bottom: 10, left: 1, width: 11, zIndex: 3, opacity: 0.7 },
   manuscriptEdgeRight: { position: 'absolute', top: 4, right: 6, bottom: 10, width: 10, zIndex: 3, opacity: 0.68 },
   manuscriptEdgeBottom: { position: 'absolute', right: 9, bottom: 7, left: 4, height: 11, zIndex: 3, opacity: 0.72 },
-  manuscriptPatinaOne: { position: 'absolute', top: 34, left: 15, width: 92, height: 46, borderRadius: 46, backgroundColor: 'rgba(166,126,75,0.026)', zIndex: 3, transform: [{ rotate: '-8deg' }] },
-  manuscriptPatinaTwo: { position: 'absolute', top: 124, right: 25, width: 76, height: 110, borderRadius: 48, backgroundColor: 'rgba(120,92,62,0.018)', zIndex: 3, transform: [{ rotate: '12deg' }] },
-  manuscriptPatinaThree: { position: 'absolute', bottom: 34, left: 42, width: 142, height: 35, borderRadius: 50, backgroundColor: 'rgba(177,138,82,0.022)', zIndex: 3, transform: [{ rotate: '3deg' }] },
+  manuscriptPatinaOne: { position: 'absolute', top: 34, left: 15, width: 92, height: 46, borderRadius: 46, backgroundColor: 'rgba(91,24,48,0.026)', zIndex: 3, transform: [{ rotate: '-8deg' }] },
+  manuscriptPatinaTwo: { position: 'absolute', top: 124, right: 25, width: 76, height: 110, borderRadius: 48, backgroundColor: 'rgba(91,24,48,0.018)', zIndex: 3, transform: [{ rotate: '12deg' }] },
+  manuscriptPatinaThree: { position: 'absolute', bottom: 34, left: 42, width: 142, height: 35, borderRadius: 50, backgroundColor: 'rgba(91,24,48,0.022)', zIndex: 3, transform: [{ rotate: '3deg' }] },
   manuscriptBookmark: { position: 'absolute', top: 7, right: 24, zIndex: 5, opacity: 0.75 },
   manuscriptSaveGleam: { position: 'absolute', top: 1, left: 22, width: 52, height: 2, zIndex: 6 },
   manuscriptRule: { position: 'absolute', top: -2, left: 18, zIndex: 3, opacity: 0.13 },

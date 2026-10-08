@@ -42,28 +42,28 @@ const withAlpha = (hex: string, alpha: number) => {
 const BIOMES: BiomeConfig[] = [
   {
     id: 'meadow',
-    base: '#DDEEC7',
-    accent: '#5F9F54',
+    base: '#F9F4EA',
+    accent: '#667A60',
   },
   {
     id: 'lake',
-    base: '#BFE8EE',
-    accent: '#4C8798',
+    base: '#F9F4EA',
+    accent: '#667A60',
   },
   {
     id: 'moonriver',
-    base: '#445487',
-    accent: '#8290C7',
+    base: '#FAF6ED',
+    accent: '#5B1830',
   },
   {
     id: 'desert',
-    base: '#EDB96F',
-    accent: '#8E4D30',
+    base: '#EFE6D8',
+    accent: '#A47A42',
   },
   {
     id: 'sunset',
-    base: '#E88758',
-    accent: '#173343',
+    base: '#5B1830',
+    accent: '#A47A42',
   },
 ];
 
@@ -88,7 +88,7 @@ function ScenicLayer({ width, height }: { width: number; height: number }) {
         <MaskedView
           style={StyleSheet.absoluteFill}
           maskElement={<LinearGradient
-            colors={[isFirst ? '#000000' : 'transparent', '#000000', '#000000', isLast ? '#000000' : 'transparent'] as const}
+            colors={[isFirst ? '#F5EEE1' : 'transparent', '#F5EEE1', '#F5EEE1', isLast ? '#F5EEE1' : 'transparent'] as const}
             locations={[0, topFadeStop, bottomFadeStop, 1] as const}
             style={styles.artworkMask}
           />}
@@ -102,13 +102,13 @@ function ScenicLayer({ width, height }: { width: number; height: number }) {
           />
         </MaskedView>
         <LinearGradient
-          colors={[withAlpha(biome.base, 0.08), 'rgba(255,255,255,0.01)', withAlpha(biome.base, 0.08)] as const}
+          colors={[withAlpha(biome.base, 0.08), 'rgba(239,230,216,0.01)', withAlpha(biome.base, 0.08)] as const}
           start={{ x: 0, y: 0.5 }}
           end={{ x: 1, y: 0.5 }}
           style={styles.scenicSideVignette}
         />
         <LinearGradient
-          colors={['rgba(255,255,255,0.005)', 'rgba(222,242,247,0.04)', 'rgba(255,255,255,0.005)'] as const}
+          colors={['rgba(239,230,216,0.005)', 'rgba(255,248,238,0.04)', 'rgba(239,230,216,0.005)'] as const}
           start={{ x: 0, y: 0.5 }}
           end={{ x: 1, y: 0.5 }}
           style={styles.pathReadabilityVeil}
@@ -152,20 +152,20 @@ function BiomeMotion({ biome, index, sectionHeight, width, phase, shimmer }: { b
   if (biome.id === 'meadow') return <View style={[styles.motionSection, { top, height: sectionHeight, width }]}>
     <Animated.View style={[styles.cloudFar, cloudFarStyle]}><Cloud /></Animated.View>
     <Animated.View style={[styles.cloudNear, cloudNearStyle]}><Cloud compact /></Animated.View>
-    <Animated.View style={[styles.pollenField, particleStyle]}><Sparkle size={7} color="#FFF0A0" style={styles.pollenSparkle} /><LightDot size={4} color="#F6EAA4" style={styles.pollenDot} /><Sparkle size={5} color="#FFF0A0" style={styles.pollenSparkleSecond} /></Animated.View>
+    <Animated.View style={[styles.pollenField, particleStyle]}><Sparkle size={7} color="#A47A42" style={styles.pollenSparkle} /><LightDot size={4} color="#EFE6D8" style={styles.pollenDot} /><Sparkle size={5} color="#A47A42" style={styles.pollenSparkleSecond} /></Animated.View>
   </View>;
 
   if (biome.id === 'moonriver') return <View style={[styles.motionSection, { top, height: sectionHeight, width }]}>
     <Animated.View style={[styles.moonGlow, glowStyle]} />
     <Animated.View style={[styles.cloudFar, styles.moonCloud, cloudFarStyle]}><Cloud compact /></Animated.View>
-    <Animated.View style={[styles.riverGlint, waterStyle]}><LightDot size={4} color="#E2F6D6" style={styles.riverGlintOne} /><Sparkle size={6} color="#E2F6D6" style={styles.riverGlintTwo} /><LightDot size={3} color="#E2F6D6" style={styles.riverGlintThree} /></Animated.View>
-    <Animated.View style={[styles.fireflyField, particleStyle]}><Sparkle size={6} color="#F8E5A5" style={styles.fireflySparkle} /><LightDot size={5} color="#E8F4BF" style={styles.fireflySecond} /></Animated.View>
+    <Animated.View style={[styles.riverGlint, waterStyle]}><LightDot size={4} color="#667A60" style={styles.riverGlintOne} /><Sparkle size={6} color="#667A60" style={styles.riverGlintTwo} /><LightDot size={3} color="#667A60" style={styles.riverGlintThree} /></Animated.View>
+    <Animated.View style={[styles.fireflyField, particleStyle]}><Sparkle size={6} color="#A47A42" style={styles.fireflySparkle} /><LightDot size={5} color="#EFE6D8" style={styles.fireflySecond} /></Animated.View>
   </View>;
 
   if (biome.id === 'lake') return <View style={[styles.motionSection, { top, height: sectionHeight, width }]}>
     <Animated.View style={[styles.cloudFar, cloudFarStyle]}><Cloud /></Animated.View>
     <Animated.View style={[styles.cloudNear, cloudNearStyle]}><Cloud compact /></Animated.View>
-    <Animated.View style={[styles.waterHighlights, waterStyle]}><LightDot size={4} color="#E7FBFF" style={styles.waterHighlightOne} /><Sparkle size={6} color="#FFFFFF" style={styles.waterHighlightTwo} /><LightDot size={3} color="#E7FBFF" style={styles.waterHighlightThree} /></Animated.View>
+    <Animated.View style={[styles.waterHighlights, waterStyle]}><LightDot size={4} color="#EFE6D8" style={styles.waterHighlightOne} /><Sparkle size={6} color="#FFF8EE" style={styles.waterHighlightTwo} /><LightDot size={3} color="#EFE6D8" style={styles.waterHighlightThree} /></Animated.View>
   </View>;
 
   if (biome.id === 'desert') return <View style={[styles.motionSection, { top, height: sectionHeight, width }]}>
@@ -173,7 +173,7 @@ function BiomeMotion({ biome, index, sectionHeight, width, phase, shimmer }: { b
   </View>;
 
   return <View style={[styles.motionSection, { top, height: sectionHeight, width }]}>
-    <Animated.View style={[styles.sunsetFireflies, particleStyle]}><Sparkle size={6} color="#FFE39A" style={styles.sunsetSparkleOne} /><LightDot size={5} color="#FFE39A" style={styles.sunsetSparkleSecond} /><Sparkle size={4} color="#FFE39A" style={styles.sunsetSparkleThird} /></Animated.View>
+    <Animated.View style={[styles.sunsetFireflies, particleStyle]}><Sparkle size={6} color="#A47A42" style={styles.sunsetSparkleOne} /><LightDot size={5} color="#A47A42" style={styles.sunsetSparkleSecond} /><Sparkle size={4} color="#A47A42" style={styles.sunsetSparkleThird} /></Animated.View>
   </View>;
 }
 
@@ -244,7 +244,7 @@ export default function JourneyEnvironment({ width, height, progress, reduceMoti
 }
 
 const styles = StyleSheet.create({
-  environment: { position: 'absolute', top: 0, left: 0, backgroundColor: '#DDEEC7' },
+  environment: { position: 'absolute', top: 0, left: 0, backgroundColor: '#F9F4EA' },
   scenicLayer: { position: 'absolute', top: 0, left: 0, overflow: 'hidden' },
   biomeArtworkFrame: { position: 'absolute', left: 0, overflow: 'hidden' },
   artworkMask: { flex: 1 },
@@ -255,19 +255,19 @@ const styles = StyleSheet.create({
   motionSection: { position: 'absolute', left: 0, overflow: 'hidden' },
   cloudFar: { position: 'absolute', top: '9%', left: '5%' },
   cloudNear: { position: 'absolute', top: '21%', right: '6%' },
-  cloud: { width: 108, height: 27, borderRadius: 18, backgroundColor: 'rgba(255,255,255,0.74)' },
-  cloudCompact: { width: 76, height: 20, backgroundColor: 'rgba(255,255,255,0.64)' },
-  cloudNight: { backgroundColor: 'rgba(189,202,247,0.38)' },
-  cloudPuff: { position: 'absolute', left: 15, top: -11, width: 43, height: 33, borderRadius: 22, backgroundColor: 'rgba(255,255,255,0.78)' },
+  cloud: { width: 108, height: 27, borderRadius: 18, backgroundColor: 'rgba(239,230,216,0.74)' },
+  cloudCompact: { width: 76, height: 20, backgroundColor: 'rgba(239,230,216,0.64)' },
+  cloudNight: { backgroundColor: 'rgba(255,248,238,0.38)' },
+  cloudPuff: { position: 'absolute', left: 15, top: -11, width: 43, height: 33, borderRadius: 22, backgroundColor: 'rgba(239,230,216,0.78)' },
   cloudPuffCompact: { left: 10, top: -7, width: 31, height: 24 },
-  cloudPuffSecond: { left: 54, top: -4, width: 34, height: 25, borderRadius: 18, backgroundColor: 'rgba(255,255,255,0.7)' },
+  cloudPuffSecond: { left: 54, top: -4, width: 34, height: 25, borderRadius: 18, backgroundColor: 'rgba(239,230,216,0.7)' },
   cloudPuffSecondCompact: { left: 39, top: -3, width: 25, height: 19 },
-  cloudPuffNight: { backgroundColor: 'rgba(202,213,250,0.42)' },
+  cloudPuffNight: { backgroundColor: 'rgba(255,248,238,0.42)' },
   pollenField: { position: 'absolute', top: '43%', left: '12%', width: 80, height: 70 },
   pollenSparkle: { position: 'absolute', left: 5, top: 8 },
   pollenDot: { position: 'absolute', left: 37, top: 25 },
   pollenSparkleSecond: { position: 'absolute', left: 62, top: 39 },
-  moonGlow: { position: 'absolute', top: '7%', left: '8%', width: 98, height: 98, borderRadius: 49, backgroundColor: 'rgba(197,225,172,0.42)' },
+  moonGlow: { position: 'absolute', top: '7%', left: '8%', width: 98, height: 98, borderRadius: 49, backgroundColor: 'rgba(102,122,96,0.42)' },
   moonCloud: { top: '20%', left: '3%' },
   riverGlint: { position: 'absolute', top: '59%', left: '28%', width: 146, height: 30 },
   riverGlintOne: { position: 'absolute', left: 26, top: 11 },
@@ -281,9 +281,9 @@ const styles = StyleSheet.create({
   waterHighlightTwo: { position: 'absolute', left: 76, top: 44 },
   waterHighlightThree: { position: 'absolute', left: 133, top: 76 },
   dustField: { position: 'absolute', top: '56%', left: '12%', width: 108, height: 74 },
-  dustLarge: { position: 'absolute', left: 11, top: 24, width: 9, height: 9, borderRadius: 5, backgroundColor: '#F7D39D' },
-  dustSmall: { position: 'absolute', left: 54, top: 8, width: 6, height: 6, borderRadius: 3, backgroundColor: '#ECC184' },
-  dustTiny: { position: 'absolute', left: 91, top: 50, width: 4, height: 4, borderRadius: 2, backgroundColor: '#FFE0B1' },
+  dustLarge: { position: 'absolute', left: 11, top: 24, width: 9, height: 9, borderRadius: 5, backgroundColor: '#A47A42' },
+  dustSmall: { position: 'absolute', left: 54, top: 8, width: 6, height: 6, borderRadius: 3, backgroundColor: '#EFE6D8' },
+  dustTiny: { position: 'absolute', left: 91, top: 50, width: 4, height: 4, borderRadius: 2, backgroundColor: '#EFE6D8' },
   sunsetFireflies: { position: 'absolute', top: '56%', left: '10%', width: 128, height: 112 },
   sunsetSparkleOne: { position: 'absolute', left: 5, top: 8 },
   sunsetSparkleSecond: { position: 'absolute', left: 60, top: 29 },
@@ -292,5 +292,5 @@ const styles = StyleSheet.create({
   sparkleRay: { position: 'absolute' },
   sparkleCore: { position: 'absolute' },
   lightDot: { position: 'absolute' },
-  celebrationGlow: { position: 'absolute', left: '35%', width: '30%', height: 72, borderRadius: 36, backgroundColor: 'rgba(255,223,142,0.24)' },
+  celebrationGlow: { position: 'absolute', left: '35%', width: '30%', height: 72, borderRadius: 36, backgroundColor: 'rgba(164,122,66,0.24)' },
 });
