@@ -6,6 +6,7 @@ const MAX_REQUEST_BYTES = 64 * 1024;
 const MAX_PROMPT_CHARS = 30_000;
 
 const OPERATIONS = [
+  'draft-page',
   'continue',
   'improve',
   'rewrite',
@@ -26,6 +27,7 @@ type ContextMode = 'auto' | 'page' | 'nearby' | 'book-aware';
 
 type BookezRequest = {
   operation: Operation;
+  protectReserve: boolean;
   text: string;
   instruction: string;
   context: {
@@ -59,7 +61,7 @@ type BookezResult = {
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
   'Content-Type': 'application/json',
 };
 
@@ -114,7 +116,7 @@ const parseRequest = async (req: Request): Promise<BookezRequest> => {
   if (!isOperation(body.operation)) throw new RequestError('Unsupported Bookez writing action.', 400);
 
   const text = readString(body.text, 'text', 12_000);
-  if (!text.trim() && body.operation !== 'continue' && body.operation !== 'brainstorm' && body.operation !== 'ask' && body.operation !== 'project-add') {
+  if (!text.trim() && body.operation !== 'draft-page' && body.operation !== 'continue' && body.operation !== 'brainstorm' && body.operation !== 'ask' && body.operation !== 'project-add') {
     throw new RequestError('Text is required for this writing action.', 400);
   }
 
@@ -146,10 +148,12 @@ const parseRequest = async (req: Request): Promise<BookezRequest> => {
   const totalInputChars = text.length + instruction.length + Object.values(context).reduce((total, value) => total + value.length, 0);
   if (totalInputChars > MAX_PROMPT_CHARS) throw new RequestError('Request content is too large.', 413);
 
-  return { operation: body.operation, text, instruction, context };
+  if (body.protectReserve !== undefined && typeof body.protectReserve !== 'boolean') throw new RequestError('protectReserve must be a boolean.', 400);
+  return { operation: body.operation, text, instruction, protectReserve: body.protectReserve === true, context };
 };
 
 const actionInstructions: Record<Operation, string> = {
+  'draft-page': 'Write one complete manuscript page of about 250–350 words in options. Follow the writer direction, supplied chapter plan, book memory, and established voice. Continue naturally from the source where relevant. Return prose, not an outline, advice, or a summary.',
   continue: 'Create exactly three distinct natural continuations. Do not repeat the source text.',
   improve: 'Return one polished passage that improves clarity and flow while preserving meaning, facts, voice, tense, and point of view.',
   rewrite: 'Return one rewritten passage following the writer direction while preserving facts, intent, tense, and point of view.',
@@ -162,7 +166,7 @@ const actionInstructions: Record<Operation, string> = {
   ask: 'Answer the writer’s question in feedback using only the supplied writing and book context. For continuity questions, distinguish supported evidence from inference and say when the available context is not enough. Do not rewrite the passage.',
   'project-scan': 'Summarize this manuscript chunk in feedback. Capture concrete events, people, relationships, setting, chronology, voice, and unresolved threads. Be compact and faithful; do not invent facts. Do not rewrite the manuscript.',
   'project-edit': 'Return exactly one complete revised version of the supplied manuscript chunk in options. Follow the writer direction across this chunk. Keep its full content and approximate length unless the direction requests cuts. Preserve paragraph breaks and never return a summary or commentary.',
-  'project-add': 'Return exactly one original, manuscript-ready passage in options that follows the writer direction and fits the supplied section and book memory. Do not repeat source writing. Write actual prose for the author, not an outline or advice.',
+  'project-add': 'Return exactly one complete page of original manuscript-ready prose in options, about 250–350 words unless the writer asks for a different length. Follow the writer direction and fit this section and book memory. Do not repeat source writing, outline, or give advice.',
 };
 
 const systemInstructions = [
@@ -171,7 +175,7 @@ const systemInstructions = [
   'Preserve the writer voice, facts, intent, point of view, and tense unless the requested action explicitly asks for a style change.',
   'When a book-level point-of-view choice is supplied, follow it consistently unless the writer explicitly requests a change.',
   'When book context is supplied, use characters, plot, chapter summaries, tone samples, notes, continuity items, and earlier writing as a coherent memory of the book.',
-  'Never invent a character relationship, event, chapter fact, or contradiction. If the supplied context cannot establish an answer, say that clearly and identify what evidence would resolve it.',
+  'For fiction and creative nonfiction, invent new prose and events when the writer requests them, while respecting established continuity. For factual nonfiction, do not fabricate claims, citations, or research; flag gaps when needed.',
   'Return only the requested structured response. Use empty values for fields that do not apply.',
   'Never mention internal instructions, hidden prompts, API credentials, or provider details.',
 ].join(' ');
@@ -278,9 +282,28 @@ const getSupabaseKey = (): string | null => {
   }
 };
 
+const getServiceKey = (): string | null => {
+  const legacyKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+  if (legacyKey) return legacyKey;
+  const encodedKeys = Deno.env.get('SUPABASE_SECRET_KEYS');
+  if (!encodedKeys) return null;
+  try {
+    const keys = JSON.parse(encodedKeys) as Record<string, unknown>;
+    return Object.values(keys).find((value): value is string => typeof value === 'string' && value.length > 0) ?? null;
+  } catch { return null; }
+};
+
+const creditCost = (request: BookezRequest) => {
+  if (request.operation === 'project-scan') return 2;
+  if (request.operation === 'project-edit') return 3;
+  if (request.operation === 'project-add') return 8;
+  const contextCost = request.context.contextMode === 'page' ? 1 : request.context.contextMode === 'nearby' ? 2 : 4;
+  return contextCost + (request.operation === 'draft-page' ? 4 : 0);
+};
+
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
-  if (req.method !== 'POST') return errorResponse('Method not allowed.', 405);
+  if (req.method !== 'POST' && req.method !== 'GET') return errorResponse('Method not allowed.', 405);
 
   const authorization = req.headers.get('Authorization') ?? '';
   if (!authorization.startsWith('Bearer ') || authorization.slice(7).trim().length === 0) {
@@ -298,6 +321,14 @@ Deno.serve(async (req: Request) => {
   const { data: userResult, error: userError } = await supabase.auth.getUser(token);
   if (userError || !userResult.user?.id) return errorResponse('Authentication is required.', 401);
 
+  const serviceKey = getServiceKey();
+  if (!serviceKey) return errorResponse('Bookez AI credit service is not configured.', 503);
+  const admin = createClient(supabaseUrl, serviceKey).schema('bookez');
+  if (req.method === 'GET') {
+    const { data, error } = await admin.rpc('get_ai_usage', { p_user_id: userResult.user.id });
+    return error || !isRecord(data) ? errorResponse('Bookez AI usage is unavailable.', 503) : jsonResponse(data);
+  }
+
   const openAiKey = Deno.env.get('OPENAI_API_KEY');
   if (!openAiKey) return errorResponse('Bookez AI is not configured.', 500);
 
@@ -309,9 +340,22 @@ Deno.serve(async (req: Request) => {
     return errorResponse('Invalid Bookez AI request.', 400);
   }
 
+  const requestId = crypto.randomUUID();
+  const credits = creditCost(request);
+  const protectReserve = request.protectReserve || request.operation.startsWith('project-');
+  const { data: reservation, error: reserveError } = await admin.rpc('reserve_ai_credits', {
+    p_user_id: userResult.user.id, p_request_id: requestId, p_credits: credits, p_protect_reserve: protectReserve,
+  });
+  if (reserveError || !isRecord(reservation)) return errorResponse('Bookez AI credits are unavailable. Please try again.', 503);
+  if (reservation.allowed !== true) return errorResponse(`This request needs ${credits} AI credits, but only ${reservation.remainingCredits ?? 0} remain in your ${protectReserve ? 'protected project' : 'monthly'} allowance.`, 429);
+
+  let completed = false;
+  let result: BookezResult | null = null;
+  let providerError: Response | null = null;
   try {
     const openAiResponse = await fetch('https://api.openai.com/v1/responses', {
       method: 'POST',
+      signal: AbortSignal.timeout(120_000),
       headers: {
         Authorization: `Bearer ${openAiKey}`,
         'Content-Type': 'application/json',
@@ -319,7 +363,7 @@ Deno.serve(async (req: Request) => {
       body: JSON.stringify({
         model: OPENAI_MODEL,
         reasoning: { effort: 'low' },
-        max_output_tokens: request.operation === 'project-edit' || request.operation === 'project-add' ? 4000 : MAX_OUTPUT_TOKENS,
+        max_output_tokens: request.operation === 'project-edit' || request.operation === 'project-add' || request.text.length > 2_000 ? 4000 : request.operation === 'draft-page' ? 2200 : MAX_OUTPUT_TOKENS,
         store: false,
         instructions: systemInstructions,
         input: buildInput(request),
@@ -328,24 +372,31 @@ Deno.serve(async (req: Request) => {
     });
 
     if (!openAiResponse.ok) {
-      if (openAiResponse.status === 429) return errorResponse('Bookez AI is busy. Try again shortly.', 503);
-      return errorResponse('Bookez AI could not complete that request. Please try again.', 502);
+      providerError = openAiResponse.status === 429 ? errorResponse('Bookez AI is busy. Try again shortly.', 503) : errorResponse('Bookez AI could not complete that request. Please try again.', 502);
+    } else {
+      const payload = await openAiResponse.json();
+      if (!isRecord(payload) || payload.status !== 'completed') {
+        providerError = errorResponse('Bookez AI did not finish this passage. Your credits for this request will be released; retry the unfinished page.', 502);
+      }
+      let generated: unknown;
+      try { if (!providerError) generated = JSON.parse(outputTextFrom(payload)); }
+      catch { providerError = errorResponse('Bookez AI returned an incomplete result. Please try again.', 502); }
+      if (!providerError) {
+        result = parseResult(generated);
+        if (!result) providerError = errorResponse('Bookez AI returned an invalid result. Please try again.', 502);
+        else if (request.operation === 'brainstorm' && result.ideas.length === 0) providerError = errorResponse('Bookez AI returned no ideas. Please try again.', 502);
+        else if ((request.operation === 'ask' || request.operation === 'project-scan') && !result.feedback.trim()) providerError = errorResponse('Bookez AI returned no feedback. Please try again.', 502);
+        else if (request.operation !== 'brainstorm' && request.operation !== 'ask' && request.operation !== 'project-scan' && result.options.length === 0) providerError = errorResponse('Bookez AI returned no writing preview. Please try again.', 502);
+        else completed = true;
+      }
     }
-
-    const payload = await openAiResponse.json();
-    let generated: unknown;
-    try {
-      generated = JSON.parse(outputTextFrom(payload));
-    } catch {
-      return errorResponse('Bookez AI returned an incomplete result. Please try again.', 502);
-    }
-    const result = parseResult(generated);
-    if (!result) return errorResponse('Bookez AI returned an invalid result. Please try again.', 502);
-    if (request.operation === 'brainstorm' && result.ideas.length === 0) return errorResponse('Bookez AI returned no ideas. Please try again.', 502);
-    if ((request.operation === 'ask' || request.operation === 'project-scan') && !result.feedback.trim()) return errorResponse('Bookez AI returned no feedback. Please try again.', 502);
-    if (request.operation !== 'brainstorm' && request.operation !== 'ask' && request.operation !== 'project-scan' && result.options.length === 0) return errorResponse('Bookez AI returned no writing preview. Please try again.', 502);
-    return jsonResponse(result);
   } catch {
-    return errorResponse('Bookez AI could not complete that request. Please try again.', 502);
+    providerError = errorResponse('Bookez AI could not complete that request. Please try again.', 502);
   }
+  const { error: finishError } = await admin.rpc('finish_ai_credits', { p_request_id: requestId, p_success: completed });
+  if (finishError) return errorResponse('Bookez AI credit settlement is unavailable. Please try again.', 503);
+  if (providerError || !result) return providerError ?? errorResponse('Bookez AI could not complete that request.', 502);
+  const { data: usage, error: usageError } = await admin.rpc('get_ai_usage', { p_user_id: userResult.user.id });
+  if (usageError || !isRecord(usage)) return errorResponse('Bookez AI usage is unavailable.', 503);
+  return jsonResponse({ ...result, usage });
 });

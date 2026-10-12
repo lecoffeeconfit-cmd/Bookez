@@ -1,5 +1,6 @@
-import Svg, { Circle, Defs, Ellipse, G, LinearGradient as SvgLinearGradient, Path, Stop } from 'react-native-svg';
-import type { StyleProp, ViewStyle } from 'react-native';
+import { useEffect, useId, useRef } from 'react';
+import { Animated, Easing, StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
+import Svg, { Circle, ClipPath, Defs, Ellipse, G, LinearGradient as SvgLinearGradient, Path, Stop } from 'react-native-svg';
 import { bookezColors, bookezWithAlpha } from '../../theme/bookez';
 
 type ArtProps = {
@@ -43,18 +44,92 @@ export function BookezWritingDesk({ width = 160, height = 96, color = artDefault
   </Svg>;
 }
 
-export function BookezOpenBook({ width = 154, height = 94, color = artDefaults.color, accent = artDefaults.accent, strokeWidth = artDefaults.strokeWidth, style }: ArtProps) {
-  return <Svg width={width} height={height} viewBox="0 0 154 94" style={style} accessible={false}>
-    <G fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
-      <Path d="M77 77C61 68 45 66 22 70V18c22-4 38-1 55 8zm0 0c16-9 32-11 55-7V18c-22-4-38-1-55 8z" fill={accent} fillOpacity={0.1} />
-      <Path d="M77 27v50M28 28c15-2 29 0 42 6m-42 4c14-2 28 0 42 6m-42 4c14-2 28 0 42 6m78-26c-15-2-29 0-42 6m42 4c-14-2-28 0-42 6m42 4c-14-2-28 0-42 6" />
-      <Path d="M24 21c17-3 34-1 49 6m-48 45c17-3 33 0 49 8m56-59c-17-3-34-1-49 6m48 45c-17-3-33 0-49 8" stroke={accent} strokeWidth={strokeWidth * 0.72} strokeOpacity={0.62} />
-      <Path d="m33 53 10-8m-5 12 11-9m-6 13 12-10m47-1 10 8m-5-12 11 9m-6-13 12 10" strokeWidth={strokeWidth * 0.68} strokeOpacity={0.28} />
-      <Path d="M25 70c19-4 35-1 52 8 17-9 33-12 52-8M22 18l-5-5m115 5 5-5" stroke={accent} />
-      <Path d="M107 11c7-6 15-8 24-8-5 8-11 13-20 15m-4-7 18-5m-18 5 2 67" stroke={accent} />
-      <Path d="m109 77-3 8 7-6" stroke={accent} />
-    </G>
-  </Svg>;
+export function BookezOpenBook({ width = 154, height = 94, color = artDefaults.color, accent = artDefaults.accent, strokeWidth = artDefaults.strokeWidth, style, animated = false }: ArtProps & { animated?: boolean }) {
+  const id = `bookezOpen-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`;
+  const writing = useRef(new Animated.Value(0)).current;
+  const detailed = width >= 64;
+  const animateQuill = animated && detailed;
+  const leftPage = 'M21 22C41 16 60 21 77 31V78C60 69 41 66 21 71Z';
+  const rightPage = 'M77 31C94 21 113 16 134 22V71C113 66 94 69 77 78Z';
+
+  useEffect(() => {
+    writing.setValue(animateQuill ? 0 : 0.5);
+    if (!animateQuill) return;
+    const animation = Animated.loop(Animated.sequence([
+      Animated.timing(writing, { toValue: 1, duration: 1700, easing: Easing.inOut(Easing.sin), useNativeDriver: true, isInteraction: false }),
+      Animated.timing(writing, { toValue: 0, duration: 2100, easing: Easing.inOut(Easing.sin), useNativeDriver: true, isInteraction: false }),
+    ]));
+    animation.start();
+    return () => { animation.stop(); };
+  }, [animateQuill, writing]);
+
+  return <View pointerEvents="none" style={[{ width, height }, style]} accessible={false}>
+    <Svg width="100%" height="100%" viewBox="0 0 154 94" accessible={false}>
+      <Defs>
+        <SvgLinearGradient id={`${id}-left`} x1="0%" y1="0%" x2="100%" y2="0%">
+          <Stop offset="0" stopColor={bookezColors.surfaceRaised} />
+          <Stop offset="0.68" stopColor={bookezColors.white} />
+          <Stop offset="1" stopColor={bookezColors.manuscriptEdge} />
+        </SvgLinearGradient>
+        <SvgLinearGradient id={`${id}-right`} x1="0%" y1="0%" x2="100%" y2="0%">
+          <Stop offset="0" stopColor={bookezColors.manuscriptEdge} />
+          <Stop offset="0.28" stopColor={bookezColors.white} />
+          <Stop offset="1" stopColor={bookezColors.surfaceRaised} />
+        </SvgLinearGradient>
+        <ClipPath id={`${id}-left-clip`}><Path d={leftPage} /></ClipPath>
+        <ClipPath id={`${id}-right-clip`}><Path d={rightPage} /></ClipPath>
+      </Defs>
+
+      <Ellipse cx="77" cy="86" rx="58" ry="5" fill={bookezColors.shadowWarm} fillOpacity={0.12} />
+      <G stroke={color} strokeLinecap="round" strokeLinejoin="round">
+        <Path d="M17 26C39 19 60 23 77 33C94 23 115 19 138 26V78C116 72 96 76 80 86Q77 88 74 86C58 76 38 72 17 78Z" fill={accent} strokeWidth={strokeWidth * 1.15} />
+        <Path d="M21 29C41 23 60 27 77 37C94 27 113 23 134 29V74C113 69 94 73 77 83C60 73 41 69 21 74Z" fill={bookezColors.manuscriptEdge} strokeWidth={strokeWidth * 0.8} />
+        <Path d="M104 72L105 87L110 84L115 88L113 71Z" fill={bookezColors.secondaryAccent} stroke={bookezColors.goldDark} strokeWidth={strokeWidth * 0.6} />
+        <Path d="M22 73C42 68 60 72 77 81C94 72 113 68 133 73" fill="none" stroke={bookezColors.goldDark} strokeWidth={strokeWidth * 0.65} strokeOpacity={0.65} />
+        <Path d={leftPage} fill={`url(#${id}-left)`} strokeWidth={strokeWidth * 1.1} />
+        <Path d={rightPage} fill={`url(#${id}-right)`} strokeWidth={strokeWidth * 1.1} />
+        <Path d="M74 31C76 45 76 63 77 78C78 63 78 45 80 31" fill={accent} fillOpacity={0.14} stroke="none" />
+        <Path d="M77 32V78" fill="none" strokeWidth={strokeWidth * 0.8} strokeOpacity={0.65} />
+      </G>
+
+      <G fill="none" stroke={color} strokeWidth={strokeWidth * 0.8} strokeLinecap="round" strokeOpacity={0.66}>
+        <G clipPath={`url(#${id}-left-clip)`}>
+          <Path d="M29 33C43 30 56 32 68 37M29 42C44 39 57 41 68 46M29 51C42 48 55 50 65 54M29 60C40 58 50 60 58 63" />
+        </G>
+        <G clipPath={`url(#${id}-right-clip)`}>
+          <Path d="M87 37C99 32 112 30 126 33M87 46C99 41 112 39 126 42M89 54C100 50 113 48 126 51M96 61C106 58 117 58 126 60" />
+        </G>
+      </G>
+      {detailed && <G fill="none" stroke={bookezColors.white} strokeWidth={strokeWidth * 0.7} strokeLinecap="round" strokeOpacity={0.9}>
+        <Path d="M25 25C43 20 59 25 71 31M83 31C97 24 114 20 130 25" />
+        <Path d="M23 76C41 72 59 76 72 83M82 83C95 76 113 72 132 76" strokeOpacity={0.55} />
+      </G>}
+    </Svg>
+
+    {detailed && <Animated.View style={[StyleSheet.absoluteFill, { transform: [
+      { translateX: (101 / 154 - 0.5) * width },
+      { translateY: (57 / 94 - 0.5) * height },
+      { rotate: writing.interpolate({ inputRange: [0, 1], outputRange: ['-3deg', '3deg'] }) },
+      { translateX: -(101 / 154 - 0.5) * width },
+      { translateY: -(57 / 94 - 0.5) * height },
+    ] }]}>
+      <Svg width="100%" height="100%" viewBox="0 0 154 94" accessible={false}>
+        <Defs>
+          <SvgLinearGradient id={`${id}-feather`} x1="0%" y1="0%" x2="100%" y2="100%">
+            <Stop offset="0" stopColor={bookezColors.white} />
+            <Stop offset="0.5" stopColor={bookezColors.secondaryAccentSoft} />
+            <Stop offset="1" stopColor={accent} />
+          </SvgLinearGradient>
+        </Defs>
+        <G strokeLinecap="round" strokeLinejoin="round">
+          <Path d="M107 47C106 35 114 22 129 13C136 9 142 7 147 7C143 15 144 24 137 32C129 40 117 45 107 47Z" fill={`url(#${id}-feather)`} stroke={accent} strokeWidth={strokeWidth} />
+          <Path d="M101 57C113 38 128 21 142 11M113 38L113 30M119 31L120 23M124 26L135 23M117 35L129 32" fill="none" stroke={bookezColors.goldDark} strokeWidth={strokeWidth * 0.7} />
+          <Path d="M101 57L104 50L107 53Z" fill={color} stroke={color} strokeWidth={strokeWidth * 0.6} />
+          <Path d="M103 48L108 51" fill="none" stroke={accent} strokeWidth={strokeWidth * 1.7} />
+        </G>
+      </Svg>
+    </Animated.View>}
+  </View>;
 }
 
 export function BookezPlanningFolio({ width = 154, height = 94, color = artDefaults.color, accent = artDefaults.accent, strokeWidth = artDefaults.strokeWidth, style }: ArtProps) {

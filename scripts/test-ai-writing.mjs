@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
-const operations = ['continue', 'improve', 'rewrite', 'expand', 'shorten', 'grammar', 'match-style', 'notes-to-prose', 'brainstorm', 'ask'];
+const operations = ['draft-page', 'continue', 'improve', 'rewrite', 'expand', 'shorten', 'grammar', 'match-style', 'notes-to-prose', 'brainstorm', 'ask'];
 const component = await readFile(new URL('../src/components/AIWritingTools.tsx', import.meta.url), 'utf8');
 const service = await readFile(new URL('../src/lib/ai-writing.ts', import.meta.url), 'utf8');
 const swift = await readFile(new URL('../modules/bookez-ai-writing/ios/BookezAIWritingModule.swift', import.meta.url), 'utf8');
@@ -23,7 +23,8 @@ assert.match(service, /requireOptionalNativeModule\('BookezAIWriting'\)/, 'The c
 assert.match(service, /providerRoute\(preference/, 'Provider routing must be centralized.');
 assert.match(service, /if \(route === 'unavailable'\) throw/, 'Phone-only mode must not silently spend cloud credits.');
 assert.match(service, /if \(provider === 'device'\)/, 'A resolved phone request must call the native model.');
-assert.match(component, /if \(provider === 'cloud'\) await recordUsage\(mode, providerPreference === 'auto'\)/, 'Only cloud requests should consume Bookez credits, with the automatic reserve protected.');
+assert.match(component, /if \(provider === 'cloud'\) \{[\s\S]*?saveCloudAIUsage\(result\.usage\.month, result\.usage\.usedCredits\)/, 'Cloud calls should reconcile against server usage.');
+assert.match(component, /insertionTargetRef\.current = \{ partKey, sourceText: text, cursor: cursorPosition \}/, 'A preview should preserve its target manuscript and cursor.');
 for (const operation of ['project-scan', 'project-edit', 'project-add']) {
   assert.ok(swift.includes(`"${operation}":`), `Apple on-device AI should handle ${operation}.`);
   assert.ok(kotlin.includes(`"${operation}" ->`), `Android on-device AI should handle ${operation}.`);

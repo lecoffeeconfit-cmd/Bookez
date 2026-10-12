@@ -16,6 +16,7 @@ import * as Notifications from 'expo-notifications';
 import * as SplashScreen from 'expo-splash-screen';
 import { Fragment, type Dispatch, type ReactNode, type SetStateAction, useEffect, useMemo, useRef, useState } from 'react';
 import { AccessibilityInfo, ActivityIndicator, Alert, Animated, AppState, Easing, Image, Keyboard, KeyboardAvoidingView, Modal, Platform, Pressable, SafeAreaView, ScrollView, Share, StyleSheet, Text, TextInput, View, useWindowDimensions, type StyleProp, type TextStyle, type ViewStyle } from 'react-native';
+import Svg, { Path } from 'react-native-svg';
 import * as Sentry from '@sentry/react-native';
 import { supabase } from './src/lib/supabase';
 import { bookezSecureStorage } from './src/lib/secure-storage';
@@ -27,16 +28,17 @@ import DictationInput from './src/components/DictationInput';
 import ManuscriptSizeControl, { manuscriptHeight, type ManuscriptSize } from './src/components/ManuscriptSizeControl';
 import AIWritingTools from './src/components/AIWritingTools';
 import AIProjectTools from './src/components/AIProjectTools';
+import { insertAIProse, isAIPreviewCurrent, type AIInsertPlacement, type AIPreviewTarget } from './src/lib/ai-drafting';
 import EditorMode, { EditorIssueComposer } from './src/components/EditorMode';
 import BookProgressDock, { type ProgressDockMode } from './src/components/BookProgressDock';
 import WriteToolBelt, { sanitizeWriteToolBeltConfig, WRITE_TOOL_BELT_STORAGE_KEY, WRITE_TOOL_DEFAULTS, type WriteToolBeltConfig, type WriteToolDefinition } from './src/components/WriteToolBelt';
 import { BookezButton, BookezIcon, BookezInkReveal, useBookezReduceMotion } from './src/components/BookezUI';
-import { BookezAchievementSeal, BookezBookmark, BookezCommunityMark, BookezDefaultCover, BookezFlourish, BookezJourneyMarker, BookezManuscript, BookezManuscriptFolio, BookezMysticIcon, BookezOpenBook, BookezPlanningFolio, BookezPlanningLeaf, BookezPublishingBook, BookezQuill, BookezWritingDesk } from './src/components/bookez-art';
+import { BookezAchievementSeal, BookezBookmark, BookezBookStack, BookezCommunityMark, BookezDefaultCover, BookezFlourish, BookezJourneyMarker, BookezManuscript, BookezManuscriptFolio, BookezMysticIcon, BookezOpenBook, BookezPlanningFolio, BookezPlanningLeaf, BookezPublishingBook, BookezQuill, BookezWritingDesk } from './src/components/bookez-art';
 import JourneyEnvironment from './src/components/JourneyEnvironment';
 import type { AIWritingOperation } from './src/lib/ai-writing';
 import { memoryText, projectFingerprint, type AIProjectChange, type AIProjectMemory, type AIProjectPart } from './src/lib/ai-project';
 import { AI_USAGE_POLICY, AI_USAGE_STORAGE_KEY, aiUsageCooldownLabel, aiUsageCooldownRemaining, aiUsageMonthKey, type AIUsageLedger } from './src/lib/ai-usage';
-import { bookezAuthCallbackErrorMessage, deleteBookezAccount, ensureBookezProfile, handleBookezAuthUrl, isBookezPasswordValid, markBookezOnboardingCompleted, resendSignupConfirmation, sendPasswordReset, signInWithApple, signInWithEmail, signInWithOAuthProvider, signOutBookez, signUpWithEmail, updateBookezPassword } from './src/lib/bookez-auth';
+import { bookezAuthCallbackErrorMessage, bookezAuthErrorMessage, deleteBookezAccount, ensureBookezProfile, handleBookezAuthUrl, isBookezPasswordValid, markBookezOnboardingCompleted, resendSignupConfirmation, sendPasswordReset, signInWithApple, signInWithEmail, signInWithOAuthProvider, signOutBookez, signUpWithEmail, updateBookezPassword } from './src/lib/bookez-auth';
 import type { Provider } from '@supabase/supabase-js';
 import { bookezImageModerationErrorMessage, pickModeratedBookezImage, type BookezImagePurpose } from './src/lib/bookez-image-moderation';
 import { moderateAndUploadBookezProfileAvatar, profileAvatarErrorMessage } from './src/lib/bookez-profile-avatar';
@@ -503,7 +505,7 @@ const normalizeReminderTime = (value: string): string | null => {
   return null;
 };
 
-type DailyWritingActivity = { words: number; pages: number; completion: number; minutes: number; dictationUses: number; writingUses: number; dictationWords?: number; dictationMinutes?: number; chapters?: number; completedPartKeys?: string[] };
+type DailyWritingActivity = { words: number; pages: number; completion: number; minutes: number; dictationUses: number; writingUses: number; aiWords?: number; aiPages?: number; dictationWords?: number; dictationMinutes?: number; chapters?: number; completedPartKeys?: string[] };
 
 type BookStudioAppearance = { fontSize: number; paragraphSpacing: number; lineSpacing: number; headingStyle: 'classic' | 'modern'; alignment: 'left' | 'center' };
 type BookStudioState = {
@@ -2634,6 +2636,8 @@ function addActivity(plan: ProjectPlan, changes: ActivityChanges, timestamp = Da
       minutes: Math.max(0, current.minutes + (changes.minutes ?? 0)),
       dictationUses: Math.max(0, current.dictationUses + (changes.dictationUses ?? 0)),
       writingUses: Math.max(0, current.writingUses + (changes.writingUses ?? 0)),
+      aiWords: Math.max(0, (current.aiWords ?? 0) + (changes.aiWords ?? 0)),
+      aiPages: Math.max(0, (current.aiPages ?? 0) + (changes.aiPages ?? 0)),
       dictationWords: Math.max(0, (current.dictationWords ?? 0) + (changes.dictationWords ?? 0)),
       dictationMinutes: Math.max(0, (current.dictationMinutes ?? 0) + (changes.dictationMinutes ?? 0)),
       chapters: Math.max(current.chapters ?? 0, nextCompletedPartKeys.length, changes.chapters ?? 0),
@@ -5162,16 +5166,18 @@ function Write({ projects, activeProject, userId, onOpenWritingBook, onUpdatePro
     setCustomWritingMinutes(project.plan?.customWritingMinutes ?? '20');
     setCustomBreakMinutes(project.plan?.customBreakMinutes ?? '5');
   };
-  const updateDraft = (value: string) => {
+  const updateDraft = (value: string, source: 'writer' | 'ai' | 'undo-ai' = 'writer') => {
     if (!activePart) return;
     const currentPlan = latestPlans.current[activeProject] ?? currentProject.plan ?? defaultPlanFor(currentProject.type);
     const previousValue = currentPlan.drafts[activePart.key] || '';
-    const wordDelta = Math.max(0, countWords(value) - countWords(previousValue));
-    if (dictationActive.current) dictationWordsThisSession.current += wordDelta;
+    const wordDelta = source === 'undo-ai'
+      ? Math.min(0, countWords(value) - countWords(previousValue))
+      : Math.max(0, countWords(value) - countWords(previousValue));
+    if (source === 'writer' && dictationActive.current) dictationWordsThisSession.current += wordDelta;
     const nextDrafts = { ...currentPlan.drafts, [activePart.key]: value };
     const nextCompletedPartCount = requiredParts.filter((part) => Boolean((part.key === activePart.key ? value : currentPlan.drafts[part.key])?.trim())).length;
     const nextCompletionPercent = requiredParts.length ? Math.round((nextCompletedPartCount / requiredParts.length) * 100) : 0;
-    const nextActivity = addActivity(currentPlan, { words: wordDelta, pages: wordDelta / 250, completion: nextCompletionPercent, minutes: consumeActiveMinutes(), writingUses: pendingWritingUses.current });
+    const nextActivity = addActivity(currentPlan, { words: wordDelta, pages: wordDelta / 250, aiWords: source === 'ai' || source === 'undo-ai' ? wordDelta : 0, aiPages: source === 'ai' || source === 'undo-ai' ? wordDelta / 250 : 0, completion: nextCompletionPercent, minutes: consumeActiveMinutes(), writingUses: pendingWritingUses.current });
     pendingWritingUses.current = 0;
     const checkpointBaseline = lastAutoCheckpoint.current?.partKey === activePart.key ? lastAutoCheckpoint.current.text : previousValue;
     const shouldAutoCheckpoint = Boolean(value.trim()) && (draftChangeSize(checkpointBaseline, value) >= 650 || Math.abs(countWords(value) - countWords(checkpointBaseline)) >= 120);
@@ -5228,34 +5234,39 @@ function Write({ projects, activeProject, userId, onOpenWritingBook, onUpdatePro
       ? { text: trimmedParagraph, start: paragraphStart + leadingWhitespace, end: paragraphStart + leadingWhitespace + trimmedParagraph.length }
       : { text: value, start: 0, end: value.length };
   };
-  const replaceEditorTarget = (original: string, replacement: string, requestedTarget?: string) => {
-    if (!activePart) return;
-    const value = plan.drafts[activePart.key] || '';
+  const replaceEditorTarget = (original: string, replacement: string, requestedTarget?: string, previewTarget?: AIPreviewTarget): boolean => {
+    if (!activePart) return false;
+    const currentPlan = latestPlans.current[activeProject] ?? currentProject.plan ?? defaultPlanFor(currentProject.type);
+    const value = currentPlan.drafts[activePart.key] || '';
+    if (previewTarget && !isAIPreviewCurrent(activePart.key, value, previewTarget)) return false;
     const target = getEditorTarget();
     const requestedStart = requestedTarget ? value.indexOf(requestedTarget) : -1;
-    const start = value.slice(target.start, target.end) === original
+    const start = previewTarget ? previewTarget.start : value.slice(target.start, target.end) === original
       ? target.start
       : requestedTarget && requestedStart >= 0 && value.slice(requestedStart, requestedStart + original.length) === original
         ? requestedStart
         : value.indexOf(original);
-    if (start < 0) return;
+    if (start < 0 || value.slice(start, start + original.length) !== original) return false;
     const nextValue = `${value.slice(0, start)}${replacement}${value.slice(start + original.length)}`;
     checkpointCurrentDraft(activePart, 'Before an AI edit');
     setLastAIEdit({ before: value, after: nextValue });
-    updateDraft(nextValue);
+    updateDraft(nextValue, 'ai');
     setEditorSelection({ start, end: start + replacement.length });
+    return true;
   };
-  const insertAIWriting = (valueToInsert: string) => {
-    if (!activePart) return;
-    const value = plan.drafts[activePart.key] || '';
-    const point = Math.max(0, Math.min(editorCursor, value.length));
-    const prefix = value.slice(0, point);
-    const separator = prefix.trim() && !/\s$/.test(prefix) ? '\n\n' : '';
-    const next = `${prefix}${separator}${valueToInsert}${value.slice(point)}`;
+  const insertAIWriting = (valueToInsert: string, placement: AIInsertPlacement, target: { partKey: string; sourceText: string; cursor: number }): boolean => {
+    if (!activePart || activePart.key !== target.partKey) return false;
+    const currentPlan = latestPlans.current[activeProject] ?? currentProject.plan ?? defaultPlanFor(currentProject.type);
+    const value = currentPlan.drafts[activePart.key] || '';
+    if (value !== target.sourceText) return false;
+    const inserted = insertAIProse(value, valueToInsert, placement, target.cursor);
+    if (!inserted) return false;
+    const next = inserted.text;
     checkpointCurrentDraft(activePart, 'Before an AI insertion');
     setLastAIEdit({ before: value, after: next });
-    updateDraft(next);
-    setEditorSelection({ start: point + separator.length, end: point + separator.length + valueToInsert.length });
+    updateDraft(next, 'ai');
+    setEditorSelection({ start: inserted.start, end: inserted.end });
+    return true;
   };
   const useAIWritingNote = (value: string) => {
     if (!activePart) return;
@@ -5268,7 +5279,7 @@ function Write({ projects, activeProject, userId, onOpenWritingBook, onUpdatePro
       Alert.alert('Keep your recent writing', 'Undo is available immediately after an AI edit, before you make other changes.');
       return;
     }
-    updateDraft(lastAIEdit.before);
+    updateDraft(lastAIEdit.before, 'undo-ai');
     setLastAIEdit(null);
   };
   const updatePartNote = (value: string) => {
@@ -5312,7 +5323,10 @@ function Write({ projects, activeProject, userId, onOpenWritingBook, onUpdatePro
       const part = parts.find((item) => item.key === change.key);
       return part && change.before.trim() ? [makeDraftVersion(part, change.before, true, 'Before project AI change')] : [];
     });
-    const nextPlan: ProjectPlan = { ...currentPlan, drafts: nextDrafts, draftVersions: [...versions, ...(currentPlan.draftVersions ?? [])].slice(0, 30), aiProjectUndo: { createdAt: Date.now(), changes } };
+    const addedWords = changes.reduce((total, change) => total + Math.max(0, countWords(change.after) - countWords(change.before)), 0);
+    const completed = requiredParts.filter((part) => Boolean(nextDrafts[part.key]?.trim())).length;
+    const activity = addActivity(currentPlan, { words: addedWords, pages: addedWords / 250, aiWords: addedWords, aiPages: addedWords / 250, completion: requiredParts.length ? Math.round(completed / requiredParts.length * 100) : 0 });
+    const nextPlan: ProjectPlan = { ...currentPlan, drafts: nextDrafts, activity, draftVersions: [...versions, ...(currentPlan.draftVersions ?? [])].slice(0, 30), aiProjectUndo: { createdAt: Date.now(), changes } };
     latestPlans.current[activeProject] = nextPlan;
     onUpdateProject(activeProject, { plan: nextPlan });
     return true;
@@ -5332,7 +5346,8 @@ function Write({ projects, activeProject, userId, onOpenWritingBook, onUpdatePro
         if (backup.changes.some((change) => (latest.drafts[change.key] ?? '') !== change.after)) return;
         const drafts = { ...latest.drafts };
         backup.changes.forEach((change) => { drafts[change.key] = change.before; });
-        const nextPlan: ProjectPlan = { ...latest, drafts, aiProjectUndo: undefined };
+        const removedWords = backup.changes.reduce((total, change) => total + Math.max(0, countWords(change.after) - countWords(change.before)), 0);
+        const nextPlan: ProjectPlan = { ...latest, drafts, activity: addActivity(latest, { words: -removedWords, pages: -removedWords / 250, aiWords: -removedWords, aiPages: -removedWords / 250 }), aiProjectUndo: undefined };
         latestPlans.current[activeProject] = nextPlan;
         onUpdateProject(activeProject, { plan: nextPlan });
       } },
@@ -5652,7 +5667,7 @@ function Write({ projects, activeProject, userId, onOpenWritingBook, onUpdatePro
         <View style={writeEditorialS.writeManuscriptProjectCopy}><Text numberOfLines={1} style={writeEditorialS.writeManuscriptProjectTitle}>{currentProject.title.toUpperCase()}</Text><Text numberOfLines={1} style={writeEditorialS.writeManuscriptProjectMeta}>{currentProject.type} · {completed ? 'Manuscript ready' : activeProgressLabel}</Text></View>
         <Text style={writeEditorialS.writeManuscriptProjectArrow}>›</Text>
       </Pressable>
-      {parts.length > 0 && <View style={writeEditorialS.writeManuscriptProgress}><View style={s.writeProgressTop}><Text style={[s.writeProgressValue, writeEditorialS.writeManuscriptProgressValue]}>{completionPercent}%</Text><Text style={[s.writeProgressLabel, writeEditorialS.writeManuscriptProgressLabel]}>COMPLETE</Text></View><View style={[s.writeProgressTrack, writeEditorialS.writeManuscriptProgressTrack]}><View style={[s.writeProgressFill, writeEditorialS.writeManuscriptProgressFill, { width: `${completionPercent}%` }]} /></View></View>}
+      {parts.length > 0 && <View style={writeEditorialS.writeManuscriptProgress}><View style={s.writeProgressTop}><Text style={[s.writeProgressValue, writeEditorialS.writeManuscriptProgressValue]}>{completionPercent}%</Text><Text style={[s.writeProgressLabel, writeEditorialS.writeManuscriptProgressLabel]}>COMPLETE</Text></View><View style={[s.writeProgressTrack, writeEditorialS.writeManuscriptProgressTrack]}><View style={[s.writeProgressFill, writeEditorialS.writeManuscriptProgressFill, { width: `${completionPercent}%` }]} /></View>{(todayWritingActivity.aiWords ?? 0) > 0 && <Text style={[s.writeProgressLabel, writeEditorialS.writeManuscriptProgressLabel]}>AI added {formatCount(todayWritingActivity.aiWords ?? 0)} words today · included in manuscript progress</Text>}</View>}
       {activePart && !completed && <Pressable onPress={continueWriting} style={s.writeContinueButton} accessibilityRole="button" accessibilityLabel="Continue writing" accessibilityHint="Focuses the current manuscript and places the cursor at the end."><LinearGradient pointerEvents="none" colors={[bookezColors.accentStrong, bookezColors.accent]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={StyleSheet.absoluteFill} /><View style={s.writeContinueCopy}><Text style={s.writeContinueLabel}>CONTINUE WRITING</Text><Text style={s.writeContinueHint}>{activeProgressLabel}</Text></View><Text style={s.writeContinueArrow}>→</Text></Pressable>}
       <WriteCompletionSeal signal={completionSealSignal} />
     </BookezInkReveal>
@@ -5672,7 +5687,7 @@ function Write({ projects, activeProject, userId, onOpenWritingBook, onUpdatePro
         {notesOpen && <View style={[s.writeAssistPanel, s.writeAssistPanelNotes]}><View style={s.writeAssistPanelHeader}><Text style={s.writeAssistPanelTitle}>YOUR PRIVATE NOTES</Text><Text style={s.writeAssistPanelHint}>{contextNotes.length ? `${contextNotes.length} pieces of context available · Compass may use these as guidance` : 'Editable thoughts for you; Compass can use them as context'}</Text></View>{contextNotes.length ? contextNotes.map((note) => <View key={note.label} style={s.writeNoteRow}><Text style={s.writeNoteLabel}>{note.label}</Text><Text style={s.writeNoteText}>{note.value}</Text></View>) : <Text style={s.writeNotesEmpty}>No notes yet. Add a thought to keep beside this part.</Text>}{plan.partNotes[activePart.key]?.trim() && <View style={[s.writeSavedNote, s.writeAssistNoteInset]}><Text style={s.writeSavedNoteLabel}>YOUR NOTE</Text><Text style={s.writeSavedNoteText}>{compactNote(plan.partNotes[activePart.key])}</Text></View>}<View style={[s.writeQuickNote, s.writeAssistNoteInset]}><Text style={s.writeQuickNoteLabel}>PRIVATE NOTE FOR THIS PART</Text><DictationInput editorial value={plan.partNotes[activePart.key] || ''} onChangeText={updatePartNote} placeholder="Capture an idea for yourself…" placeholderTextColor="#667A60" multiline style={s.writeQuickNoteInput} accessibilityLabel="Private note for this part" /></View></View>}
         {compassOpen && <View style={[s.writeAssistPanel, s.writeAssistPanelCompass]}><View style={s.writeCompassHeader}><View style={s.writeCompassTitleRow}><View style={[s.writeCompassIcon, s.writeAssistIconCompass]}><Text style={s.writeCompassIconText}>⌁</Text></View><View><Text style={s.writeCompassKicker}>WRITING COMPASS</Text><Text style={s.writeCompassSub}>Generated guidance from your plan, notes, and draft</Text></View></View><Pressable onPress={refreshCompass} style={s.writeCompassRefresh} accessibilityLabel="Refresh writing compass"><Text style={s.writeCompassRefreshText}>Refresh</Text></Pressable></View><View style={s.writeCompassRow}><Text style={s.writeCompassLabel}>WHAT BELONGS HERE</Text><Text style={s.writeCompassText}>{compass.belongs}</Text></View><View style={s.writeCompassRow}><Text style={s.writeCompassLabel}>YOUR NEXT STEP</Text><Text style={s.writeCompassText}>{compass.next}</Text></View><View style={s.writeCompassRow}><Text style={s.writeCompassLabel}>KEEP IN MIND</Text><Text style={s.writeCompassText}>{compass.keep}</Text></View></View>}
       </View>
-      <View style={s.writeEditorCard}><View style={s.writeEditorTop}><View style={s.writeEditorLabelGroup}><Text style={s.writeEditorLabel}>YOUR MANUSCRIPT</Text><Pressable onPress={() => setContextOpen(true)} style={s.writeContextButton} accessibilityLabel="Open writing context"><Text style={s.writeContextIcon}>◈</Text><Text style={s.writeContextText}>Context</Text></Pressable>{(editorHasSelection || writingFlags.length > 0) && <Pressable onPress={openFlagComposer} style={[s.writeFlagButton, editorHasSelection && s.writeFlagButtonReady]} accessibilityRole="button" accessibilityLabel={editorHasSelection ? 'Flag selected passage' : 'Review writing flags'}><Text style={s.writeFlagButtonIcon}>⚑</Text>{openWritingFlagCount > 0 && <Text style={s.writeFlagCount}>{openWritingFlagCount}</Text>}</Pressable>}</View><View style={s.writeEditorHintGroup}>{versions.length > 0 && <Pressable onPress={() => openSessionPanel('versions')} style={s.writeRevertButton} accessibilityRole="button" accessibilityLabel="Open version history to revert a draft"><Text style={s.writeRevertIcon}>↶</Text><Text style={s.writeRevertText}>Revert</Text></Pressable>}<Text style={s.writeEditorHint}>Auto-saved · 🎙</Text></View></View><DictationInput editorial ref={editorInputRef} value={plan.drafts[activePart.key] || ''} selection={editorSelection.start >= 0 ? editorSelection : undefined} onChangeText={updateDraft} onSelectionChange={(event) => setEditorSelection(event.nativeEvent.selection)} onInputMode={recordInputMode} onDictationState={recordDictationState} placeholder={`Begin your ${activePart.title.toLowerCase()}…`} placeholderTextColor="#667A60" multiline scrollEnabled textAlignVertical="top" autoCorrect spellCheck style={[s.writeEditorInput, manuscriptViewportHeight !== undefined && { height: manuscriptViewportHeight, minHeight: manuscriptViewportHeight }]} accessibilityLabel={`${activePart.title} manuscript`} trailingAccessoryWidth={143} trailingAccessory={<View style={[s.writeEditorActionGroup, focusMode && s.focusHidden]}><View style={s.writeVisualAccessory}>{visualHintVisible && <View pointerEvents="none" style={s.writeVisualHintBubble}><Text style={s.writeVisualHintText}>Camera: learn how visuals work. Plus: add a photo or visual to this part.</Text></View>}<View style={s.writeVisualSplitControl}><Pressable onPress={showVisualHint} onLongPress={showVisualHint} delayLongPress={450} onHoverIn={showVisualHint} onHoverOut={() => { if (Platform.OS === 'web') setVisualHintVisible(false); }} style={s.writeVisualCameraButton} accessibilityRole="button" accessibilityLabel="Learn about adding visuals" accessibilityHint="Shows how visuals work."><Text style={s.writeVisualCameraIcon}>📷</Text></Pressable><Pressable onPress={addImage} disabled={!activePart} style={[s.writeVisualPlusButton, !activePart && s.writeButtonDisabled]} accessibilityRole="button" accessibilityLabel="Add a visual to this part" accessibilityHint="Adds a photo or visual to this part."><View style={s.writeVisualPlusContent}><Text style={s.writeVisualPlusIcon}>＋</Text>{activePartImages.length > 0 && <Text style={s.writeVisualSplitCount}>{activePartImages.length}</Text>}</View></Pressable></View></View><AIWritingTools editorial compact text={draftText} selectedText={getEditorTarget().text} hasSelection={editorHasSelection} cursorPosition={editorCursor} requestedTool={aiToolRequest} context={aiContext!} onReplace={replaceEditorTarget} onInsert={insertAIWriting} onUseAsNote={useAIWritingNote} /></View>} /><View style={s.writeTools}><Pressable onPress={() => updateDraftWithTool(polishWriting)} disabled={!plan.drafts[activePart.key]?.trim()} style={[s.writeToolButton, !plan.drafts[activePart.key]?.trim() && s.writeToolDisabled]} accessibilityLabel="Polish writing"><Text style={s.writeToolIcon}>✦</Text><Text style={s.writeToolText}>Polish</Text></Pressable><Pressable onPress={() => updateDraftWithTool(grammarWriting)} disabled={!plan.drafts[activePart.key]?.trim()} style={[s.writeToolButton, !plan.drafts[activePart.key]?.trim() && s.writeToolDisabled]} accessibilityLabel="Fix grammar"><Text style={s.writeToolIcon}>Aa</Text><Text style={s.writeToolText}>Grammar</Text></Pressable><Text style={s.writeToolHint}>Quick local cleanup</Text></View><ManuscriptSizeControl size={manuscriptSize} onChange={setManuscriptSize} />{activePartImages.length > 0 && <View style={s.writeVisualRail}><View style={s.writeVisualRailHeader}><Text style={s.writeVisualRailLabel}>VISUALS FOR THIS PART</Text><Text style={s.writeVisualRailCount}>{activePartImages.length} visual{activePartImages.length === 1 ? '' : 's'} attached</Text></View><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.writeVisualRailContent}>{activePartImages.map((image) => <View key={image.id} style={s.writeVisualThumb}><Image source={{ uri: image.uri }} style={s.writeVisualThumbImage} resizeMode="cover" /><View style={s.writeVisualThumbCopy}><Text numberOfLines={1} style={s.writeVisualThumbTitle}>{image.title || 'Untitled visual'}</Text><Text style={s.writeVisualThumbMeta}>{imagePlacementLabel(image.placement)}{image.referenceOnly ? ' · private' : ''}</Text></View></View>)}</ScrollView></View>}</View>
+      <View style={s.writeEditorCard}><View style={s.writeEditorTop}><View style={s.writeEditorLabelGroup}><Text style={s.writeEditorLabel}>YOUR MANUSCRIPT</Text><Pressable onPress={() => setContextOpen(true)} style={s.writeContextButton} accessibilityLabel="Open writing context"><Text style={s.writeContextIcon}>◈</Text><Text style={s.writeContextText}>Context</Text></Pressable>{(editorHasSelection || writingFlags.length > 0) && <Pressable onPress={openFlagComposer} style={[s.writeFlagButton, editorHasSelection && s.writeFlagButtonReady]} accessibilityRole="button" accessibilityLabel={editorHasSelection ? 'Flag selected passage' : 'Review writing flags'}><Text style={s.writeFlagButtonIcon}>⚑</Text>{openWritingFlagCount > 0 && <Text style={s.writeFlagCount}>{openWritingFlagCount}</Text>}</Pressable>}</View><View style={s.writeEditorHintGroup}>{versions.length > 0 && <Pressable onPress={() => openSessionPanel('versions')} style={s.writeRevertButton} accessibilityRole="button" accessibilityLabel="Open version history to revert a draft"><Text style={s.writeRevertIcon}>↶</Text><Text style={s.writeRevertText}>Revert</Text></Pressable>}<Text style={s.writeEditorHint}>Auto-saved · 🎙</Text></View></View><DictationInput editorial ref={editorInputRef} value={plan.drafts[activePart.key] || ''} selection={editorSelection.start >= 0 ? editorSelection : undefined} onChangeText={updateDraft} onSelectionChange={(event) => setEditorSelection(event.nativeEvent.selection)} onInputMode={recordInputMode} onDictationState={recordDictationState} placeholder={`Begin your ${activePart.title.toLowerCase()}…`} placeholderTextColor="#667A60" multiline scrollEnabled textAlignVertical="top" autoCorrect spellCheck style={[s.writeEditorInput, manuscriptViewportHeight !== undefined && { height: manuscriptViewportHeight, minHeight: manuscriptViewportHeight }]} accessibilityLabel={`${activePart.title} manuscript`} trailingAccessoryWidth={143} trailingAccessory={<View style={[s.writeEditorActionGroup, focusMode && s.focusHidden]}><View style={s.writeVisualAccessory}>{visualHintVisible && <View pointerEvents="none" style={s.writeVisualHintBubble}><Text style={s.writeVisualHintText}>Camera: learn how visuals work. Plus: add a photo or visual to this part.</Text></View>}<View style={s.writeVisualSplitControl}><Pressable onPress={showVisualHint} onLongPress={showVisualHint} delayLongPress={450} onHoverIn={showVisualHint} onHoverOut={() => { if (Platform.OS === 'web') setVisualHintVisible(false); }} style={s.writeVisualCameraButton} accessibilityRole="button" accessibilityLabel="Learn about adding visuals" accessibilityHint="Shows how visuals work."><Text style={s.writeVisualCameraIcon}>📷</Text></Pressable><Pressable onPress={addImage} disabled={!activePart} style={[s.writeVisualPlusButton, !activePart && s.writeButtonDisabled]} accessibilityRole="button" accessibilityLabel="Add a visual to this part" accessibilityHint="Adds a photo or visual to this part."><View style={s.writeVisualPlusContent}><Text style={s.writeVisualPlusIcon}>＋</Text>{activePartImages.length > 0 && <Text style={s.writeVisualSplitCount}>{activePartImages.length}</Text>}</View></Pressable></View></View><AIWritingTools key={activePart.key} partKey={activePart.key} editorial compact text={draftText} selectedText={getEditorTarget().text} hasSelection={editorHasSelection} cursorPosition={editorCursor} requestedTool={aiToolRequest} context={aiContext!} onReplace={replaceEditorTarget} onInsert={insertAIWriting} onUseAsNote={useAIWritingNote} /></View>} /><View style={s.writeTools}><Pressable onPress={() => updateDraftWithTool(polishWriting)} disabled={!plan.drafts[activePart.key]?.trim()} style={[s.writeToolButton, !plan.drafts[activePart.key]?.trim() && s.writeToolDisabled]} accessibilityLabel="Polish writing"><Text style={s.writeToolIcon}>✦</Text><Text style={s.writeToolText}>Polish</Text></Pressable><Pressable onPress={() => updateDraftWithTool(grammarWriting)} disabled={!plan.drafts[activePart.key]?.trim()} style={[s.writeToolButton, !plan.drafts[activePart.key]?.trim() && s.writeToolDisabled]} accessibilityLabel="Fix grammar"><Text style={s.writeToolIcon}>Aa</Text><Text style={s.writeToolText}>Grammar</Text></Pressable><Text style={s.writeToolHint}>Quick local cleanup</Text></View><ManuscriptSizeControl size={manuscriptSize} onChange={setManuscriptSize} />{activePartImages.length > 0 && <View style={s.writeVisualRail}><View style={s.writeVisualRailHeader}><Text style={s.writeVisualRailLabel}>VISUALS FOR THIS PART</Text><Text style={s.writeVisualRailCount}>{activePartImages.length} visual{activePartImages.length === 1 ? '' : 's'} attached</Text></View><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.writeVisualRailContent}>{activePartImages.map((image) => <View key={image.id} style={s.writeVisualThumb}><Image source={{ uri: image.uri }} style={s.writeVisualThumbImage} resizeMode="cover" /><View style={s.writeVisualThumbCopy}><Text numberOfLines={1} style={s.writeVisualThumbTitle}>{image.title || 'Untitled visual'}</Text><Text style={s.writeVisualThumbMeta}>{imagePlacementLabel(image.placement)}{image.referenceOnly ? ' · private' : ''}</Text></View></View>)}</ScrollView></View>}</View>
       {currentProject.cloudId && <View style={[editorEntryS.writeRow, focusMode && s.focusHidden]}><Pressable onPress={openEditorFlagComposer} style={editorEntryS.writeFlag} accessibilityRole="button" accessibilityLabel={editorHasSelection ? 'Flag selected passage for Editor' : 'Flag this section for Editor'}><Text style={editorEntryS.writeFlagText}>⚑  {editorHasSelection ? 'Flag selection for Editor' : 'Review this section later'}</Text></Pressable><Pressable onPress={() => onOpenEditor(currentProject.cloudId!)} style={editorEntryS.writeOpen} accessibilityRole="button" accessibilityLabel="Open Editor"><Text style={editorEntryS.writeOpenText}>Open Editor →</Text></Pressable></View>}
       {lastAIEdit && <View style={s.writeAIUndo}><Text style={s.writeAIUndoText}>AI edit applied</Text><Pressable onPress={undoLastAIEdit} accessibilityRole="button" accessibilityLabel="Undo AI edit"><Text style={s.writeAIUndoAction}>Undo</Text></Pressable></View>}
       {activePart.kind === 'unit' && <View style={s.chapterEndCompactRow}><Pressable onPress={toggleChapterEnd} style={[s.chapterEndIconButton, chapterEndMarked && s.chapterEndIconButtonMarked]} accessibilityRole="button" accessibilityLabel={chapterEndMarked ? 'Unmark chapter end' : 'Mark chapter end'}><Text style={[s.chapterEndIconText, chapterEndMarked && s.chapterEndIconTextMarked]}>{chapterEndMarked ? '✓' : '·'}</Text></Pressable><Text style={s.chapterEndCompactLabel}>CHAPTER END</Text></View>}
@@ -7056,9 +7071,9 @@ function BookezLoadingScreen() {
       <View style={[loadingS.scrollRoll, loadingS.scrollRollTop]}><View style={loadingS.scrollRod} /></View>
       <View style={[loadingS.scrollRoll, loadingS.scrollRollBottom]}><View style={loadingS.scrollRod} /></View>
       <View style={loadingS.scrollFrame} />
-      <Animated.View style={[loadingS.loadingBook, { transform: [{ translateY: drift.interpolate({ inputRange: [0, 1], outputRange: [2, -4] }) }, { scale: drift.interpolate({ inputRange: [0, 1], outputRange: [0.98, 1.02] }) }] }] }>
+      <Animated.View style={[loadingS.loadingBook, { transform: [{ translateY: drift.interpolate({ inputRange: [0, 1], outputRange: [2, -4] }) }, { rotate: drift.interpolate({ inputRange: [0, 1], outputRange: ['-1.5deg', '1.5deg'] }) }, { scale: drift.interpolate({ inputRange: [0, 1], outputRange: [0.98, 1.02] }) }] }] }>
         <View style={loadingS.bookGlow} />
-        <BookezOpenBook width={128} height={79} color={bookezColors.textPrimary} accent={bookezColors.secondaryAccent} />
+        <BookezOpenBook width={128} height={79} color={bookezColors.textPrimary} accent={bookezColors.secondaryAccent} animated={!reduceMotion} />
       </Animated.View>
       <Text style={loadingS.kicker}>THE WRITING STUDIO</Text>
       <Text style={loadingS.wordmark}>BOOKEZ</Text>
@@ -7086,7 +7101,6 @@ function AuthSheet({ visible, onClose, signedInEmail, dismissible = true }: { vi
   const entrance = useRef(new Animated.Value(0)).current;
   const glow = useRef(new Animated.Value(0)).current;
   const scrollReveal = useRef(new Animated.Value(0)).current;
-  const quillDrift = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     if (!visible) return;
@@ -7094,12 +7108,10 @@ function AuthSheet({ visible, onClose, signedInEmail, dismissible = true }: { vi
     entrance.setValue(0);
     scrollReveal.setValue(0);
     glow.setValue(0);
-    quillDrift.setValue(0);
     if (reduceMotion) {
       entrance.setValue(1);
       scrollReveal.setValue(1);
       glow.setValue(0.5);
-      quillDrift.setValue(0.5);
       return;
     }
     const entranceAnimation = Animated.parallel([
@@ -7110,13 +7122,9 @@ function AuthSheet({ visible, onClose, signedInEmail, dismissible = true }: { vi
       Animated.timing(glow, { toValue: 1, duration: 2600, easing: Easing.inOut(Easing.sin), useNativeDriver: true, isInteraction: false }),
       Animated.timing(glow, { toValue: 0, duration: 2600, easing: Easing.inOut(Easing.sin), useNativeDriver: true, isInteraction: false }),
     ]));
-    const quillAnimation = Animated.loop(Animated.sequence([
-      Animated.timing(quillDrift, { toValue: 1, duration: 1900, easing: Easing.inOut(Easing.sin), useNativeDriver: true, isInteraction: false }),
-      Animated.timing(quillDrift, { toValue: 0, duration: 1900, easing: Easing.inOut(Easing.sin), useNativeDriver: true, isInteraction: false }),
-    ]));
-    entranceAnimation.start(); glowAnimation.start(); quillAnimation.start();
-    return () => { entranceAnimation.stop(); glowAnimation.stop(); quillAnimation.stop(); };
-  }, [entrance, glow, quillDrift, reduceMotion, scrollReveal, visible]);
+    entranceAnimation.start(); glowAnimation.start();
+    return () => { entranceAnimation.stop(); glowAnimation.stop(); };
+  }, [entrance, glow, reduceMotion, scrollReveal, visible]);
 
   const submit = async () => {
     setBusy(true); setMessage(''); setError('');
@@ -7140,7 +7148,7 @@ function AuthSheet({ visible, onClose, signedInEmail, dismissible = true }: { vi
         onClose();
       }
     } catch (caught) {
-      const caughtMessage = caught instanceof Error ? caught.message : 'We could not complete that request.';
+      const caughtMessage = bookezAuthErrorMessage(caught);
       if (caughtMessage.toLowerCase().includes('confirm')) setVerificationPending(true);
       setError(caughtMessage);
     } finally {
@@ -7176,7 +7184,7 @@ function AuthSheet({ visible, onClose, signedInEmail, dismissible = true }: { vi
         : await signInWithOAuthProvider(provider);
       if (signedIn) onClose();
     } catch (caught) {
-      const caughtMessage = caught instanceof Error ? caught.message : `${label} sign-in could not be completed.`;
+      const caughtMessage = bookezAuthErrorMessage(caught, `${label} sign-in could not be completed.`);
       setError(caughtMessage);
     } finally {
       setProviderBusy(null);
@@ -7194,24 +7202,31 @@ function AuthSheet({ visible, onClose, signedInEmail, dismissible = true }: { vi
         <KeyboardAvoidingView style={authS.keyboard} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <Animated.View style={[authS.sheet, { opacity: entrance, transform: [{ translateY: entrance.interpolate({ inputRange: [0, 1], outputRange: [34, 0] }) }] }]}>
             <LinearGradient colors={[bookezColors.background, bookezColors.surfaceRaised, bookezColors.manuscript]} style={StyleSheet.absoluteFill} />
-            <Animated.View style={[authS.orbOne, { transform: [{ translateY: glow.interpolate({ inputRange: [0, 1], outputRange: [0, 16] }) }, { scale: glow.interpolate({ inputRange: [0, 1], outputRange: [1, 1.08] }) }] }]} />
-            <Animated.View style={[authS.orbTwo, { transform: [{ translateY: glow.interpolate({ inputRange: [0, 1], outputRange: [14, 0] }) }] }]} />
             <View pointerEvents="none" style={authS.paperFiberOne} />
             <View pointerEvents="none" style={authS.paperFiberTwo} />
+            <SafeAreaView style={authS.safeArea}>
             <ScrollView contentContainerStyle={authS.content} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
               <View style={authS.contentWidth}>
               <View style={authS.topBar}>
                 <View style={authS.brand}>
-                  <View style={authS.logoMark} accessibilityLabel="Bookez book icon"><View style={authS.bookPageLeft} /><View style={authS.bookPageRight} /><View style={authS.bookSpine} /></View>
+                  <View style={authS.logoMark} accessibilityLabel="Bookez open book icon"><BookezAuthBookMark /></View>
                   <View><Text style={authS.brandName}>BOOKEZ</Text><Text style={authS.brandSub}>A quieter place to write</Text></View>
                 </View>
                 {dismissible && <Pressable onPress={onClose} style={authS.closeButton} accessibilityLabel="Close sign in"><Text style={authS.closeText}>×</Text></Pressable>}
               </View>
-              <View style={authS.magicStage} accessible accessibilityLabel="An enchanted open book and quill">
+              <View style={authS.magicStage} pointerEvents="none" accessible={false} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+                <View style={authS.magicStarTrail}>
+                  <Svg width="100%" height="100%" viewBox="0 0 360 126" accessible={false}>
+                    <Path d="M22 83c14-31 36-48 72-50M266 101c20 10 44 10 68 3" fill="none" stroke={bookezColors.secondaryAccent} strokeWidth={0.8} strokeOpacity={0.2} strokeDasharray="1 7" strokeLinecap="round" />
+                    <Path d="M34 55l1.6 4.6 4.6 1.6-4.6 1.6-1.6 4.6-1.6-4.6-4.6-1.6 4.6-1.6Z" fill={bookezColors.secondaryAccent} fillOpacity={0.6} />
+                    <Path d="M90 20v6m-3-3h6m168 62v6m-3-3h6" stroke={bookezColors.secondaryAccent} strokeWidth={1} strokeOpacity={0.45} strokeLinecap="round" />
+                    <Path d="M62 85l1 2.8 2.8 1-2.8 1-1 2.8-1-2.8-2.8-1 2.8-1Zm275 19 1 2.8 2.8 1-2.8 1-1 2.8-1-2.8-2.8-1 2.8-1Z" fill={bookezColors.secondaryAccent} fillOpacity={0.42} />
+                  </Svg>
+                </View>
                 <Animated.Text pointerEvents="none" style={[authS.magicSpark, authS.magicSparkOne, { opacity: glow.interpolate({ inputRange: [0, 1], outputRange: [0.25, 0.9] }), transform: [{ scale: glow.interpolate({ inputRange: [0, 1], outputRange: [0.7, 1.14] }) }] }]}>✦</Animated.Text>
                 <Animated.Text pointerEvents="none" style={[authS.magicSpark, authS.magicSparkTwo, { opacity: glow.interpolate({ inputRange: [0, 1], outputRange: [0.72, 0.2] }) }]}>✧</Animated.Text>
-                <Animated.View pointerEvents="none" style={[authS.magicBook, { transform: [{ translateY: glow.interpolate({ inputRange: [0, 1], outputRange: [2, -3] }) }, { scale: glow.interpolate({ inputRange: [0, 1], outputRange: [0.98, 1.02] }) }] }]}><View style={authS.magicBookGlow} /><BookezOpenBook width={122} height={75} color={bookezColors.textPrimary} accent={bookezColors.secondaryAccent} /></Animated.View>
-                <Animated.View pointerEvents="none" style={[authS.magicQuill, { transform: [{ translateX: quillDrift.interpolate({ inputRange: [0, 1], outputRange: [-3, 4] }) }, { translateY: quillDrift.interpolate({ inputRange: [0, 1], outputRange: [3, -4] }) }, { rotate: quillDrift.interpolate({ inputRange: [0, 1], outputRange: ['-11deg', '-4deg'] }) }] }]}><BookezQuill width={47} height={59} color={bookezColors.accent} accent={bookezColors.secondaryAccent} /></Animated.View>
+                <Animated.View pointerEvents="none" style={[authS.magicBook, { transform: [{ translateY: glow.interpolate({ inputRange: [0, 1], outputRange: [2, -3] }) }, { rotate: glow.interpolate({ inputRange: [0, 1], outputRange: ['-1.5deg', '1.5deg'] }) }, { scale: glow.interpolate({ inputRange: [0, 1], outputRange: [0.98, 1.02] }) }] }]}><BookezOpenBook width={122} height={75} color={bookezColors.textPrimary} accent={bookezColors.secondaryAccent} animated={visible && !reduceMotion} /></Animated.View>
+                <View style={[authS.magicBookStack, dismissible && authS.magicBookStackDismissible]}><BookezBookStack width={86} /></View>
                 <Text style={authS.magicCaption}>WHERE STORIES AWAKEN</Text>
               </View>
               <Animated.View style={[authS.scrollCard, { opacity: scrollReveal, transform: [{ translateY: scrollReveal.interpolate({ inputRange: [0, 1], outputRange: [18, 0] }) }, { scaleX: scrollReveal.interpolate({ inputRange: [0, 1], outputRange: [0.92, 1] }) }] }]}>
@@ -7232,7 +7247,7 @@ function AuthSheet({ visible, onClose, signedInEmail, dismissible = true }: { vi
               </View> : <>
                 <View style={authS.hero}><Text style={authS.eyebrow}>{mode === 'forgot' ? 'ACCOUNT RECOVERY' : mode === 'signUp' ? 'CREATE YOUR SPACE' : 'WELCOME BACK'}</Text><Text style={authS.title}>{modeTitle}</Text><Text style={authS.copy}>{modeCopy}</Text></View>
                 <View style={authS.modeRow}><Pressable onPress={() => { setMode('signIn'); setMessage(''); setError(''); }} style={[authS.modeOption, mode === 'signIn' && authS.modeOptionActive]}><Text style={[authS.modeText, mode === 'signIn' && authS.modeTextActive]}>Sign in</Text></Pressable><Pressable onPress={() => { setMode('signUp'); setMessage(''); setError(''); }} style={[authS.modeOption, mode === 'signUp' && authS.modeOptionActive]}><Text style={[authS.modeText, mode === 'signUp' && authS.modeTextActive]}>Create account</Text></Pressable></View>
-                {mode !== 'forgot' && <View style={authS.providerSection}><Text style={authS.providerLabel}>CONTINUE WITH</Text><View style={authS.providerRow}><Pressable accessibilityRole="button" accessibilityLabel="Continue with Google" onPress={() => { void signInWithProvider('google', 'Google'); }} disabled={busy || providerBusy !== null} style={[authS.providerButton, (busy || providerBusy !== null) && authS.providerButtonDisabled]}><View style={[authS.providerIconBadge, authS.providerGoogleBadge]}><Text style={authS.googleMark}>G</Text></View><Text style={authS.providerText}>{providerBusy === 'google' ? 'Connecting…' : 'Google'}</Text></Pressable><Pressable accessibilityRole="button" accessibilityLabel="Continue with Apple" onPress={() => { void signInWithProvider('apple', 'Apple'); }} disabled={busy || providerBusy !== null} style={[authS.providerButton, (busy || providerBusy !== null) && authS.providerButtonDisabled]}><View style={[authS.providerIconBadge, authS.providerAppleBadge]}><BookezAppleMark /></View><Text style={authS.providerText}>{providerBusy === 'apple' ? 'Connecting…' : 'Apple'}</Text></Pressable></View><View style={authS.providerDividerRow}><View style={authS.providerDividerLine} /><Text style={authS.providerDividerText}>OR CONTINUE WITH EMAIL</Text><View style={authS.providerDividerLine} /></View></View>}
+                {mode !== 'forgot' && <View style={authS.providerSection}><Text style={authS.providerLabel}>CONTINUE WITH</Text><View style={authS.providerRow}><Pressable accessibilityRole="button" accessibilityLabel="Continue with Google" onPress={() => { void signInWithProvider('google', 'Google'); }} disabled={busy || providerBusy !== null} style={[authS.providerButton, (busy || providerBusy !== null) && authS.providerButtonDisabled]}><View style={[authS.providerIconBadge, authS.providerGoogleBadge]}><BookezGoogleMark /></View><Text style={authS.providerText}>{providerBusy === 'google' ? 'Connecting…' : 'Google'}</Text></Pressable><Pressable accessibilityRole="button" accessibilityLabel="Continue with Apple" onPress={() => { void signInWithProvider('apple', 'Apple'); }} disabled={busy || providerBusy !== null} style={[authS.providerButton, (busy || providerBusy !== null) && authS.providerButtonDisabled]}><View style={[authS.providerIconBadge, authS.providerAppleBadge]}><BookezAppleMark /></View><Text style={authS.providerText}>{providerBusy === 'apple' ? 'Connecting…' : 'Apple'}</Text></Pressable></View><View style={authS.providerDividerRow}><View style={authS.providerDividerLine} /><Text style={authS.providerDividerText}>OR CONTINUE WITH EMAIL</Text><View style={authS.providerDividerLine} /></View></View>}
                 {mode === 'signUp' && <View><Text style={authS.fieldLabel}>YOUR NAME</Text><TextInput value={displayName} onChangeText={setDisplayName} placeholder="What should we call you?" placeholderTextColor={bookezColors.textMuted} style={authS.input} autoCapitalize="words" accessibilityLabel="Your name" /></View>}
                 <Text style={authS.fieldLabel}>EMAIL ADDRESS</Text><TextInput value={email} onChangeText={setEmail} autoCapitalize="none" keyboardType="email-address" textContentType="emailAddress" placeholder="you@example.com" placeholderTextColor={bookezColors.textMuted} style={authS.input} accessibilityLabel="Email address" />
                 {mode !== 'forgot' && <><Text style={authS.fieldLabel}>PASSWORD</Text><View style={authS.passwordWrap}><TextInput value={password} onChangeText={setPassword} secureTextEntry={!showPassword} textContentType={mode === 'signUp' ? 'newPassword' : 'password'} placeholder={mode === 'signUp' ? 'At least 10 characters, upper/lowercase + number' : 'Your password'} placeholderTextColor={bookezColors.textMuted} style={authS.passwordInput} accessibilityLabel="Password" /><Pressable onPress={() => setShowPassword((current) => !current)} style={authS.passwordToggle} accessibilityLabel={showPassword ? 'Hide password' : 'Show password'}><Text style={authS.passwordToggleText}>{showPassword ? 'Hide' : 'Show'}</Text></Pressable></View></>}
@@ -7245,6 +7260,7 @@ function AuthSheet({ visible, onClose, signedInEmail, dismissible = true }: { vi
               </Animated.View>
               </View>
             </ScrollView>
+            </SafeAreaView>
           </Animated.View>
         </KeyboardAvoidingView>
       </View>
@@ -7252,8 +7268,28 @@ function AuthSheet({ visible, onClose, signedInEmail, dismissible = true }: { vi
   );
 }
 
+function BookezAuthBookMark() {
+  return <Svg width={28} height={25} viewBox="0 0 32 28" accessible={false} accessibilityElementsHidden>
+    <Path d="M16 7.5C12.4 5 8.3 4.2 3 5v16.2c5.2-.8 9.4.3 13 3V7.5Z" fill={bookezColors.textOnAccent} stroke={bookezColors.secondaryAccent} strokeWidth={1.3} strokeLinejoin="round" />
+    <Path d="M16 7.5C19.6 5 23.7 4.2 29 5v16.2c-5.2-.8-9.4.3-13 3V7.5Z" fill={bookezColors.textOnAccent} stroke={bookezColors.secondaryAccent} strokeWidth={1.3} strokeLinejoin="round" />
+    <Path d="M6.5 9.5c2.2-.1 4.4.4 6.5 1.5m-6.5 2.5c2.2-.1 4.4.4 6.5 1.5m12.5-5.5c-2.2-.1-4.4.4-6.5 1.5m6.5 2.5c-2.2-.1-4.4.4-6.5 1.5" fill="none" stroke={bookezColors.secondaryAccent} strokeWidth={0.9} strokeLinecap="round" />
+    <Path d="M2 22.7c5.5-1 10.2 0 14 2.8 3.8-2.8 8.5-3.8 14-2.8M16 7.5v18" fill="none" stroke={bookezColors.secondaryAccent} strokeWidth={1.2} strokeLinecap="round" strokeLinejoin="round" />
+  </Svg>;
+}
+
+function BookezGoogleMark() {
+  return <Svg width={20} height={20} viewBox="0 0 24 24" accessible={false} accessibilityElementsHidden>
+    <Path fill="#4285F4" d="M21.35 12.27c0-.79-.07-1.55-.2-2.27H12v4.3h5.23a4.48 4.48 0 0 1-1.94 2.94v2.45h3.15c1.84-1.7 2.91-4.2 2.91-7.42Z" />
+    <Path fill="#34A853" d="M12 21.7c2.63 0 4.84-.87 6.45-2.36l-3.15-2.45c-.87.58-1.98.93-3.3.93-2.54 0-4.7-1.72-5.47-4.03H3.27v2.53A9.74 9.74 0 0 0 12 21.7Z" />
+    <Path fill="#FBBC05" d="M6.53 13.79a5.88 5.88 0 0 1 0-3.58V7.68H3.27a9.74 9.74 0 0 0 0 8.64l3.26-2.53Z" />
+    <Path fill="#EA4335" d="M12 6.18c1.43 0 2.71.49 3.72 1.45l2.79-2.79C16.84 3.26 14.63 2.3 12 2.3a9.74 9.74 0 0 0-8.73 5.38l3.26 2.53C7.3 7.9 9.46 6.18 12 6.18Z" />
+  </Svg>;
+}
+
 function BookezAppleMark() {
-  return <View style={authS.appleMark} accessibilityElementsHidden><View style={authS.appleBodyLeft} /><View style={authS.appleBodyRight} /><View style={authS.appleBite} /><View style={authS.appleLeaf} /></View>;
+  return <Svg width={20} height={20} viewBox="0 0 24 24" accessible={false} accessibilityElementsHidden>
+    <Path fill={bookezColors.textPrimary} d="M17.05 20.28c-.98.95-2.05.8-3.08.35-1.09-.46-2.09-.48-3.24 0-1.44.62-2.2.44-3.06-.35C2.79 15.25 3.51 7.59 9.05 7.31c1.35.07 2.29.74 3.1.8 1.21-.25 2.37-.93 3.66-.84 1.55.13 2.72.74 3.5 1.8-3.2 1.92-2.44 6.13.49 7.31-.59 1.55-1.35 3.04-2.75 3.9ZM12.03 7.25C11.88 4.95 13.74 3.05 15.89 2.9c.3 2.65-2.4 4.65-3.86 4.35Z" />
+  </Svg>;
 }
 
 function PasswordUpdateScreen({ visible, onComplete }: { visible: boolean; onComplete: () => void }) {
@@ -7310,8 +7346,6 @@ function PasswordUpdateScreen({ visible, onComplete }: { visible: boolean; onCom
   return <Modal animationType="fade" visible={visible} transparent onRequestClose={() => undefined}>
     <View style={passwordResetS.modal}>
       <LinearGradient colors={['#F9F4EA', '#F9F4EA', '#F9F4EA']} style={StyleSheet.absoluteFill} />
-      <View style={passwordResetS.orbOne} />
-      <View style={passwordResetS.orbTwo} />
       <KeyboardAvoidingView style={passwordResetS.keyboard} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <ScrollView contentContainerStyle={passwordResetS.content} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
           <View style={passwordResetS.brandRow}><View style={passwordResetS.brandMark}><Text style={passwordResetS.brandMarkText}>✦</Text></View><View><Text style={passwordResetS.brandName}>BOOKEZ</Text><Text style={passwordResetS.brandSub}>A quieter place to write</Text></View></View>
@@ -9717,29 +9751,26 @@ const authS = StyleSheet.create({
   dismiss: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 },
   keyboard: { flex: 1, justifyContent: 'flex-end' },
   sheet: { flex: 1, overflow: 'hidden', backgroundColor: bookezColors.background },
+  safeArea: { flex: 1 },
   content: { flexGrow: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 18, paddingTop: 18, paddingBottom: 50 },
   contentWidth: { width: '100%', maxWidth: 460 },
-  orbOne: { position: 'absolute', top: -85, right: -58, width: 220, height: 220, borderRadius: 110, backgroundColor: bookezWithAlpha(bookezColors.secondaryAccent, 0.17) },
-  orbTwo: { position: 'absolute', top: 168, left: -88, width: 170, height: 170, borderRadius: 85, backgroundColor: bookezWithAlpha(bookezColors.accentSoft, 0.78) },
   paperFiberOne: { position: 'absolute', top: '27%', left: '-14%', width: '84%', height: StyleSheet.hairlineWidth, backgroundColor: bookezWithAlpha(bookezColors.secondaryAccent, 0.12), transform: [{ rotate: '-5deg' }] },
   paperFiberTwo: { position: 'absolute', top: '76%', right: '-15%', width: '77%', height: StyleSheet.hairlineWidth, backgroundColor: bookezWithAlpha(bookezColors.accent, 0.07), transform: [{ rotate: '4deg' }] },
   topBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 3 },
   brand: { flexDirection: 'row', alignItems: 'center' },
   logoMark: { width: 38, height: 38, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: bookezColors.accentStrong, borderWidth: 2, borderColor: bookezColors.secondaryAccent, shadowColor: bookezColors.accentStrong, shadowOpacity: 0.16, shadowRadius: 9, shadowOffset: { width: 0, height: 4 }, elevation: 2 },
-  bookPageLeft: { position: 'absolute', width: 10, height: 15, left: 7, top: 9, borderTopLeftRadius: 3, borderBottomLeftRadius: 3, backgroundColor: '#F9F4EA', borderWidth: 1, borderColor: bookezColors.secondaryAccent },
-  bookPageRight: { position: 'absolute', width: 10, height: 15, right: 7, top: 9, borderTopRightRadius: 3, borderBottomRightRadius: 3, backgroundColor: '#F9F4EA', borderWidth: 1, borderColor: bookezColors.secondaryAccent },
-  bookSpine: { position: 'absolute', width: 1, height: 14, top: 10, left: 18, backgroundColor: bookezColors.secondaryAccent },
   brandName: { color: bookezColors.textPrimary, fontSize: 11, letterSpacing: 1.8, fontWeight: '800', marginLeft: 10 },
   brandSub: { color: bookezColors.textSecondary, fontSize: 8, marginTop: 2, marginLeft: 10 },
   closeButton: { width: 36, height: 36, borderRadius: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: bookezWithAlpha(bookezColors.surface, 0.78), borderWidth: 1, borderColor: bookezColors.border },
   closeText: { color: bookezColors.textPrimary, fontSize: 23, lineHeight: 24, fontWeight: '300' },
   magicStage: { height: 126, marginTop: 5, alignItems: 'center', justifyContent: 'center' },
-  magicBook: { width: 150, height: 88, alignItems: 'center', justifyContent: 'center' },
-  magicBookGlow: { position: 'absolute', width: 125, height: 68, borderRadius: 63, backgroundColor: bookezWithAlpha(bookezColors.secondaryAccent, 0.12), transform: [{ scaleX: 1.24 }] },
-  magicQuill: { position: 'absolute', right: '16%', top: 19 },
+  magicBook: { width: 150, height: 88, marginRight: 26, alignItems: 'center', justifyContent: 'center' },
+  magicBookStack: { position: 'absolute', right: 4, top: -24, opacity: 0.82 },
+  magicBookStackDismissible: { top: -10 },
+  magicStarTrail: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 },
   magicSpark: { position: 'absolute', color: bookezColors.secondaryAccent, fontWeight: '800' },
-  magicSparkOne: { left: '17%', top: 23, fontSize: 15 },
-  magicSparkTwo: { right: '19%', top: 14, fontSize: 12 },
+  magicSparkOne: { left: '18%', top: 30, fontSize: 13 },
+  magicSparkTwo: { right: '23%', top: 16, fontSize: 15 },
   magicCaption: { position: 'absolute', bottom: 2, color: bookezColors.secondaryAccent, fontSize: 7, letterSpacing: 1.45, fontWeight: '800' },
   scrollCard: { width: '100%', marginTop: 7, padding: 20, paddingTop: 27, paddingBottom: 30, borderRadius: 8, borderWidth: 1, borderColor: '#C8A067', overflow: 'hidden', shadowColor: '#493F35', shadowOpacity: 0.18, shadowRadius: 16, shadowOffset: { width: 0, height: 8 }, elevation: 4 },
   scrollRoll: { position: 'absolute', left: 11, right: 11, height: 12, borderRadius: 6, backgroundColor: '#D9BD87', borderWidth: 1, borderColor: '#B28648', justifyContent: 'center' },
@@ -9767,12 +9798,6 @@ const authS = StyleSheet.create({
   providerGoogleBadge: { backgroundColor: '#F9F4EA' },
   providerAppleBadge: { backgroundColor: bookezColors.surfaceMuted },
   providerText: { color: bookezColors.textPrimary, fontSize: 10, fontWeight: '800' },
-  googleMark: { color: '#667A60', fontSize: 18, fontWeight: '900' },
-  appleMark: { width: 20, height: 20, position: 'relative' },
-  appleBodyLeft: { position: 'absolute', left: 3, top: 6, width: 9, height: 11, borderRadius: 7, backgroundColor: bookezColors.textPrimary, transform: [{ rotate: '-12deg' }] },
-  appleBodyRight: { position: 'absolute', right: 3, top: 6, width: 9, height: 11, borderRadius: 7, backgroundColor: bookezColors.textPrimary, transform: [{ rotate: '12deg' }] },
-  appleBite: { position: 'absolute', right: 1, top: 7, width: 5, height: 5, borderRadius: 3, backgroundColor: bookezColors.surfaceMuted },
-  appleLeaf: { position: 'absolute', left: 8, top: 1, width: 6, height: 4, borderRadius: 4, backgroundColor: bookezColors.textPrimary, transform: [{ rotate: '-28deg' }] },
   providerDividerRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 18 },
   providerDividerLine: { flex: 1, height: 1, backgroundColor: bookezColors.divider },
   providerDividerText: { color: bookezColors.textMuted, fontSize: 7, letterSpacing: 0.8, fontWeight: '800' },
@@ -9805,8 +9830,6 @@ const authS = StyleSheet.create({
 const authStyleMap = authS as unknown as Record<string, unknown>;
 Object.entries({
   shade: { backgroundColor: 'rgba(19,36,61,0.24)' },
-  bookPageLeft: { backgroundColor: bookezColors.manuscript },
-  bookPageRight: { backgroundColor: bookezColors.manuscript },
   providerGoogleBadge: { backgroundColor: bookezColors.surfaceMuted },
   legal: { color: bookezColors.textMuted },
   messageBox: { backgroundColor: bookezColors.successSoft, borderColor: bookezColors.success },
@@ -9827,8 +9850,6 @@ const passwordResetS = StyleSheet.create({
   modal: { flex: 1, overflow: 'hidden', backgroundColor: bookezColors.background },
   keyboard: { flex: 1 },
   content: { flexGrow: 1, justifyContent: 'center', paddingHorizontal: 24, paddingTop: 24, paddingBottom: 58 },
-  orbOne: { position: 'absolute', top: -70, right: -62, width: 210, height: 210, borderRadius: 105, backgroundColor: bookezWithAlpha(bookezColors.secondaryAccent, 0.17) },
-  orbTwo: { position: 'absolute', top: 250, left: -100, width: 185, height: 185, borderRadius: 93, backgroundColor: bookezWithAlpha(bookezColors.accentSoft, 0.78) },
   brandRow: { flexDirection: 'row', alignItems: 'center' },
   brandMark: { width: 38, height: 38, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: bookezColors.accentStrong, borderWidth: 2, borderColor: bookezColors.secondaryAccent, shadowColor: bookezColors.accentStrong, shadowOpacity: 0.16, shadowRadius: 9, shadowOffset: { width: 0, height: 4 }, elevation: 2 },
   brandMarkText: { color: '#FFF8EE', fontSize: 20 },

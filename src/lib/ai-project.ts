@@ -40,8 +40,8 @@ export const chunkWriting = (text: string, maxChars: number): string[] => {
   return chunks;
 };
 
-export const projectAddCredits = (text: string, minimumCredits: number, editChunkCredits: number) =>
-  Math.max(minimumCredits, chunkWriting(text, AI_PROJECT_EDIT_CHARS).length * editChunkCredits + 2);
+/** One generated page is one provider call, regardless of the length already drafted. */
+export const projectAddCredits = (_text: string, minimumCredits: number, _editChunkCredits: number) => minimumCredits;
 
 export const memoryText = (memory: AIProjectMemory, maxChars = 7_500) => {
   const titleChars = memory.summaries.reduce((total, item) => total + item.title.length + 3, 0);

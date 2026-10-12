@@ -65,6 +65,7 @@ const antiqueAccents = {
 
 const glyphByName: Record<string, GlyphName> = {
   'ai-writing': 'spark',
+  'draft-page': 'book',
   polish: 'wand',
   grammar: 'book',
   dictation: 'microphone',

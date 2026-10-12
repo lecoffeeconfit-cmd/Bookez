@@ -3,7 +3,7 @@ export type AIResolvedProvider = 'device' | 'cloud';
 export const AI_PROVIDER_STORAGE_KEY = 'bookez.ai-provider.v1';
 
 export const deviceSourceLimit = (operation: string) =>
-  operation === 'project-scan' ? 1_600 : operation === 'project-edit' ? 1_200 : operation === 'project-add' ? 700 : 2_500;
+  operation === 'project-scan' ? 1_600 : operation === 'project-edit' ? 1_200 : operation === 'project-add' ? 700 : operation === 'draft-page' ? 1_200 : 2_500;
 
 /** Never silently charge cloud credits when the writer selected phone-only. */
 export const providerRoute = (

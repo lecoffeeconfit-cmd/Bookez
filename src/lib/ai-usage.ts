@@ -6,8 +6,8 @@ export const AI_CONTEXT_MODE_STORAGE_KEY = 'bookez.ai-context-mode.v1';
 
 /**
  * One place for the user-facing weights. These are product credits, not raw
- * token counts. A future plan service can replace the limit without changing
- * the assistant UI or the request contract.
+ * token counts. The authenticated cloud function uses its matching database
+ * policy as the authority; this value is the app's offline display fallback.
  */
 const configuredMonthlyCredits = Number.parseInt(process.env.EXPO_PUBLIC_AI_MONTHLY_CREDITS ?? '', 10);
 
@@ -19,6 +19,7 @@ export const AI_USAGE_POLICY = {
     'book-aware': 4,
   } satisfies Record<Exclude<AIWritingContextMode, 'auto'>, number>,
   projectWeights: { scanChunk: 2, editChunk: 3, addPart: 8 },
+  draftPageExtraCredits: 4,
   projectReservePercent: 30,
 } as const;
 
@@ -27,7 +28,7 @@ export type AIUsageLedger = {
   usedCredits: number;
 };
 
-/** Internal shape for future server-side cost accounting; never shown to users. */
+/** Internal shape for optional provider cost accounting; never shown to users. */
 export type AIUsageAccounting = {
   requestId: string;
   model?: string;
@@ -41,6 +42,9 @@ export type AIUsageAccounting = {
 export const aiUsageMonthKey = (date = new Date()) => `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
 
 export const aiUsageWeight = (mode: Exclude<AIWritingContextMode, 'auto'>) => AI_USAGE_POLICY.weights[mode];
+
+export const aiWritingCredits = (operation: string, mode: Exclude<AIWritingContextMode, 'auto'>) =>
+  aiUsageWeight(mode) + (operation === 'draft-page' ? AI_USAGE_POLICY.draftPageExtraCredits : 0);
 
 export const aiProjectCreditCeiling = () => Math.floor(AI_USAGE_POLICY.monthlyCredits * (1 - AI_USAGE_POLICY.projectReservePercent / 100));
 
@@ -56,7 +60,7 @@ export const readAIUsage = async (): Promise<number> => {
 
 let usageWriteQueue: Promise<unknown> = Promise.resolve();
 
-/** Local, user-facing credit estimate. The cloud function does not enforce this ledger. */
+/** Local fallback for older responses; the Edge Function enforces its own ledger. */
 export const recordAIUsage = (credits: number, protectReserve = false): Promise<number> => {
   const operation = usageWriteQueue.then(async () => {
     const used = await readAIUsage();
@@ -66,6 +70,18 @@ export const recordAIUsage = (credits: number, protectReserve = false): Promise<
       : `This request needs ${credits} AI credits, but only ${Math.max(0, ceiling - used)} remain.`);
     const nextUsed = used + credits;
     await bookezSecureStorage.setItem(AI_USAGE_STORAGE_KEY, JSON.stringify({ month: aiUsageMonthKey(), usedCredits: nextUsed } satisfies AIUsageLedger));
+    return nextUsed;
+  });
+  usageWriteQueue = operation.catch(() => undefined);
+  return operation;
+};
+
+/** Replace the local estimate with the authenticated cloud total after a completed call. */
+export const saveCloudAIUsage = (month: string, usedCredits: number): Promise<number> => {
+  const operation = usageWriteQueue.then(async () => {
+    if (month !== aiUsageMonthKey() || !Number.isFinite(usedCredits)) return readAIUsage();
+    const nextUsed = Math.max(0, Math.floor(usedCredits));
+    await bookezSecureStorage.setItem(AI_USAGE_STORAGE_KEY, JSON.stringify({ month, usedCredits: nextUsed } satisfies AIUsageLedger));
     return nextUsed;
   });
   usageWriteQueue = operation.catch(() => undefined);

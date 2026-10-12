@@ -78,6 +78,7 @@ class BookezAIWritingModule : Module() {
     val toneSample = context["toneSample"] as? String ?: ""
     val sectionSummary = context["currentSectionSummary"] as? String ?: ""
     val task = when (operation) {
+      "draft-page" -> "Write one complete manuscript page of about 250-350 words in options. Follow the writer direction and established book context. Return prose, not an outline or advice."
       "continue" -> "Return exactly three natural continuations in options. Do not repeat the source text."
       "brainstorm" -> "Return exactly four different ideas in ideas; each has title and detail. Do not write manuscript prose."
       "ask" -> "Answer the writer's question using only the supplied writing and book context. For continuity questions, separate evidence from inference and say when the context is not enough. Return concise feedback in feedback. Do not rewrite the passage."
@@ -89,7 +90,7 @@ class BookezAIWritingModule : Module() {
       "improve" -> "Return one clearer, smoother passage in options while preserving meaning and voice."
       "project-scan" -> "Summarize this manuscript chunk in feedback. Capture concrete events, people, setting, timeline, voice, and unresolved threads. Do not invent facts or rewrite."
       "project-edit" -> "Return exactly one complete revised version of this chunk in options. Follow the writer direction, preserve content and approximate length unless cuts are requested, and preserve paragraph breaks. No commentary."
-      "project-add" -> "Return exactly one new manuscript-ready passage in options that follows the writer direction. Write prose, not an outline; do not repeat the source."
+      "project-add" -> "Return one complete page of manuscript-ready prose, about 250-350 words unless directed otherwise. Follow the section plan and established book context. Do not repeat the source."
       else -> "Return one rewritten passage in options following the writer's direction while preserving intent."
     }
     val projectAction = operation.startsWith("project-")
@@ -97,6 +98,7 @@ class BookezAIWritingModule : Module() {
       "project-scan" -> 1600
       "project-edit" -> 1200
       "project-add" -> 700
+      "draft-page" -> 1200
       else -> 2500
     }
     var prompt = """

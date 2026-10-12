@@ -25,7 +25,7 @@
         {
           "photosPermission": "Bookez uses your photos for visuals, figures, and illustrations.",
           "cameraPermission": false,
-          "microphonePermission": false
+          "microphonePermission": "Bookez uses your microphone to turn your spoken words into written text when you use dictation."
         }
       ],
       [

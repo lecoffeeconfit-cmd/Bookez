@@ -23,8 +23,8 @@ for (const max of [AI_PROJECT_SCAN_CHARS, AI_PROJECT_EDIT_CHARS, AI_PROJECT_DEVI
 const parts = [{ key: 'unit:0', title: 'Chapter 1', text: manuscript, plan: 'Opening' }];
 assert.notEqual(projectFingerprint(parts), projectFingerprint([{ ...parts[0], text: `${manuscript}!` }]));
 assert.notEqual(projectFingerprint(parts), projectFingerprint([{ ...parts[0], plan: 'Revised opening' }]));
-assert.ok(projectAddCredits(manuscript, 8, 3) >= chunkWriting(manuscript, AI_PROJECT_EDIT_CHARS).length * 3);
-assert.ok(projectAddCredits('', 8, 3) >= 8);
+assert.equal(projectAddCredits(manuscript, 8, 3), 8, 'One added page is one fixed-cost provider call.');
+assert.equal(projectAddCredits('', 8, 3), 8);
 
 const memory = { fingerprint: projectFingerprint(parts), createdAt: Date.now(), summaries: Array.from({ length: 18 }, (_, index) => ({ key: `unit:${index}`, title: `Chapter ${index + 1}`, summary: `A distinct event in part ${index + 1}. `.repeat(80) })) };
 assert.ok(memoryText(memory).length <= 7_500);
@@ -42,7 +42,8 @@ assert.ok((phoneContext.chapterSummaries ?? '').length <= 600, 'Phone context mu
 assert.ok((phoneContext.currentSectionSummary ?? '').length <= 250);
 
 const projectComponent = await readFile(new URL('../src/components/AIProjectTools.tsx', import.meta.url), 'utf8');
-assert.match(projectComponent, /if \(provider === 'cloud'\) setUsedCredits\(await recordAIUsage/, 'Only cloud project requests should consume credits.');
+assert.match(projectComponent, /if \(provider === 'cloud'\) setUsedCredits\(result\.usage/, 'Cloud project calls should reconcile against server usage.');
+assert.match(projectComponent, /'unwritten'/, 'Project AI should draft blank parts in a batch.');
 
 const edge = await readFile(new URL('../supabase/functions/bookez-ai-writing/index.ts', import.meta.url), 'utf8');
 for (const operation of ['project-scan', 'project-edit', 'project-add']) assert.ok(edge.includes(`'${operation}'`));

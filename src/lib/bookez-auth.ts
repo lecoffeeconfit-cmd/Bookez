@@ -18,6 +18,19 @@ export function bookezAuthCallbackErrorMessage(caught: unknown) {
   return 'This confirmation link could not be completed. Request a new link and try again.';
 }
 
+export function bookezAuthErrorMessage(caught: unknown, fallback = 'We could not complete that request.') {
+  const message = caught instanceof Error ? caught.message.toLowerCase() : '';
+  if (
+    message.includes('fetch failed')
+    || message.includes('network request failed')
+    || message.includes('hostname could not be found')
+    || message.includes('enotfound')
+  ) {
+    return 'Bookez cloud is temporarily unreachable. The linked Supabase project may be paused or unavailable. Resume the project, then try again.';
+  }
+  return caught instanceof Error && caught.message ? caught.message : fallback;
+}
+
 export function isBookezEmailValid(email: string) {
   const normalized = normalizeBookezEmail(email);
   return normalized.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(normalized);

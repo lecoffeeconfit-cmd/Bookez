@@ -15,3 +15,4 @@ export {
 } from './BookezArt';
 export { BookezMysticIcon, bookezMysticAccentFor, bookezMysticToneFor, type BookezMysticShape, type BookezMysticSurface } from './BookezMysticIcon';
 export { BookezDefaultCover } from './BookezDefaultCover';
+export { BookezBookStack } from './BookezBookStack';

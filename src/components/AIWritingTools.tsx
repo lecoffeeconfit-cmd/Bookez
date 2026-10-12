@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import { AI_PROVIDER_STORAGE_KEY, AIWritingCanceledError, AIWritingService, deviceSourceLimit, prepareAIWritingContext, type AIProviderPreference, type AIResolvedProvider, type AIWritingContext, type AIWritingContextMode, type AIWritingOperation, type AIWritingResponse } from '../lib/ai-writing';
-import { AI_CONTEXT_MODE_STORAGE_KEY, AI_USAGE_POLICY, AI_USAGE_STORAGE_KEY, aiProjectCreditCeiling, aiUsageMonthKey, aiUsageRefillLabel, aiUsageWeight, readAIUsage, recordAIUsage, type AIUsageLedger } from '../lib/ai-usage';
+import { AI_CONTEXT_MODE_STORAGE_KEY, AI_USAGE_POLICY, AI_USAGE_STORAGE_KEY, aiUsageMonthKey, aiUsageRefillLabel, aiWritingCredits, readAIUsage, recordAIUsage, saveCloudAIUsage, type AIUsageLedger } from '../lib/ai-usage';
+import type { AIInsertPlacement } from '../lib/ai-drafting';
 import { bookezSecureStorage } from '../lib/secure-storage';
 import { bookezColors, bookezRadii, bookezShadows, bookezType } from '../theme/bookez';
 import { BookezMysticIcon } from './bookez-art';
@@ -10,6 +11,7 @@ import { BookezMysticIcon } from './bookez-art';
 const AI_WRITING_INTRO_SEEN_STORAGE_KEY = 'bookez.ai-writing-intro-seen.v1';
 
 type Props = {
+  partKey: string;
   text: string;
   selectedText: string;
   hasSelection: boolean;
@@ -19,7 +21,7 @@ type Props = {
   requestedTool?: { operation: AIWritingOperation; token: number };
   context: AIWritingContext;
   onReplace: (original: string, replacement: string, targetText?: string) => void;
-  onInsert: (text: string) => void;
+  onInsert: (text: string, placement: AIInsertPlacement, target: { partKey: string; sourceText: string; cursor: number }) => boolean;
   onUseAsNote: (text: string) => void;
 };
 
@@ -27,6 +29,7 @@ type Tool = { key: AIWritingOperation; label: string; icon: string; requiresText
 type Scope = 'paragraph' | 'page';
 
 const primaryTools: Tool[] = [
+  { key: 'draft-page', label: 'Draft a page', icon: '▤' },
   { key: 'continue', label: 'Continue', icon: '→' },
   { key: 'improve', label: 'Improve', icon: '✦', requiresText: true },
   { key: 'rewrite', label: 'Rewrite', icon: '↻', requiresText: true },
@@ -46,6 +49,7 @@ const rewriteStyles = ['Clearer', 'More Descriptive', 'More Concise', 'More Emot
 const assistantPrompts = ['Check continuity', 'What happens next?', 'Character question', 'Improve this scene'];
 
 const operationSummaries: Record<AIWritingOperation, string> = {
+  'draft-page': 'Writes a full manuscript page for the part you are editing, ready to review and place.',
   continue: 'Offers three natural ways to keep your draft moving forward.',
   improve: 'Polishes clarity and flow while keeping your meaning and voice.',
   rewrite: 'Reworks the passage in a direction you choose.',
@@ -59,10 +63,12 @@ const operationSummaries: Record<AIWritingOperation, string> = {
 };
 
 const operationTitles: Record<AIWritingOperation, string> = {
+  'draft-page': 'Draft a full page',
   continue: 'Continue writing', improve: 'Improve writing', rewrite: 'Rewrite', expand: 'Expand', shorten: 'Shorten', grammar: 'Fix grammar', 'match-style': 'Match my style', 'notes-to-prose': 'Notes → prose', brainstorm: 'Brainstorm next', ask: 'Ask about your book',
 };
 
 const operationHelp: Record<AIWritingOperation, string> = {
+  'draft-page': 'Describe what should happen or be explained. Bookez drafts roughly 250–350 words for this part; review the page before adding it.',
   continue: 'Three possible next lines, in your existing voice. Nothing is added until you choose one.',
   improve: 'Polish clarity and flow while preserving meaning, facts, and your voice.',
   rewrite: 'Choose a direction, or describe exactly how you want this passage to change.',
@@ -76,6 +82,7 @@ const operationHelp: Record<AIWritingOperation, string> = {
 };
 
 const operationExamples: Record<AIWritingOperation, { input: string; output: string }> = {
+  'draft-page': { input: 'Describe the moment the sisters return to the house.', output: 'A complete page of prose for this part, ready to edit.' },
   continue: { input: 'The porch light flickered once.', output: 'Then a second shadow crossed the curtains.' },
   improve: { input: 'She was very tired and walked slowly.', output: 'Exhausted, she moved at a crawl.' },
   rewrite: { input: 'The room felt strange.', output: 'Suspenseful → The room held its breath around her.' },
@@ -98,6 +105,7 @@ const contextModes: Array<{ value: AIWritingContextMode; label: string; descript
 const continuityQuestion = /\b(already|previously|earlier|before|contradict|contradiction|continuity|first mention|has .{0,50} met|what happened|where did i|character|timeline|remember|what happens next|plot)\b/i;
 
 const resolveAutoContextMode = (operation: AIWritingOperation, instruction: string): Exclude<AIWritingContextMode, 'auto'> => {
+  if (operation === 'draft-page') return 'book-aware';
   if (operation === 'ask' && continuityQuestion.test(instruction)) return 'book-aware';
   if (operation === 'continue' || operation === 'match-style' || operation === 'expand') return 'nearby';
   return operation === 'ask' ? 'nearby' : 'page';
@@ -116,7 +124,7 @@ const currentParagraph = (value: string, cursorPosition: number) => {
   return raw.trim();
 };
 
-export default function AIWritingTools({ text, selectedText, hasSelection, cursorPosition, compact = false, editorial = false, requestedTool, context, onReplace, onInsert, onUseAsNote }: Props) {
+export default function AIWritingTools({ partKey, text, selectedText, hasSelection, cursorPosition, compact = false, editorial = false, requestedTool, context, onReplace, onInsert, onUseAsNote }: Props) {
   const [available, setAvailable] = useState<boolean | null>(null);
   const [availabilityReason, setAvailabilityReason] = useState('');
   const [assistantOpen, setAssistantOpen] = useState(false);
@@ -130,15 +138,18 @@ export default function AIWritingTools({ text, selectedText, hasSelection, curso
   const [providerPreference, setProviderPreference] = useState<AIProviderPreference>('auto');
   const [lastProvider, setLastProvider] = useState<AIResolvedProvider | null>(null);
   const [scope, setScope] = useState<Scope>('paragraph');
+  const [insertPlacement, setInsertPlacement] = useState<AIInsertPlacement>('cursor');
   const [response, setResponse] = useState<AIWritingResponse | null>(null);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState('');
   const [usageUsedCredits, setUsageUsedCredits] = useState(0);
+  const [usageMonthlyCredits, setUsageMonthlyCredits] = useState<number>(AI_USAGE_POLICY.monthlyCredits);
   const usageUsedRef = useRef(0);
   const usageLoaded = useRef(false);
   const requestId = useRef(0);
   const inFlightSignature = useRef('');
   const generatedTargetRef = useRef('');
+  const insertionTargetRef = useRef({ partKey, sourceText: text, cursor: cursorPosition });
 
   const selectedPassage = hasSelection ? selectedText : '';
   const paragraphPassage = currentParagraph(text, cursorPosition);
@@ -147,10 +158,11 @@ export default function AIWritingTools({ text, selectedText, hasSelection, curso
   const activeOperation = selectedTool?.key ?? 'ask';
   const activeInstruction = selectedTool?.key === 'ask' ? assistantPrompt || instruction : instruction;
   const resolvedContextMode = contextMode === 'auto' ? resolveAutoContextMode(activeOperation, activeInstruction) : contextMode;
-  const usageRemaining = Math.max(0, AI_USAGE_POLICY.monthlyCredits - usageUsedCredits);
-  const usageProgress = Math.min(1, usageUsedCredits / AI_USAGE_POLICY.monthlyCredits);
+  const usageRemaining = Math.max(0, usageMonthlyCredits - usageUsedCredits);
+  const usageProgress = Math.min(1, usageUsedCredits / usageMonthlyCredits);
   const selectedToolExample = selectedTool ? operationExamples[selectedTool.key] : null;
-  const phoneReadyForScope = available === true && (!selectedTool || targetText.length <= deviceSourceLimit(selectedTool.key));
+  const phoneSourceLength = selectedTool?.key === 'draft-page' ? Math.min(text.length, 1_200) : targetText.length;
+  const phoneReadyForScope = available === true && (!selectedTool || phoneSourceLength <= deviceSourceLimit(selectedTool.key));
   const displayedProvider: AIResolvedProvider = providerPreference === 'cloud' ? 'cloud' : providerPreference === 'device' ? 'device' : phoneReadyForScope ? 'device' : 'cloud';
   const deviceDoesNotSupportOnDeviceAI = !error && availabilityReason.includes('can’t run Apple Intelligence');
 
@@ -189,14 +201,15 @@ export default function AIWritingTools({ text, selectedText, hasSelection, curso
     if (usageLoaded.current) void bookezSecureStorage.setItem(AI_CONTEXT_MODE_STORAGE_KEY, contextMode);
   }, [contextMode]);
 
-  const recordUsage = async (mode: Exclude<AIWritingContextMode, 'auto'>, protectReserve: boolean) => {
-    const nextUsed = await recordAIUsage(aiUsageWeight(mode), protectReserve);
-    usageUsedRef.current = nextUsed;
-    setUsageUsedCredits(nextUsed);
-  };
-
   const openAssistant = () => {
-    void readAIUsage().then((used) => { usageUsedRef.current = used; setUsageUsedCredits(used); });
+    void readAIUsage().then((used) => { if (used > usageUsedRef.current) { usageUsedRef.current = used; setUsageUsedCredits(used); } });
+    void AIWritingService.readCloudUsage().then(async (usage) => {
+      if (!usage) return;
+      const used = await saveCloudAIUsage(usage.month, usage.usedCredits);
+      setUsageMonthlyCredits(usage.monthlyCredits);
+      usageUsedRef.current = used;
+      setUsageUsedCredits(used);
+    });
     void AIWritingService.isAvailable().then(async (isAvailable) => {
       setAvailable(isAvailable);
       setAvailabilityReason(isAvailable ? '' : await AIWritingService.getAvailabilityReason());
@@ -227,6 +240,7 @@ export default function AIWritingTools({ text, selectedText, hasSelection, curso
     setAssistantOpen(true);
     setSelectedTool(nextTool);
     setInstruction(startingInstruction);
+    setInsertPlacement('cursor');
     if (nextTool.key !== 'ask') setAssistantPrompt('');
     setResponse(null);
     setError('');
@@ -262,7 +276,10 @@ export default function AIWritingTools({ text, selectedText, hasSelection, curso
     if (!activeTool || generating) return;
     const nextInstruction = (customInstruction ?? (activeTool.key === 'ask' ? assistantPrompt || instruction : instruction)).trim();
     const sourceForAsk = selectedPassage || context.nearbyText || text.slice(Math.max(0, cursorPosition - 2600), cursorPosition);
-    const sourceText = activeTool.key === 'continue' ? text.slice(0, Math.max(0, Math.min(cursorPosition, text.length))).slice(-2500) : activeTool.key === 'ask' ? sourceForAsk : targetText;
+    const draftSource = insertPlacement === 'start' ? text.slice(0, 1_200)
+      : insertPlacement === 'end' ? text.slice(-1_200)
+        : text.slice(0, Math.max(0, Math.min(cursorPosition, text.length))).slice(-1_200);
+    const sourceText = activeTool.key === 'continue' ? text.slice(0, Math.max(0, Math.min(cursorPosition, text.length))).slice(-2500) : activeTool.key === 'draft-page' ? draftSource : activeTool.key === 'ask' ? sourceForAsk : targetText;
     if (activeTool.requiresText && !sourceText.trim()) {
       setError('Select a passage or choose Current paragraph / Current page before using this tool.');
       return;
@@ -272,19 +289,27 @@ export default function AIWritingTools({ text, selectedText, hasSelection, curso
       return;
     }
     const mode = contextMode === 'auto' ? resolveAutoContextMode(activeTool.key, nextInstruction) : contextMode;
-    const writingRequest = { operation: activeTool.key, text: sourceText, instruction: nextInstruction, context: prepareAIWritingContext(context, mode) };
+    const placementDirection = activeTool.key === 'draft-page'
+      ? insertPlacement === 'start' ? 'Write this page before the supplied source passage; do not repeat that passage.'
+        : insertPlacement === 'end' ? 'Write this page after the supplied source passage; do not repeat that passage.'
+          : 'Write this page at the cursor, after the supplied source passage; do not repeat that passage.'
+      : '';
+    const writingRequest = { operation: activeTool.key, text: sourceText, instruction: [nextInstruction, placementDirection].filter(Boolean).join('\n'), protectReserve: providerPreference === 'auto', context: prepareAIWritingContext(context, mode) };
     let provider: AIResolvedProvider;
     try { provider = await AIWritingService.resolveProvider(providerPreference, writingRequest); }
     catch (caught) { setError(caught instanceof Error ? caught.message : 'Phone AI is not available.'); return; }
     if (provider === 'cloud') {
-      const used = await readAIUsage();
+      const cloudUsage = await AIWritingService.readCloudUsage();
+      const used = cloudUsage ? await saveCloudAIUsage(cloudUsage.month, cloudUsage.usedCredits) : await readAIUsage();
+      if (cloudUsage) setUsageMonthlyCredits(cloudUsage.monthlyCredits);
       usageUsedRef.current = used;
       setUsageUsedCredits(used);
-      const ceiling = providerPreference === 'auto' ? aiProjectCreditCeiling() : AI_USAGE_POLICY.monthlyCredits;
-      if (used + aiUsageWeight(mode) > ceiling) {
+      const monthly = cloudUsage?.monthlyCredits ?? usageMonthlyCredits;
+      const ceiling = providerPreference === 'auto' ? Math.floor(monthly * (1 - AI_USAGE_POLICY.projectReservePercent / 100)) : monthly;
+      if (used + aiWritingCredits(activeTool.key, mode) > ceiling) {
         setError(providerPreference === 'auto'
           ? 'Phone first is protecting the final 30% of your monthly credits. Choose Bookez credits to spend from that reserve, or Phone only for 0-credit requests on a supported device.'
-          : `This cloud request needs ${aiUsageWeight(mode)} AI credits, but only ${Math.max(0, ceiling - used)} remain this month.`);
+          : `This cloud request needs ${aiWritingCredits(activeTool.key, mode)} AI credits, but only ${Math.max(0, ceiling - used)} remain this month.`);
         return;
       }
     }
@@ -294,12 +319,20 @@ export default function AIWritingTools({ text, selectedText, hasSelection, curso
     const activeRequest = requestId.current + 1;
     requestId.current = activeRequest;
     generatedTargetRef.current = activeTool.requiresText ? sourceText : '';
+    insertionTargetRef.current = { partKey, sourceText: text, cursor: cursorPosition };
     setGenerating(true);
     setError('');
     setResponse(null);
     try {
       const result = await AIWritingService.generate(writingRequest, provider);
-      if (provider === 'cloud') await recordUsage(mode, providerPreference === 'auto');
+      if (provider === 'cloud') {
+        const nextUsed = result.usage
+          ? await saveCloudAIUsage(result.usage.month, result.usage.usedCredits)
+          : await recordAIUsage(aiWritingCredits(activeTool.key, mode), providerPreference === 'auto');
+        usageUsedRef.current = nextUsed;
+        setUsageUsedCredits(nextUsed);
+        if (result.usage) setUsageMonthlyCredits(result.usage.monthlyCredits);
+      }
       if (requestId.current !== activeRequest) return;
       if (provider === 'device') { setAvailable(true); setAvailabilityReason(''); }
       setLastProvider(provider);
@@ -313,6 +346,11 @@ export default function AIWritingTools({ text, selectedText, hasSelection, curso
       if (requestId.current !== activeRequest) return;
       setAvailable(isStillAvailable);
       setAvailabilityReason(unavailableReason);
+      if (provider === 'cloud') void AIWritingService.readCloudUsage().then(async (usage) => {
+        if (!usage) return;
+        setUsageMonthlyCredits(usage.monthlyCredits);
+        setUsageUsedCredits(await saveCloudAIUsage(usage.month, usage.usedCredits));
+      });
       setError(message);
     } finally {
       if (requestId.current === activeRequest) {
@@ -332,7 +370,14 @@ export default function AIWritingTools({ text, selectedText, hasSelection, curso
   };
 
   const useReplacement = (replacement: string) => { const replacementTarget = generatedTargetRef.current || targetText; onReplace(replacementTarget, replacement, replacementTarget); void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success); closeAssistant(); };
-  const useInsert = (value: string) => { onInsert(value); void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success); closeAssistant(); };
+  const useInsert = (value: string) => {
+    if (!onInsert(value, selectedTool?.key === 'draft-page' ? insertPlacement : 'cursor', insertionTargetRef.current)) {
+      setError('This part changed while the preview was open. Create a fresh preview for the current draft.');
+      return;
+    }
+    void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    closeAssistant();
+  };
 
   return <>
     <View style={compact ? s.compactLauncherRow : s.launcherRow}>
@@ -358,19 +403,27 @@ export default function AIWritingTools({ text, selectedText, hasSelection, curso
             {!selectedTool && <View style={s.promptChips}>{assistantPrompts.map((prompt) => <Pressable key={prompt} onPress={() => { setAssistantPrompt(prompt === 'Check continuity' ? 'Has anything in this section already happened earlier in the book?' : prompt === 'Character question' ? 'What should I keep consistent about the characters in this scene?' : prompt); setError(''); }} style={s.promptChip} accessibilityRole="button"><Text style={s.promptChipText}>{prompt}</Text></Pressable>)}</View>}
 
             <View style={s.providerCard}><Text style={s.fieldLabel}>AI PROVIDER</Text><View style={s.providerChoices}>{([['auto', 'Phone first'], ['device', 'Phone only'], ['cloud', 'Bookez credits']] as const).map(([value, label]) => <Pressable key={value} onPress={() => chooseProvider(value)} disabled={generating} style={[s.providerChoice, providerPreference === value && s.providerChoiceActive]} accessibilityRole="button" accessibilityState={{ selected: providerPreference === value }}><Text style={[s.providerChoiceText, providerPreference === value && s.providerChoiceTextActive]}>{label}</Text></Pressable>)}</View><Text style={s.providerHint}>{providerPreference === 'auto' ? available === null ? 'Checking phone AI. Cloud fallback protects the final 30% of credits.' : available ? 'Phone AI runs first for supported passages. Cloud fallback protects the final 30% of credits.' : 'Phone AI is unavailable here; cloud fallback protects the final 30% of credits.' : providerPreference === 'device' ? available ? 'On-device AI uses 0 Bookez credits. Phone model limits may still apply.' : availabilityReason || 'Phone AI is unavailable on this device.' : 'Bookez cloud uses the credits shown below, even if phone AI is available.'}</Text></View>
-            <View style={s.contextCard}><View style={s.contextHeader}><View style={s.contextCopy}><Text style={s.fieldLabel}>CONTEXT</Text><Text style={s.contextDescription}>{contextModeDescription(resolvedContextMode)}</Text></View><Text style={s.contextCost}>{displayedProvider === 'device' ? '0 credits · phone' : `${aiUsageWeight(resolvedContextMode)} cloud credit${aiUsageWeight(resolvedContextMode) === 1 ? '' : 's'}`}</Text></View><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.contextPills}>{contextModes.map((mode) => <Pressable key={mode.value} onPress={() => { setContextMode(mode.value); setError(''); }} style={[s.contextPill, contextMode === mode.value && s.contextPillActive]} accessibilityRole="button" accessibilityState={{ selected: contextMode === mode.value }} accessibilityLabel={`${mode.label} context`}><Text style={[s.contextPillText, contextMode === mode.value && s.contextPillTextActive]}>{mode.label}</Text></Pressable>)}</ScrollView></View>
+            <View style={s.contextCard}><View style={s.contextHeader}><View style={s.contextCopy}><Text style={s.fieldLabel}>CONTEXT</Text><Text style={s.contextDescription}>{contextModeDescription(resolvedContextMode)}</Text></View><Text style={s.contextCost}>{displayedProvider === 'device' ? '0 credits · phone' : `${aiWritingCredits(activeOperation, resolvedContextMode)} cloud credit${aiWritingCredits(activeOperation, resolvedContextMode) === 1 ? '' : 's'}`}</Text></View><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.contextPills}>{contextModes.map((mode) => <Pressable key={mode.value} onPress={() => { setContextMode(mode.value); setError(''); }} style={[s.contextPill, contextMode === mode.value && s.contextPillActive]} accessibilityRole="button" accessibilityState={{ selected: contextMode === mode.value }} accessibilityLabel={`${mode.label} context`}><Text style={[s.contextPillText, contextMode === mode.value && s.contextPillTextActive]}>{mode.label}</Text></Pressable>)}</ScrollView></View>
 
             {!selectedTool && <><Text style={s.sectionLabel}>COMMON TOOLS</Text><View style={s.toolGrid}>{primaryTools.map((item) => <Pressable key={item.key} onPress={() => openTool(item)} disabled={generating} style={[s.commonTool, generating && s.disabled]} accessibilityRole="button" accessibilityLabel={item.label}><BookezMysticIcon name={item.key} size={27} surface="parchment" /><Text style={s.commonToolText}>{item.label}</Text></Pressable>)}</View></>}
 
-            {selectedTool && <View style={s.toolWorkspace}><View style={s.toolBackRow}><Pressable onPress={() => { setSelectedTool(null); setResponse(null); setError(''); }} accessibilityRole="button" accessibilityLabel="Back to AI assistant tools"><Text style={s.toolBack}>← All assistant tools</Text></Pressable></View><Text style={s.toolTitle}>{operationTitles[selectedTool.key]}</Text><Text style={s.toolHelp}>{operationHelp[selectedTool.key]}</Text>{selectedToolExample && <View style={s.exampleCard}><Text style={s.exampleLabel}>QUICK EXAMPLE</Text><Text style={s.exampleInput}>{selectedToolExample.input}</Text><Text style={s.exampleArrow}>↓</Text><Text style={s.exampleOutput}>{selectedToolExample.output}</Text></View>}{selectedTool.requiresText && <View style={s.scopeCard}><Text style={s.fieldLabel}>APPLY TO</Text>{hasSelection ? <View style={s.selectionSummary}><Text style={s.selectionDot}>●</Text><Text style={s.selectionText}>Selected text · {wordsIn(selectedPassage)} words</Text></View> : <View style={s.scopeChoices}><Pressable onPress={() => setScope('paragraph')} style={[s.scopeChoice, scope === 'paragraph' && s.scopeChoiceActive]} accessibilityRole="button" accessibilityState={{ selected: scope === 'paragraph' }}><Text style={[s.scopeChoiceText, scope === 'paragraph' && s.scopeChoiceTextActive]}>Current paragraph</Text></Pressable><Pressable onPress={() => setScope('page')} style={[s.scopeChoice, scope === 'page' && s.scopeChoiceActive]} accessibilityRole="button" accessibilityState={{ selected: scope === 'page' }}><Text style={[s.scopeChoiceText, scope === 'page' && s.scopeChoiceTextActive]}>Current page</Text></Pressable></View>}{!hasSelection && <Text style={s.scopeHint}>Choose a scope before Bookez changes a passage.</Text>}</View>}{selectedTool.key === 'rewrite' && <><Text style={s.fieldLabel}>CHOOSE A DIRECTION</Text><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.styleChips}>{rewriteStyles.map((style) => <Pressable key={style} onPress={() => setInstruction(style)} style={[s.styleChip, instruction === style && s.styleChipActive]} accessibilityRole="button"><Text style={[s.styleChipText, instruction === style && s.styleChipTextActive]}>{style}</Text></Pressable>)}</ScrollView></>}{selectedTool.key === 'ask' && <><Text style={s.fieldLabel}>BOOK QUESTION</Text><TextInput value={assistantPrompt} onChangeText={(value) => { setAssistantPrompt(value); setInstruction(value); setError(''); }} multiline placeholder="Ask about characters, events, or continuity…" placeholderTextColor="#667A60" style={s.instruction} accessibilityLabel="Book-aware question" /></>}{selectedTool.key !== 'ask' && selectedTool.key !== 'rewrite' && selectedTool.key !== 'continue' && selectedTool.key !== 'brainstorm' && <Text style={s.toolTargetNote}>{canUseTextTool ? `${contextModeLabel(resolvedContextMode)} will use the selected scope. Nothing changes until you choose an action.` : 'Draft a little first, then choose a passage to work on.'}</Text>}{selectedTool.key !== 'ask' && <Pressable onPress={() => void generate()} disabled={generating || (selectedTool.requiresText && !canUseTextTool)} style={[s.generate, (generating || (selectedTool.requiresText && !canUseTextTool)) && s.disabled]} accessibilityRole="button"><Text style={s.generateText}>{selectedTool.key === 'brainstorm' ? 'Generate ideas' : 'Create preview'}</Text><Text style={s.generateArrow}>→</Text></Pressable>}{selectedTool.key === 'ask' && <Text style={s.bookAwareHint}>Ask Bookez above to get a grounded answer. It will say when the available book context is not enough to know.</Text>}</View>}
+            {selectedTool && <View style={s.toolWorkspace}><View style={s.toolBackRow}><Pressable onPress={() => { setSelectedTool(null); setResponse(null); setError(''); }} accessibilityRole="button" accessibilityLabel="Back to AI assistant tools"><Text style={s.toolBack}>← All assistant tools</Text></Pressable></View><Text style={s.toolTitle}>{operationTitles[selectedTool.key]}</Text><Text style={s.toolHelp}>{operationHelp[selectedTool.key]}</Text>{selectedToolExample && <View style={s.exampleCard}><Text style={s.exampleLabel}>QUICK EXAMPLE</Text><Text style={s.exampleInput}>{selectedToolExample.input}</Text><Text style={s.exampleArrow}>↓</Text><Text style={s.exampleOutput}>{selectedToolExample.output}</Text></View>}{selectedTool.requiresText && <View style={s.scopeCard}><Text style={s.fieldLabel}>APPLY TO</Text>{hasSelection ? <View style={s.selectionSummary}><Text style={s.selectionDot}>●</Text><Text style={s.selectionText}>Selected text · {wordsIn(selectedPassage)} words</Text></View> : <View style={s.scopeChoices}><Pressable onPress={() => setScope('paragraph')} style={[s.scopeChoice, scope === 'paragraph' && s.scopeChoiceActive]} accessibilityRole="button" accessibilityState={{ selected: scope === 'paragraph' }}><Text style={[s.scopeChoiceText, scope === 'paragraph' && s.scopeChoiceTextActive]}>Current paragraph</Text></Pressable><Pressable onPress={() => setScope('page')} style={[s.scopeChoice, scope === 'page' && s.scopeChoiceActive]} accessibilityRole="button" accessibilityState={{ selected: scope === 'page' }}><Text style={[s.scopeChoiceText, scope === 'page' && s.scopeChoiceTextActive]}>Current page</Text></Pressable></View>}{!hasSelection && <Text style={s.scopeHint}>Choose a scope before Bookez changes a passage.</Text>}</View>}{selectedTool.key === 'rewrite' && <><Text style={s.fieldLabel}>CHOOSE A DIRECTION</Text><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.styleChips}>{rewriteStyles.map((style) => <Pressable key={style} onPress={() => setInstruction(style)} style={[s.styleChip, instruction === style && s.styleChipActive]} accessibilityRole="button"><Text style={[s.styleChipText, instruction === style && s.styleChipTextActive]}>{style}</Text></Pressable>)}</ScrollView></>}{selectedTool.key === 'ask' && <><Text style={s.fieldLabel}>BOOK QUESTION</Text><TextInput value={assistantPrompt} onChangeText={(value) => { setAssistantPrompt(value); setInstruction(value); setError(''); }} multiline placeholder="Ask about characters, events, or continuity…" placeholderTextColor="#667A60" style={s.instruction} accessibilityLabel="Book-aware question" /></>}{selectedTool.key !== 'ask' && selectedTool.key !== 'rewrite' && selectedTool.key !== 'continue' && selectedTool.key !== 'brainstorm' && selectedTool.key !== 'draft-page' && <Text style={s.toolTargetNote}>{canUseTextTool ? `${contextModeLabel(resolvedContextMode)} will use the selected scope. Nothing changes until you choose an action.` : 'Draft a little first, then choose a passage to work on.'}</Text>}{selectedTool.key !== 'ask' && selectedTool.key !== 'draft-page' && <Pressable onPress={() => void generate()} disabled={generating || (selectedTool.requiresText && !canUseTextTool)} style={[s.generate, (generating || (selectedTool.requiresText && !canUseTextTool)) && s.disabled]} accessibilityRole="button"><Text style={s.generateText}>{selectedTool.key === 'brainstorm' ? 'Generate ideas' : 'Create preview'}</Text><Text style={s.generateArrow}>→</Text></Pressable>}{selectedTool.key === 'ask' && <Text style={s.bookAwareHint}>Ask Bookez above to get a grounded answer. It will say when the available book context is not enough to know.</Text>}</View>}
 
+            {selectedTool?.key === 'draft-page' && <View style={s.draftPageCard}>
+              <Text style={s.fieldLabel}>WHAT SHOULD THIS PAGE COVER?</Text>
+              <TextInput value={instruction} onChangeText={(value) => { setInstruction(value); setResponse(null); setError(''); }} multiline maxLength={850} placeholder="Describe a scene, idea, or section. Leave blank to use the book plan." placeholderTextColor={bookezColors.textMuted} style={s.instruction} accessibilityLabel="Direction for AI page draft" />
+              <Text style={s.fieldLabel}>ADD TO {context.chapterTitle.toUpperCase()}</Text>
+              <View style={s.scopeChoices}>{([['cursor', 'At cursor'], ['start', 'Beginning'], ['end', 'End']] as const).map(([value, label]) => <Pressable key={value} onPress={() => { setInsertPlacement(value); setResponse(null); }} style={[s.scopeChoice, insertPlacement === value && s.scopeChoiceActive]} accessibilityRole="button" accessibilityState={{ selected: insertPlacement === value }}><Text style={[s.scopeChoiceText, insertPlacement === value && s.scopeChoiceTextActive]}>{label}</Text></Pressable>)}</View>
+              <Text style={s.scopeHint}>Place the cursor in the manuscript first to add prose in a specific area. The page is shown for review before it is saved.</Text>
+              <Pressable onPress={() => void generate()} disabled={generating} style={[s.generate, generating && s.disabled]} accessibilityRole="button" accessibilityLabel="Preview a full AI drafted page"><Text style={s.generateText}>Preview full page</Text><Text style={s.generateArrow}>→</Text></Pressable>
+            </View>}
             {generating && <View style={s.loading}><ActivityIndicator color="#667A60" /><Text style={s.loadingText}>Reading the right context…</Text><Pressable onPress={cancelGeneration} accessibilityRole="button"><Text style={s.cancelText}>Cancel</Text></Pressable></View>}
             {error ? <View style={s.error}><Text style={s.errorTitle}>{deviceDoesNotSupportOnDeviceAI ? 'On-device AI isn’t available on this iPhone' : 'That request didn’t work'}</Text><Text style={s.errorText}>{error}</Text><View style={s.errorActions}>{!deviceDoesNotSupportOnDeviceAI && <Pressable onPress={() => void generate()} style={s.retry}><Text style={s.retryText}>Try again</Text></Pressable>}<Pressable onPress={() => setError('')} style={s.secondary}><Text style={s.secondaryText}>Dismiss</Text></Pressable></View></View> : null}
             {response?.ideas?.length ? <View style={s.results}>{response.ideas.map((idea, index) => <View key={`${idea.title}-${index}`} style={s.idea}><Text style={s.ideaNumber}>{String(index + 1).padStart(2, '0')}</Text><View style={s.ideaCopy}><Text style={s.ideaTitle}>{idea.title}</Text><Text style={s.ideaText}>{idea.detail}</Text><View style={s.inlineActions}><Pressable onPress={() => onUseAsNote(`${idea.title}: ${idea.detail}`)} accessibilityRole="button"><Text style={s.link}>Use as note</Text></Pressable><Pressable onPress={() => { setInstruction(`Explore: ${idea.title}`); void generate(undefined, `Explore this idea further: ${idea.title}`); }} accessibilityRole="button"><Text style={s.link}>Explore</Text></Pressable></View></View></View>)}</View> : null}
             {response?.feedback ? <View style={s.feedback}><Text style={s.feedbackLabel}>{resolvedContextMode === 'book-aware' ? 'BOOK-AWARE RESPONSE' : 'WRITING FEEDBACK'}</Text><Text style={s.feedbackText}>{response.feedback}</Text><Pressable onPress={() => void generate()} style={s.feedbackAgain} accessibilityRole="button"><Text style={s.plainActionText}>Ask again</Text></Pressable></View> : null}
-            {response?.options?.length ? <View style={s.results}>{response.options.map((option, index) => <View key={`${index}-${option.slice(0, 16)}`} style={s.option}><Text style={s.optionLabel}>{selectedTool?.key === 'continue' ? `OPTION ${index + 1}` : 'PREVIEW'}</Text><Text style={s.optionText}>{option}</Text><View style={s.optionActions}>{selectedTool?.key === 'continue' ? <Pressable onPress={() => useInsert(option)} style={s.actionPrimary} accessibilityRole="button"><Text style={s.actionPrimaryText}>Insert</Text></Pressable> : <><Pressable onPress={() => useReplacement(option)} style={s.actionPrimary} accessibilityRole="button"><Text style={s.actionPrimaryText}>Replace</Text></Pressable><Pressable onPress={() => useInsert(option)} style={s.actionSecondary} accessibilityRole="button"><Text style={s.actionSecondaryText}>Insert below</Text></Pressable></>}<Pressable onPress={() => void generate()} style={s.plainAction} accessibilityRole="button"><Text style={s.plainActionText}>Try again</Text></Pressable></View></View>)}</View> : null}
+            {response?.options?.length ? <View style={s.results}>{response.options.map((option, index) => <View key={`${index}-${option.slice(0, 16)}`} style={s.option}><Text style={s.optionLabel}>{selectedTool?.key === 'continue' ? `OPTION ${index + 1}` : 'PREVIEW'}</Text><Text style={s.optionText}>{option}</Text><View style={s.optionActions}>{selectedTool?.key === 'continue' || selectedTool?.key === 'draft-page' ? <Pressable onPress={() => useInsert(option)} style={s.actionPrimary} accessibilityRole="button"><Text style={s.actionPrimaryText}>{selectedTool?.key === 'draft-page' ? 'Add page' : 'Insert'}</Text></Pressable> : <><Pressable onPress={() => useReplacement(option)} style={s.actionPrimary} accessibilityRole="button"><Text style={s.actionPrimaryText}>Replace</Text></Pressable><Pressable onPress={() => useInsert(option)} style={s.actionSecondary} accessibilityRole="button"><Text style={s.actionSecondaryText}>Insert below</Text></Pressable></>}<Pressable onPress={() => void generate()} style={s.plainAction} accessibilityRole="button"><Text style={s.plainActionText}>Try again</Text></Pressable></View></View>)}</View> : null}
 
-            <View style={s.usageCard}><View style={s.usageHeader}><Text style={s.sectionLabel}>AI USAGE</Text><Text style={s.usageValue}>{usageRemaining} / {AI_USAGE_POLICY.monthlyCredits} credits left</Text></View><View style={s.usageTrack}><View style={[s.usageFill, { width: `${Math.round(usageProgress * 100)}%` }]} /></View><View style={s.usageMeta}><Text style={s.usageRefill}>{lastProvider === 'device' ? 'Last request: phone AI · 0 credits' : aiUsageRefillLabel()}</Text><Text style={s.usageWeights}>Page · {AI_USAGE_POLICY.weights.page}  Nearby · {AI_USAGE_POLICY.weights.nearby}  Book-aware · {AI_USAGE_POLICY.weights['book-aware']}</Text></View>{usageRemaining <= 8 && <Text style={s.usageWarning}>Only {usageRemaining} AI credit{usageRemaining === 1 ? '' : 's'} remain in this local estimate. Phone AI uses no Bookez credits.</Text>}</View>
+            <View style={s.usageCard}><View style={s.usageHeader}><Text style={s.sectionLabel}>AI USAGE</Text><Text style={s.usageValue}>{usageRemaining} / {usageMonthlyCredits} credits left</Text></View><View style={s.usageTrack}><View style={[s.usageFill, { width: `${Math.round(usageProgress * 100)}%` }]} /></View><View style={s.usageMeta}><Text style={s.usageRefill}>{lastProvider === 'device' ? 'Last request: phone AI · 0 credits' : aiUsageRefillLabel()}</Text><Text style={s.usageWeights}>Page · {AI_USAGE_POLICY.weights.page}  Nearby · {AI_USAGE_POLICY.weights.nearby}  Book-aware · {AI_USAGE_POLICY.weights['book-aware']}</Text></View>{usageRemaining <= 8 && <Text style={s.usageWarning}>Only {usageRemaining} AI credit{usageRemaining === 1 ? '' : 's'} remain. Phone AI uses no Bookez credits.</Text>}</View>
             {available === false && <Text style={s.availability}>{availabilityReason.includes('requires a current Bookez app build') ? 'On-device AI is not available in this build. Bookez will use its authenticated cloud AI when needed.' : availabilityReason}</Text>}
             <Pressable onPress={() => setMoreOpen(true)} style={s.moreButton} accessibilityRole="button" accessibilityLabel="Open more writing tools"><Text style={s.moreButtonText}>More Writing Tools</Text><Text style={s.moreButtonArrow}>→</Text></Pressable>
           </ScrollView>
@@ -398,6 +451,7 @@ const s = StyleSheet.create({
   providerChoiceTextActive: { color: bookezColors.textOnAccent },
   providerHint: { color: bookezColors.textSecondary, fontSize: 8, lineHeight: 12, marginTop: 8 },
   contextCard: { marginTop: 14, padding: 12, borderRadius: 14, backgroundColor: '#F9F4EA', borderWidth: 1, borderColor: '#DDCDB5' }, contextHeader: { flexDirection: 'row', alignItems: 'flex-start' }, contextCopy: { flex: 1, paddingRight: 8 }, contextDescription: { color: '#667A60', fontSize: 8, lineHeight: 12, marginTop: 4 }, contextCost: { color: '#667A60', fontSize: 8, fontWeight: '800' }, contextPills: { gap: 6, paddingTop: 10, paddingRight: 6 }, contextPill: { minHeight: 29, paddingHorizontal: 10, borderRadius: 9, backgroundColor: '#F9F4EA', justifyContent: 'center' }, contextPillActive: { backgroundColor: '#F9F4EA' }, contextPillText: { color: '#667A60', fontSize: 8, fontWeight: '800' }, contextPillTextActive: { color: '#FFF8EE' }, sectionLabel: { color: '#667A60', fontSize: 7, letterSpacing: .85, fontWeight: '800' }, toolGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 7, marginTop: 8 }, commonTool: { width: '31.7%', minHeight: 61, paddingHorizontal: 6, borderRadius: 12, backgroundColor: '#F9F4EA', borderWidth: 1, borderColor: '#DDCDB5', alignItems: 'center', justifyContent: 'center' }, commonToolIcon: { width: 24, height: 24, borderRadius: 8, backgroundColor: '#F9F4EA', alignItems: 'center', justifyContent: 'center' }, commonToolIconText: { color: '#667A60', fontSize: 12, fontWeight: '800' }, commonToolText: { color: '#667A60', fontSize: 8, fontWeight: '800', marginTop: 5, textAlign: 'center' },
+  draftPageCard: { marginTop: 10, padding: 12, borderRadius: 14, backgroundColor: bookezColors.surfaceRaised, borderWidth: 1, borderColor: bookezColors.border },
   toolWorkspace: { marginTop: 14, padding: 13, borderRadius: 16, backgroundColor: '#F9F4EA', borderWidth: 1, borderColor: '#DDCDB5' }, toolBackRow: { minHeight: 25 }, toolBack: { color: '#667A60', fontSize: 9, fontWeight: '800' }, toolTitle: { color: '#667A60', fontSize: 18, fontWeight: '800', marginTop: 4 }, toolHelp: { color: '#667A60', fontSize: 10, lineHeight: 15, marginTop: 5 }, exampleCard: { marginTop: 12, padding: 11, borderRadius: 13, backgroundColor: '#F9F4EA', borderWidth: 1, borderColor: '#667A60' }, exampleLabel: { color: '#667A60', fontSize: 7, letterSpacing: .9, fontWeight: '800' }, exampleInput: { color: '#667A60', fontSize: 9, lineHeight: 14, marginTop: 6 }, exampleArrow: { color: '#667A60', fontSize: 12, marginVertical: 2 }, exampleOutput: { color: '#667A60', fontSize: 10, lineHeight: 15, fontWeight: '700' }, scopeCard: { marginTop: 13, paddingTop: 2 }, selectionSummary: { flexDirection: 'row', alignItems: 'center', marginTop: 8 }, selectionDot: { color: '#667A60', fontSize: 9, marginRight: 7 }, selectionText: { color: '#667A60', fontSize: 9, fontWeight: '700' }, scopeChoices: { flexDirection: 'row', gap: 7, marginTop: 8 }, scopeChoice: { minHeight: 34, flex: 1, paddingHorizontal: 8, borderRadius: 10, backgroundColor: '#F9F4EA', alignItems: 'center', justifyContent: 'center' }, scopeChoiceActive: { backgroundColor: '#F9F4EA', borderWidth: 1, borderColor: '#667A60' }, scopeChoiceText: { color: '#667A60', fontSize: 8, fontWeight: '700' }, scopeChoiceTextActive: { color: '#667A60' }, scopeHint: { color: '#667A60', fontSize: 8, marginTop: 6 }, styleChips: { gap: 7, paddingTop: 8, paddingRight: 8 }, styleChip: { paddingHorizontal: 10, minHeight: 31, borderRadius: 10, justifyContent: 'center', backgroundColor: '#F9F4EA' }, styleChipActive: { backgroundColor: '#F9F4EA' }, styleChipText: { color: '#667A60', fontSize: 9, fontWeight: '700' }, styleChipTextActive: { color: '#FFF8EE' }, instruction: { minHeight: 64, maxHeight: 106, marginTop: 8, padding: 10, borderRadius: 11, borderWidth: 1, borderColor: '#DDCDB5', backgroundColor: '#F9F4EA', color: '#667A60', fontSize: 10, lineHeight: 15, textAlignVertical: 'top' }, toolTargetNote: { color: '#667A60', fontSize: 8, lineHeight: 12, marginTop: 12 }, bookAwareHint: { color: '#667A60', fontSize: 8, lineHeight: 12, marginTop: 12 },
   generate: { minHeight: 45, marginTop: 13, paddingHorizontal: 13, borderRadius: 13, backgroundColor: '#F9F4EA', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, generateText: { color: '#FFF8EE', fontSize: 10, fontWeight: '800' }, generateArrow: { color: '#FFF8EE', fontSize: 17 }, loading: { minHeight: 58, marginTop: 13, borderRadius: 13, backgroundColor: '#F9F4EA', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 }, loadingText: { color: '#667A60', fontSize: 9, fontWeight: '700' }, cancelText: { color: '#667A60', fontSize: 9, fontWeight: '800' }, error: { marginTop: 12, padding: 12, borderRadius: 14, backgroundColor: '#F9F4EA' }, errorTitle: { color: '#667A60', fontSize: 10, fontWeight: '800' }, errorText: { color: '#667A60', fontSize: 9, lineHeight: 14, marginTop: 4 }, errorActions: { flexDirection: 'row', gap: 7, marginTop: 9 }, retry: { paddingHorizontal: 11, minHeight: 31, borderRadius: 10, backgroundColor: '#F9F4EA', alignItems: 'center', justifyContent: 'center' }, retryText: { color: '#FFF8EE', fontSize: 9, fontWeight: '800' }, secondary: { paddingHorizontal: 11, minHeight: 31, borderRadius: 10, backgroundColor: '#F9F4EA', alignItems: 'center', justifyContent: 'center' }, secondaryText: { color: '#667A60', fontSize: 9, fontWeight: '800' },
   results: { marginTop: 13, gap: 8 }, option: { padding: 12, borderRadius: 14, backgroundColor: '#F9F4EA', borderWidth: 1, borderColor: '#DDCDB5' }, optionLabel: { color: '#667A60', fontSize: 7, letterSpacing: .85, fontWeight: '800' }, optionText: { color: '#667A60', fontSize: 10, lineHeight: 16, marginTop: 6 }, optionActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 7, marginTop: 10, alignItems: 'center' }, actionPrimary: { minHeight: 32, paddingHorizontal: 11, borderRadius: 10, backgroundColor: '#F9F4EA', alignItems: 'center', justifyContent: 'center' }, actionPrimaryText: { color: '#FFF8EE', fontSize: 9, fontWeight: '800' }, actionSecondary: { minHeight: 32, paddingHorizontal: 11, borderRadius: 10, backgroundColor: '#F9F4EA', alignItems: 'center', justifyContent: 'center' }, actionSecondaryText: { color: '#667A60', fontSize: 9, fontWeight: '800' }, plainAction: { paddingHorizontal: 4, minHeight: 30, justifyContent: 'center' }, plainActionText: { color: '#667A60', fontSize: 9, fontWeight: '700' }, idea: { padding: 11, borderRadius: 13, backgroundColor: '#F9F4EA', flexDirection: 'row', borderWidth: 1, borderColor: '#DDCDB5' }, ideaNumber: { color: '#667A60', fontSize: 9, fontWeight: '800' }, ideaCopy: { flex: 1, marginLeft: 9 }, ideaTitle: { color: '#667A60', fontSize: 10, fontWeight: '800' }, ideaText: { color: '#667A60', fontSize: 9, lineHeight: 14, marginTop: 3 }, inlineActions: { flexDirection: 'row', gap: 14, marginTop: 8 }, link: { color: '#667A60', fontSize: 9, fontWeight: '800' }, feedback: { padding: 12, marginTop: 13, borderRadius: 14, backgroundColor: '#F9F4EA', borderWidth: 1, borderColor: '#DDCDB5' }, feedbackLabel: { color: '#667A60', fontSize: 7, letterSpacing: .8, fontWeight: '800' }, feedbackText: { color: '#667A60', fontSize: 10, lineHeight: 16, marginTop: 6 }, feedbackAgain: { alignSelf: 'flex-start', minHeight: 29, justifyContent: 'center', marginTop: 6 },

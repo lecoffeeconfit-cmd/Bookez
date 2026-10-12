@@ -6,6 +6,7 @@ export { AI_PROVIDER_STORAGE_KEY, deviceSourceLimit } from './ai-provider';
 export type { AIProviderPreference, AIResolvedProvider } from './ai-provider';
 
 export type AIWritingOperation =
+  | 'draft-page'
   | 'continue'
   | 'improve'
   | 'rewrite'
@@ -49,8 +50,12 @@ export type AIWritingRequest = {
   operation: AIWritingOperation | AIProjectOperation;
   text: string;
   instruction?: string;
+  /** Auto cloud fallback leaves the monthly reserve for explicitly chosen cloud calls. */
+  protectReserve?: boolean;
   context: AIWritingContext;
 };
+
+export type AICloudUsage = { month: string; usedCredits: number; monthlyCredits: number };
 
 export type AIWritingResponse = {
   /** Prose alternatives for transformations and continuations. */
@@ -59,6 +64,15 @@ export type AIWritingResponse = {
   ideas?: Array<{ title: string; detail: string }>;
   /** Concise writing feedback for section questions. */
   feedback?: string;
+  usage?: AICloudUsage;
+};
+
+const parseCloudUsage = (value: unknown): AICloudUsage | undefined => {
+  if (!value || typeof value !== 'object') return undefined;
+  const usage = value as Record<string, unknown>;
+  return typeof usage.month === 'string' && Number.isFinite(usage.usedCredits) && Number.isFinite(usage.monthlyCredits)
+    ? { month: usage.month, usedCredits: Number(usage.usedCredits), monthlyCredits: Number(usage.monthlyCredits) }
+    : undefined;
 };
 
 const withoutContextNotes = (notes: string | undefined, duplicateLabels: string[]) => {
@@ -159,10 +173,16 @@ const cloudGenerate = async (request: AIWritingRequest): Promise<AIWritingRespon
       })
       : [],
     feedback: typeof result.feedback === 'string' ? result.feedback : '',
+    usage: parseCloudUsage(result.usage),
   };
 };
 
 export const AIWritingService = {
+  async readCloudUsage(): Promise<AICloudUsage | undefined> {
+    const { data, error } = await supabase.functions.invoke<unknown>('bookez-ai-writing', { method: 'GET' });
+    if (error) return undefined;
+    return parseCloudUsage(data);
+  },
   async isAvailable() {
     return nativeIsAvailable();
   },

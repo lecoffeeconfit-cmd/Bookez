@@ -1,7 +1,9 @@
 import { requireOptionalNativeModule } from 'expo';
 import { LinearGradient } from 'expo-linear-gradient';
 import { forwardRef, useEffect, useRef, useState, type ReactNode } from 'react';
-import { Alert, Animated, Easing, Pressable, StyleSheet, Text, TextInput, type TextInputProps, View } from 'react-native';
+import { Alert, Animated, AppState, Easing, Pressable, StyleSheet, Text, TextInput, type TextInputProps, View } from 'react-native';
+import Svg, { Path } from 'react-native-svg';
+import { appendDictationSegment } from '../lib/dictation';
 import { bookezColors } from '../theme/bookez';
 import { useBookezReduceMotion } from './BookezUI';
 import { BookezBookmark, BookezManuscript } from './bookez-art';
@@ -11,6 +13,7 @@ type SpeechRecognitionPackage = typeof import('expo-speech-recognition');
 const speechRecognition = requireOptionalNativeModule('ExpoSpeechRecognition')
   ? require('expo-speech-recognition') as SpeechRecognitionPackage
   : null;
+export const nativeDictationAvailable = Boolean(speechRecognition);
 
 type InputMode = 'dictation' | 'writing';
 
@@ -21,10 +24,17 @@ type DictationInputProps = TextInputProps & {
   trailingAccessoryWidth?: number;
   onInputMode?: (mode: InputMode) => void;
   onDictationState?: (active: boolean) => void;
+  dictationEnabled?: boolean;
 };
 
 let nextDictationInputId = 0;
 let activeDictationInputId: string | null = null;
+
+function MicrophoneMark({ color }: { color: string }) {
+  return <Svg width={16} height={18} viewBox="0 0 20 24" accessible={false}>
+    <Path d="M7 5a3 3 0 0 1 6 0v7a3 3 0 0 1-6 0V5Zm-3 7a6 6 0 0 0 12 0m-6 6v4m-3 0h6" fill="none" stroke={color} strokeWidth={1.7} strokeLinecap="round" strokeLinejoin="round" />
+  </Svg>;
+}
 
 function ManuscriptSurface({ pulseKey, sceneKey }: { pulseKey: string; sceneKey: string }) {
   const reduceMotion = useBookezReduceMotion();
@@ -92,7 +102,7 @@ function ManuscriptSurface({ pulseKey, sceneKey }: { pulseKey: string; sceneKey:
   </Animated.View>;
 }
 
-const KeyboardDictationInput = forwardRef<TextInput, DictationInputProps>(function KeyboardDictationInput({ style, accessibilityLabel, grow = false, editorial = false, trailingAccessory, trailingAccessoryWidth = 76, onInputMode, onDictationState, onKeyPress, ...props }, ref) {
+const KeyboardDictationInput = forwardRef<TextInput, DictationInputProps>(function KeyboardDictationInput({ style, accessibilityLabel, grow = false, editorial = false, trailingAccessory, trailingAccessoryWidth = 76, onInputMode, onDictationState, onKeyPress, onBlur, dictationEnabled = true, ...props }, ref) {
   const inputRef = useRef<TextInput>(null);
   const keyboardDictationRef = useRef(false);
   const fieldName = accessibilityLabel ? ` for ${accessibilityLabel}` : '';
@@ -103,7 +113,9 @@ const KeyboardDictationInput = forwardRef<TextInput, DictationInputProps>(functi
     onDictationState?.(false);
   };
   useEffect(() => () => endKeyboardDictation(), []);
+  useEffect(() => { if (!dictationEnabled) { endKeyboardDictation(); inputRef.current?.blur(); } }, [dictationEnabled]);
   const openKeyboardForDictation = () => {
+    if (!dictationEnabled || props.editable === false) return;
     keyboardDictationRef.current = true;
     onInputMode?.('dictation');
     onDictationState?.(true);
@@ -111,17 +123,17 @@ const KeyboardDictationInput = forwardRef<TextInput, DictationInputProps>(functi
   };
 
   return <View style={[s.field, manuscript && s.manuscriptField, grow && s.fieldGrow]}>{manuscript && <ManuscriptSurface sceneKey={accessibilityLabel ?? ''} pulseKey={`${accessibilityLabel ?? ''}:${typeof props.value === 'string' ? props.value : ''}`} />}
-    <TextInput ref={(instance) => { inputRef.current = instance; if (typeof ref === 'function') ref(instance); else if (ref) ref.current = instance; }} {...props} showSoftInputOnFocus onKeyPress={(event) => { onKeyPress?.(event); onInputMode?.('writing'); endKeyboardDictation(); }} accessibilityLabel={accessibilityLabel} style={[style, s.input, manuscript && s.manuscriptInput, trailingAccessory ? { paddingRight: trailingAccessoryWidth } : null]} />
+    <TextInput ref={(instance) => { inputRef.current = instance; if (typeof ref === 'function') ref(instance); else if (ref) ref.current = instance; }} {...props} showSoftInputOnFocus onBlur={(event) => { endKeyboardDictation(); onBlur?.(event); }} onKeyPress={(event) => { onKeyPress?.(event); onInputMode?.('writing'); endKeyboardDictation(); }} accessibilityLabel={accessibilityLabel} style={[style, s.input, manuscript && s.manuscriptInput, trailingAccessory ? { paddingRight: trailingAccessoryWidth } : null]} />
     <View style={[s.actionRail, manuscript && s.manuscriptActionRail]}>
       {trailingAccessory}
-      <Pressable onPress={openKeyboardForDictation} hitSlop={8} style={[s.button, editorial && s.buttonEditorial]} accessibilityRole="button" accessibilityLabel={`Open keyboard dictation${fieldName}`} accessibilityHint="Opens the keyboard. Tap the keyboard microphone to dictate.">
-        <Text style={[s.icon, editorial && s.iconEditorial]}>◉</Text>
+      <Pressable onPress={openKeyboardForDictation} disabled={!dictationEnabled || props.editable === false} hitSlop={8} style={[s.button, editorial && s.buttonEditorial]} accessibilityRole="button" accessibilityLabel={`Open keyboard dictation${fieldName}`} accessibilityHint="Opens the keyboard. Tap the keyboard microphone to dictate.">
+        <MicrophoneMark color={editorial ? bookezColors.accent : bookezColors.secondaryAccent} />
       </Pressable>
     </View>
   </View>;
 });
 
-const NativeDictationInput = forwardRef<TextInput, DictationInputProps>(function NativeDictationInput({ style, accessibilityLabel, grow = false, editorial = false, trailingAccessory, trailingAccessoryWidth = 76, onInputMode, onDictationState, onChangeText, onKeyPress, value, ...props }, ref) {
+const NativeDictationInput = forwardRef<TextInput, DictationInputProps>(function NativeDictationInput({ style, accessibilityLabel, grow = false, editorial = false, trailingAccessory, trailingAccessoryWidth = 76, onInputMode, onDictationState, onChangeText, onKeyPress, value, dictationEnabled = true, ...props }, ref) {
   const { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent } = speechRecognition!;
   const [isDictating, setIsDictating] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
@@ -130,8 +142,25 @@ const NativeDictationInput = forwardRef<TextInput, DictationInputProps>(function
   const valueRef = useRef(typeof value === 'string' ? value : '');
   const sessionBaseRef = useRef('');
   const onDictationStateRef = useRef(onDictationState);
+  const mountedRef = useRef(true);
+  const enabledRef = useRef(dictationEnabled);
+  enabledRef.current = dictationEnabled && props.editable !== false;
   if (!inputIdRef.current) inputIdRef.current = `dictation-input-${++nextDictationInputId}`;
   const inputId = inputIdRef.current;
+  const stopOwnedDictation = () => {
+    if (activeDictationInputId !== inputId) return;
+    activeDictationInputId = null;
+    isDictatingRef.current = false;
+    setIsDictating(false);
+    onDictationStateRef.current?.(false);
+    ExpoSpeechRecognitionModule.abort();
+  };
+
+  useEffect(() => { if (!dictationEnabled || props.editable === false) stopOwnedDictation(); }, [dictationEnabled, props.editable]);
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (state) => { if (state !== 'active') stopOwnedDictation(); });
+    return () => subscription.remove();
+  }, []);
 
   useEffect(() => {
     onDictationStateRef.current = onDictationState;
@@ -146,6 +175,7 @@ const NativeDictationInput = forwardRef<TextInput, DictationInputProps>(function
   }, [isDictating]);
 
   useEffect(() => () => {
+    mountedRef.current = false;
     if (activeDictationInputId === inputId) {
       activeDictationInputId = null;
       isDictatingRef.current = false;
@@ -159,7 +189,10 @@ const NativeDictationInput = forwardRef<TextInput, DictationInputProps>(function
     const transcript = event.results[0]?.transcript?.trim();
     if (!transcript) return;
     const prefix = sessionBaseRef.current;
-    onChangeText?.(`${prefix}${prefix.trim() ? ' ' : ''}${transcript}`);
+    const next = appendDictationSegment(prefix, transcript, props.maxLength);
+    valueRef.current = next;
+    onChangeText?.(next);
+    if (event.isFinal) sessionBaseRef.current = next;
   });
 
   useSpeechRecognitionEvent('end', () => {
@@ -182,6 +215,7 @@ const NativeDictationInput = forwardRef<TextInput, DictationInputProps>(function
   });
 
   const startDictation = async () => {
+    if (!enabledRef.current) return;
     if (isDictating || isStarting) {
       ExpoSpeechRecognitionModule.stop();
       return;
@@ -195,6 +229,7 @@ const NativeDictationInput = forwardRef<TextInput, DictationInputProps>(function
     setIsStarting(true);
     try {
       const permissions = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
+      if (!mountedRef.current || !enabledRef.current) return;
       if (!permissions.granted) {
         Alert.alert('Microphone permission needed', 'Allow microphone and speech recognition access in Settings to dictate directly in Bookez.');
         return;
@@ -214,7 +249,7 @@ const NativeDictationInput = forwardRef<TextInput, DictationInputProps>(function
       onDictationStateRef.current?.(false);
       Alert.alert('Dictation unavailable', 'Speech recognition could not start on this device.');
     } finally {
-      setIsStarting(false);
+      if (mountedRef.current) setIsStarting(false);
     }
   };
 
@@ -222,11 +257,11 @@ const NativeDictationInput = forwardRef<TextInput, DictationInputProps>(function
   const fieldName = accessibilityLabel ? ` for ${accessibilityLabel}` : '';
   const manuscript = editorial && accessibilityLabel?.toLowerCase().endsWith('manuscript');
   return <View style={[s.field, manuscript && s.manuscriptField, grow && s.fieldGrow]}>{manuscript && <ManuscriptSurface sceneKey={accessibilityLabel ?? ''} pulseKey={`${accessibilityLabel ?? ''}:${typeof value === 'string' ? value : ''}`} />}
-    <TextInput ref={ref} {...props} value={value} onChangeText={onChangeText} onKeyPress={(event) => { onKeyPress?.(event); onInputMode?.('writing'); onDictationStateRef.current?.(false); }} accessibilityLabel={accessibilityLabel} style={[style, s.input, manuscript && s.manuscriptInput, trailingAccessory ? { paddingRight: trailingAccessoryWidth } : null]} />
+    <TextInput ref={ref} {...props} value={value} onChangeText={onChangeText} onKeyPress={(event) => { stopOwnedDictation(); onKeyPress?.(event); onInputMode?.('writing'); }} accessibilityLabel={accessibilityLabel} style={[style, s.input, manuscript && s.manuscriptInput, trailingAccessory ? { paddingRight: trailingAccessoryWidth } : null]} />
     <View style={[s.actionRail, manuscript && s.manuscriptActionRail]}>
       {trailingAccessory}
-      <Pressable onPress={() => void startDictation()} disabled={isStarting} hitSlop={8} style={[s.button, editorial && s.buttonEditorial, dictating && (editorial ? s.buttonListeningEditorial : s.buttonListening)]} accessibilityRole="button" accessibilityState={{ busy: isStarting, selected: isDictating }} accessibilityLabel={`${dictating ? 'Stop' : 'Start'} dictation${fieldName}`} accessibilityHint={dictating ? 'Stops dictation and keeps the transcribed text.' : 'Starts dictation directly. The keyboard stays closed.'}>
-        <Text style={[s.icon, editorial && s.iconEditorial, dictating && editorial && s.iconListeningEditorial]}>{dictating ? '■' : '◉'}</Text>
+      <Pressable onPress={() => void startDictation()} disabled={isStarting || !dictationEnabled || props.editable === false} hitSlop={8} style={[s.button, editorial && s.buttonEditorial, dictating && (editorial ? s.buttonListeningEditorial : s.buttonListening)]} accessibilityRole="button" accessibilityState={{ busy: isStarting, selected: isDictating }} accessibilityLabel={`${dictating ? 'Stop' : 'Start'} dictation${fieldName}`} accessibilityHint={dictating ? 'Stops dictation and keeps the transcribed text.' : 'Starts dictation directly. The keyboard stays closed.'}>
+        {dictating ? <Text style={[s.icon, editorial && s.iconListeningEditorial]}>■</Text> : <MicrophoneMark color={editorial ? bookezColors.accent : bookezColors.secondaryAccent} />}
       </Pressable>
     </View>
   </View>;
