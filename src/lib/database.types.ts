@@ -3,6 +3,24 @@ export type Json = string | number | boolean | null | { [key: string]: Json | un
 export type Database = {
   bookez: {
     Tables: {
+      book_notes: {
+        Row: { id: string; project_id: string; user_id: string; document: Json; revision: number; updated_at: string };
+        Insert: never;
+        Update: never;
+        Relationships: [{ foreignKeyName: 'book_notes_project_id_fkey'; columns: ['project_id']; isOneToOne: false; referencedRelation: 'projects'; referencedColumns: ['id'] }];
+      };
+      support_tickets: {
+        Row: { id: string; user_id: string; category: string; subject: string; message: string; status: string; priority: string; created_at: string; updated_at: string };
+        Insert: { id?: string; user_id: string; category: string; subject: string; message: string };
+        Update: never;
+        Relationships: [];
+      };
+      support_messages: {
+        Row: { id: string; ticket_id: string; actor_id: string; body: string; created_at: string };
+        Insert: never;
+        Update: never;
+        Relationships: [{ foreignKeyName: 'support_messages_ticket_id_fkey'; columns: ['ticket_id']; isOneToOne: false; referencedRelation: 'support_tickets'; referencedColumns: ['id'] }];
+      };
       profiles: {
         Row: { user_id: string; display_name: string | null; onboarding_completed: boolean; current_project_id: string | null; created_at: string; updated_at: string };
         Insert: { user_id: string; display_name?: string | null; onboarding_completed?: boolean; current_project_id?: string | null; created_at?: string; updated_at?: string };
@@ -64,7 +82,7 @@ export type Database = {
         Relationships: [];
       };
       community_reports: {
-        Row: { id: string; reporter_id: string; reported_user_id: string; project_id: string | null; reason: string; created_at: string };
+        Row: { id: string; reporter_id: string; reported_user_id: string; project_id: string | null; reason: string; created_at: string; status: 'open' | 'resolved'; resolved_at: string | null };
         Insert: { id?: string; reporter_id: string; reported_user_id: string; project_id?: string | null; reason: string; created_at?: string };
         Update: { id?: string; reporter_id?: string; reported_user_id?: string; project_id?: string | null; reason?: string; created_at?: string };
         Relationships: [];
@@ -168,6 +186,8 @@ export type Database = {
     };
     Views: {};
     Functions: {
+      save_book_note: { Args: { p_id: string; p_project_id: string; p_document: Json; p_expected_revision: number }; Returns: Json };
+      is_my_admin: { Args: Record<string, never>; Returns: boolean };
       update_project_if_revision: {
         Args: { p_id: string; p_user_id: string; p_expected_revision: number; p_title: string; p_writing_type: string; p_target_words: number | null; p_target_chapters: number | null; p_status: string; p_current_word_count: number; p_deleted_at?: string | null };
         Returns: Database['bookez']['Tables']['projects']['Row'];

@@ -47,5 +47,5 @@ assert.match(projectComponent, /'unwritten'/, 'Project AI should draft blank par
 
 const edge = await readFile(new URL('../supabase/functions/bookez-ai-writing/index.ts', import.meta.url), 'utf8');
 for (const operation of ['project-scan', 'project-edit', 'project-add']) assert.ok(edge.includes(`'${operation}'`));
-assert.match(edge, /request\.operation === 'project-edit' \|\| request\.operation === 'project-add' \? 4000/);
+assert.match(edge, /request\.operation === 'project-edit' \|\| request\.operation === 'project-add' \|\| request\.text\.length > 2_000 \? 4000/);
 console.log('Project AI contract: chunk preservation, stale-scan identity, compact context, and cloud operations verified.');

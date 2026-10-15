@@ -234,7 +234,7 @@ export function BookezCard({ children, tone = 'default', elevated = true, style 
 }
 
 const cardTones: Record<NonNullable<BookezCardProps['tone']>, ViewStyle> = {
-  default: { backgroundColor: bookezColors.surfaceRaised, borderColor: bookezColors.border },
+  default: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder },
   subtle: { backgroundColor: bookezColors.surfaceMuted, borderColor: bookezColors.divider },
   manuscript: { backgroundColor: bookezColors.manuscript, borderColor: bookezColors.manuscriptEdge },
   accent: { backgroundColor: bookezColors.accentSoft, borderColor: bookezColors.burgundySoft },
@@ -409,7 +409,7 @@ export function BookezStatTile({ label, value, detail, tone = 'default', style }
 }
 
 const statTones: Record<NonNullable<BookezStatTileProps['tone']>, ViewStyle> = {
-  default: { backgroundColor: bookezColors.surfaceRaised, borderColor: bookezColors.border },
+  default: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder },
   accent: { backgroundColor: bookezColors.accentSoft, borderColor: bookezColors.burgundySoft },
   success: { backgroundColor: bookezColors.successSoft, borderColor: bookezColors.borderWarm },
   warm: { backgroundColor: bookezColors.secondaryAccentSoft, borderColor: bookezColors.goldSoft },
@@ -481,7 +481,7 @@ const styles = StyleSheet.create({
   sheetHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' },
   sheetHeaderCopy: { flex: 1, minWidth: 0, paddingRight: bookezSpacing.sm },
   sheetDescription: { marginTop: bookezSpacing.xs },
-  emptyState: { padding: bookezSpacing.xl, borderRadius: bookezRadii.card, alignItems: 'center', backgroundColor: bookezColors.surface, borderWidth: 1, borderColor: bookezColors.border },
+  emptyState: { padding: bookezSpacing.xl, borderRadius: bookezRadii.card, alignItems: 'center', backgroundColor: bookezColors.card, borderWidth: 1, borderColor: bookezColors.cardBorder },
   emptyIcon: { width: 54, height: 54, marginBottom: bookezSpacing.sm, borderRadius: 18, alignItems: 'center', justifyContent: 'center', backgroundColor: bookezColors.accentSoft },
   emptyBody: { maxWidth: 290, marginTop: bookezSpacing.xs, marginBottom: bookezSpacing.md, textAlign: 'center' },
   statTile: { flex: 1, minWidth: 132, padding: bookezSpacing.sm, borderRadius: bookezRadii.control + 2, borderWidth: 1 },

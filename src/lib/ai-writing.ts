@@ -47,6 +47,10 @@ export type AIWritingContext = {
 };
 
 export type AIWritingRequest = {
+  /** Stable UUID for a deliberately retried cockpit operation; never regenerate on a retry. */
+  requestId?: string;
+  /** Server validates planning output before charging a retry-safe cockpit call. */
+  cockpitAction?: 'character' | 'outline';
   operation: AIWritingOperation | AIProjectOperation;
   text: string;
   instruction?: string;
@@ -56,6 +60,8 @@ export type AIWritingRequest = {
 };
 
 export type AICloudUsage = { month: string; usedCredits: number; monthlyCredits: number };
+export type AICloudStatus = { usage?: AICloudUsage; idempotency: boolean };
+export type AIWritingExecutionOptions = { signal?: AbortSignal };
 
 export type AIWritingResponse = {
   /** Prose alternatives for transformations and continuations. */
@@ -129,6 +135,10 @@ type NativeAIWritingModule = {
 // This module is intentionally optional: Expo Go and phones without an on-device
 // model use the authenticated cloud fallback for writing tools.
 const nativeModule = requireOptionalNativeModule('BookezAIWriting') as NativeAIWritingModule | null;
+// Native providers expose a process-wide cancel method, not per-request handles.
+// Serialize every caller so an old request's abort cannot cancel newer work.
+let nativeWritingInFlight = false;
+let nativeWritingScoped = false;
 
 export class AIWritingCanceledError extends Error {
   constructor() {
@@ -155,8 +165,10 @@ const cloudErrorMessage = async (error: unknown) => {
     : 'Bookez could not generate that right now.';
 };
 
-const cloudGenerate = async (request: AIWritingRequest): Promise<AIWritingResponse> => {
-  const { data, error } = await supabase.functions.invoke<unknown>('bookez-ai-writing', { body: request });
+const cloudGenerate = async (request: AIWritingRequest, signal?: AbortSignal): Promise<AIWritingResponse> => {
+  if (signal?.aborted) throw new AIWritingCanceledError();
+  const { data, error } = await supabase.functions.invoke<unknown>('bookez-ai-writing', { body: request, signal });
+  if (signal?.aborted) throw new AIWritingCanceledError();
   if (error) throw new Error(await cloudErrorMessage(error));
   if (!data || typeof data !== 'object') throw new Error('Bookez received an invalid AI response.');
 
@@ -178,6 +190,14 @@ const cloudGenerate = async (request: AIWritingRequest): Promise<AIWritingRespon
 };
 
 export const AIWritingService = {
+  /** Cockpit cloud calls stay unavailable until the matching server safeguards are deployed. */
+  async readCloudStatus(signal?: AbortSignal): Promise<AICloudStatus> {
+    const { data, error } = await supabase.functions.invoke<unknown>('bookez-ai-writing', { method: 'GET', headers: { 'x-bookez-cockpit': '1' }, signal });
+    if (error || signal?.aborted || !data || typeof data !== 'object') return { idempotency: false };
+    const result = data as Record<string, unknown>;
+    const capabilities = result.capabilities as Record<string, unknown> | undefined;
+    return { usage: parseCloudUsage(result), idempotency: capabilities?.idempotency === true };
+  },
   async readCloudUsage(): Promise<AICloudUsage | undefined> {
     const { data, error } = await supabase.functions.invoke<unknown>('bookez-ai-writing', { method: 'GET' });
     if (error) return undefined;
@@ -198,15 +218,33 @@ export const AIWritingService = {
     if (route === 'too-long') throw new Error(`This passage is too long for phone AI. Select a shorter passage (up to ${deviceSourceLimit(request?.operation ?? 'rewrite')} characters) or choose Bookez credits.`);
     return route;
   },
-  async generate(request: AIWritingRequest, preference: AIProviderPreference = 'auto') {
+  async generate(request: AIWritingRequest, preference: AIProviderPreference = 'auto', { signal }: AIWritingExecutionOptions = {}) {
+    if (signal?.aborted) throw new AIWritingCanceledError();
     const provider = await this.resolveProvider(preference, request);
+    if (signal?.aborted) throw new AIWritingCanceledError();
     if (provider === 'device') {
       if (!nativeModule?.generate) throw new Error('On-device AI requires a current Bookez app build.');
-      return nativeModule.generate(request);
+      if (nativeWritingInFlight) throw new Error('Phone AI is finishing another request. Wait a moment, then try again.');
+      nativeWritingInFlight = true;
+      nativeWritingScoped = Boolean(signal);
+      const onAbort = () => { void nativeModule?.cancel?.().catch(() => undefined); };
+      signal?.addEventListener('abort', onAbort, { once: true });
+      try {
+        const result = await nativeModule.generate(request);
+        if (signal?.aborted) throw new AIWritingCanceledError();
+        return result;
+      } finally {
+        signal?.removeEventListener('abort', onAbort);
+        nativeWritingInFlight = false;
+        nativeWritingScoped = false;
+      }
     }
-    return cloudGenerate(request);
+    return cloudGenerate(request, signal);
   },
   async cancel() {
+    // Legacy tool Cancel buttons cannot cancel an isolated cockpit session.
+    // Signal-scoped callers exclusively own their own cancellation handle.
+    if (!nativeWritingInFlight || nativeWritingScoped) return;
     try { await nativeModule?.cancel?.(); } catch { /* A cancellation should never disrupt writing. */ }
   },
   async getPlatformInfo() {

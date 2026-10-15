@@ -11,6 +11,7 @@ import { Platform, type TextStyle, type ViewStyle } from 'react-native';
 const bookezPalette = {
   appBackground: '#F5EEE1',
   surfacePrimary: '#FAF6ED',
+  surfaceCard: '#D2B386',
   surfaceSecondary: '#EAE1D4',
   surfaceRaised: '#F9F4EA',
   surfaceTint: '#EFE6D8',
@@ -24,6 +25,7 @@ const bookezPalette = {
   goldDark: '#9D743C',
   goldSoft: '#EFE4D0',
   borderWarm: '#DDCDB5',
+  borderCard: '#A47A42',
   borderStrong: '#DDCDB5',
   divider: '#E8DECE',
   sage: '#667A60',
@@ -41,6 +43,8 @@ const bookezPalette = {
 export const bookezColors = {
   background: bookezPalette.appBackground,
   surface: bookezPalette.surfacePrimary,
+  card: bookezPalette.surfaceCard,
+  cardTextSecondary: '#62503E',
   surfaceRaised: bookezPalette.surfaceRaised,
   surfaceMuted: bookezPalette.surfaceSecondary,
   surfaceAccent: '#F3E7E1',
@@ -51,6 +55,7 @@ export const bookezColors = {
   textMuted: bookezPalette.inkMuted,
   textOnAccent: '#FFF8EE',
   border: bookezPalette.borderWarm,
+  cardBorder: bookezPalette.borderCard,
   divider: bookezPalette.divider,
   accent: bookezPalette.burgundy,
   accentStrong: bookezPalette.burgundyDeep,
@@ -70,6 +75,7 @@ export const bookezColors = {
   // Explicit names for new surfaces and future components.
   appBackground: bookezPalette.appBackground,
   surfacePrimary: bookezPalette.surfacePrimary,
+  surfaceCard: bookezPalette.surfaceCard,
   surfaceSecondary: bookezPalette.surfaceSecondary,
   surfaceTint: bookezPalette.surfaceTint,
   inkPrimary: bookezPalette.inkPrimary,
@@ -321,9 +327,9 @@ export const bookezWithAlpha = (hex: string, alpha: number) => {
 };
 
 export const bookezPlaceholderCoverGradient = [
-  bookezWithAlpha(bookezColors.accent, 0.99),
-  bookezWithAlpha(bookezColors.textOnAccent, 0.58),
-  bookezWithAlpha(bookezColors.textOnAccent, 0),
+  'rgba(255,210,52,0.99)',
+  'rgba(255,226,94,0.58)',
+  'rgba(255,255,255,0)',
 ] as const;
 
 export const bookezTheme = {

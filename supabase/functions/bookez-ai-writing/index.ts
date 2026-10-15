@@ -26,6 +26,8 @@ type Operation = typeof OPERATIONS[number];
 type ContextMode = 'auto' | 'page' | 'nearby' | 'book-aware';
 
 type BookezRequest = {
+  requestId?: string;
+  cockpitAction?: 'character' | 'outline';
   operation: Operation;
   protectReserve: boolean;
   text: string;
@@ -60,7 +62,7 @@ type BookezResult = {
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-bookez-cockpit',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
   'Content-Type': 'application/json',
 };
@@ -114,6 +116,15 @@ const parseRequest = async (req: Request): Promise<BookezRequest> => {
   }
   if (!isRecord(body)) throw new RequestError('Request body must be an object.', 400);
   if (!isOperation(body.operation)) throw new RequestError('Unsupported Bookez writing action.', 400);
+  const requestId = body.requestId === undefined ? undefined : readString(body.requestId, 'requestId', 36);
+  if (requestId !== undefined && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(requestId)) {
+    throw new RequestError('requestId must be a UUID.', 400);
+  }
+  const cockpitAction = body.cockpitAction;
+  if (cockpitAction !== undefined && (cockpitAction !== 'character' && cockpitAction !== 'outline'
+    || !requestId || body.operation !== 'ask')) {
+    throw new RequestError('A cockpit planning action requires a retry-safe ask request.', 400);
+  }
 
   const text = readString(body.text, 'text', 12_000);
   if (!text.trim() && body.operation !== 'draft-page' && body.operation !== 'continue' && body.operation !== 'brainstorm' && body.operation !== 'ask' && body.operation !== 'project-add') {
@@ -149,7 +160,7 @@ const parseRequest = async (req: Request): Promise<BookezRequest> => {
   if (totalInputChars > MAX_PROMPT_CHARS) throw new RequestError('Request content is too large.', 413);
 
   if (body.protectReserve !== undefined && typeof body.protectReserve !== 'boolean') throw new RequestError('protectReserve must be a boolean.', 400);
-  return { operation: body.operation, text, instruction, protectReserve: body.protectReserve === true, context };
+  return { ...(requestId ? { requestId } : {}), ...(cockpitAction ? { cockpitAction: cockpitAction as 'character' | 'outline' } : {}), operation: body.operation, text, instruction, protectReserve: body.protectReserve === true, context };
 };
 
 const actionInstructions: Record<Operation, string> = {
@@ -255,6 +266,8 @@ const outputTextFrom = (payload: unknown): string => {
 
 const parseResult = (value: unknown): BookezResult | null => {
   if (!isRecord(value)) return null;
+  // Never deliver a silently clipped whole-page revision as a complete preview.
+  if (Array.isArray(value.options) && value.options.some((item) => typeof item === 'string' && item.length > 12_000)) return null;
   const options = Array.isArray(value.options)
     ? value.options.filter((item): item is string => typeof item === 'string' && item.trim().length > 0).slice(0, 3).map((item) => item.slice(0, 12_000))
     : [];
@@ -301,6 +314,24 @@ const creditCost = (request: BookezRequest) => {
   return contextCost + (request.operation === 'draft-page' ? 4 : 0);
 };
 
+/** Hash only validated, canonical input. A retry cannot reuse a paid ID for different work. */
+const requestFingerprint = async (request: BookezRequest) => {
+  const { requestId: _requestId, ...canonical } = request;
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(canonical)));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+};
+
+/** An unusable planning profile is a failed operation, not a paid preview. */
+const isCockpitPlanningResult = (request: BookezRequest, result: BookezResult) => {
+  if (!request.cockpitAction) return true;
+  if (request.cockpitAction === 'outline') return Boolean(result.feedback.trim()) && result.feedback.length <= 4_000;
+  const source = result.feedback.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+  let character: unknown;
+  try { character = JSON.parse(source); } catch { return false; }
+  return isRecord(character) && ['name', 'role', 'goal', 'motivation', 'conflict', 'voice', 'arc'].every((key) =>
+    typeof character[key] === 'string' && character[key].trim().length > 0 && character[key].length <= 2_000);
+};
+
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
   if (req.method !== 'POST' && req.method !== 'GET') return errorResponse('Method not allowed.', 405);
@@ -326,7 +357,12 @@ Deno.serve(async (req: Request) => {
   const admin = createClient(supabaseUrl, serviceKey).schema('bookez');
   if (req.method === 'GET') {
     const { data, error } = await admin.rpc('get_ai_usage', { p_user_id: userResult.user.id });
-    return error || !isRecord(data) ? errorResponse('Bookez AI usage is unavailable.', 503) : jsonResponse(data);
+    if (error || !isRecord(data)) return errorResponse('Bookez AI usage is unavailable.', 503);
+    if (req.headers.get('x-bookez-cockpit') !== '1') return jsonResponse(data);
+    // Older deployments remain compatible, but never advertise protections that
+    // are not actually installed. New cockpit cloud operations fail closed.
+    const { data: capabilities, error: capabilityError } = await admin.rpc('get_ai_cockpit_capabilities');
+    return jsonResponse({ ...data, capabilities: { idempotency: !capabilityError && isRecord(capabilities) && capabilities.idempotency === true } });
   }
 
   const openAiKey = Deno.env.get('OPENAI_API_KEY');
@@ -340,13 +376,24 @@ Deno.serve(async (req: Request) => {
     return errorResponse('Invalid Bookez AI request.', 400);
   }
 
-  const requestId = crypto.randomUUID();
+  const requestId = request.requestId ?? crypto.randomUUID();
+  const fingerprint = request.requestId ? await requestFingerprint(request) : undefined;
   const credits = creditCost(request);
   const protectReserve = request.protectReserve || request.operation.startsWith('project-');
-  const { data: reservation, error: reserveError } = await admin.rpc('reserve_ai_credits', {
+  const { data: reservation, error: reserveError } = await admin.rpc(fingerprint ? 'claim_ai_cockpit_request' : 'reserve_ai_credits', {
     p_user_id: userResult.user.id, p_request_id: requestId, p_credits: credits, p_protect_reserve: protectReserve,
+    ...(fingerprint ? { p_fingerprint: fingerprint } : {}),
   });
   if (reserveError || !isRecord(reservation)) return errorResponse('Bookez AI credits are unavailable. Please try again.', 503);
+  if (fingerprint && reservation.state === 'completed') {
+    const replay = parseResult(reservation.result);
+    if (!replay) return errorResponse('This paid preview is no longer cached. It will not be charged again.', 410);
+    const { data: usage, error: usageError } = await admin.rpc('get_ai_usage', { p_user_id: userResult.user.id });
+    return jsonResponse({ ...replay, ...(usageError || !isRecord(usage) ? {} : { usage }) });
+  }
+  if (fingerprint && reservation.state === 'pending') return errorResponse('This request is still processing. Retry the same request to recover its preview without another charge.', 409);
+  if (fingerprint && reservation.state === 'failed') return errorResponse('This request failed and its reservation was released. Choose a new request to try again; this request will not be charged again.', 409);
+  if (fingerprint && reservation.state === 'conflict') return errorResponse('This request ID belongs to different work. Start a new request.', 409);
   if (reservation.allowed !== true) return errorResponse(`This request needs ${credits} AI credits, but only ${reservation.remainingCredits ?? 0} remain in your ${protectReserve ? 'protected project' : 'monthly'} allowance.`, 429);
 
   let completed = false;
@@ -381,11 +428,15 @@ Deno.serve(async (req: Request) => {
       let generated: unknown;
       try { if (!providerError) generated = JSON.parse(outputTextFrom(payload)); }
       catch { providerError = errorResponse('Bookez AI returned an incomplete result. Please try again.', 502); }
+      if (!providerError && request.cockpitAction && isRecord(generated) && typeof generated.feedback === 'string' && generated.feedback.length > 4_000) {
+        providerError = errorResponse('Luna returned a planning preview that is too long. This request’s credits will be released; your book is unchanged.', 502);
+      }
       if (!providerError) {
         result = parseResult(generated);
         if (!result) providerError = errorResponse('Bookez AI returned an invalid result. Please try again.', 502);
         else if (request.operation === 'brainstorm' && result.ideas.length === 0) providerError = errorResponse('Bookez AI returned no ideas. Please try again.', 502);
         else if ((request.operation === 'ask' || request.operation === 'project-scan') && !result.feedback.trim()) providerError = errorResponse('Bookez AI returned no feedback. Please try again.', 502);
+        else if (!isCockpitPlanningResult(request, result)) providerError = errorResponse('Luna returned an unusable planning preview. This request’s credits will be released; your book is unchanged.', 502);
         else if (request.operation !== 'brainstorm' && request.operation !== 'ask' && request.operation !== 'project-scan' && result.options.length === 0) providerError = errorResponse('Bookez AI returned no writing preview. Please try again.', 502);
         else completed = true;
       }
@@ -393,10 +444,18 @@ Deno.serve(async (req: Request) => {
   } catch {
     providerError = errorResponse('Bookez AI could not complete that request. Please try again.', 502);
   }
-  const { error: finishError } = await admin.rpc('finish_ai_credits', { p_request_id: requestId, p_success: completed });
+  const { data: settlement, error: finishError } = await admin.rpc(fingerprint ? 'finish_ai_cockpit_request' : 'finish_ai_credits', {
+    p_request_id: requestId, p_success: completed,
+    ...(fingerprint ? { p_user_id: userResult.user.id, p_fingerprint: fingerprint, p_result: completed ? result : null } : {}),
+  });
   if (finishError) return errorResponse('Bookez AI credit settlement is unavailable. Please try again.', 503);
+  if (fingerprint && (!isRecord(settlement) || settlement.state !== (completed ? 'completed' : 'failed'))) {
+    return errorResponse('This request expired before it could be saved. Its credits were released; your manuscript is unchanged.', 503);
+  }
   if (providerError || !result) return providerError ?? errorResponse('Bookez AI could not complete that request.', 502);
   const { data: usage, error: usageError } = await admin.rpc('get_ai_usage', { p_user_id: userResult.user.id });
-  if (usageError || !isRecord(usage)) return errorResponse('Bookez AI usage is unavailable.', 503);
+  // A temporary usage-read failure must not hide writing already paid for.
+  // The next preflight reconciles usage; reservation remains the authority.
+  if (usageError || !isRecord(usage)) return jsonResponse({ ...result });
   return jsonResponse({ ...result, usage });
 });

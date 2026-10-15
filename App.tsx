@@ -28,10 +28,18 @@ import DictationInput from './src/components/DictationInput';
 import ManuscriptSizeControl, { manuscriptHeight, type ManuscriptSize } from './src/components/ManuscriptSizeControl';
 import AIWritingTools from './src/components/AIWritingTools';
 import AIProjectTools from './src/components/AIProjectTools';
+import AIWriteCockpitEntry, { type CockpitBridge } from './src/components/AIWriteCockpitEntry';
+import { applyCockpitPreview, undoCockpitPreview } from './src/lib/ai-cockpit-model';
+import BookezAdminEntry from './src/components/BookezAdminEntry';
+import SupportTicketHistory from './src/components/SupportTicketHistory';
+import { submitBookezSupport } from './src/lib/bookez-admin';
 import { insertAIProse, isAIPreviewCurrent, type AIInsertPlacement, type AIPreviewTarget } from './src/lib/ai-drafting';
 import EditorMode, { EditorIssueComposer } from './src/components/EditorMode';
 import BookProgressDock, { type ProgressDockMode } from './src/components/BookProgressDock';
 import WriteToolBelt, { sanitizeWriteToolBeltConfig, WRITE_TOOL_BELT_STORAGE_KEY, WRITE_TOOL_DEFAULTS, type WriteToolBeltConfig, type WriteToolDefinition } from './src/components/WriteToolBelt';
+import BookNotebook, { LibraryNotesButton, LinkedBookNotes, type NotebookBook } from './src/components/BookNotebook';
+import { clearBookNotesForOwner, startBookNotesSync } from './src/lib/book-notes';
+import { convertBookNote, type NoteConversion } from './src/lib/book-notes-model';
 import { BookezButton, BookezIcon, BookezInkReveal, useBookezReduceMotion } from './src/components/BookezUI';
 import { BookezAchievementSeal, BookezBookmark, BookezBookStack, BookezCommunityMark, BookezDefaultCover, BookezFlourish, BookezJourneyMarker, BookezManuscript, BookezManuscriptFolio, BookezMysticIcon, BookezOpenBook, BookezPlanningFolio, BookezPlanningLeaf, BookezPublishingBook, BookezQuill, BookezWritingDesk } from './src/components/bookez-art';
 import JourneyEnvironment from './src/components/JourneyEnvironment';
@@ -1448,7 +1456,7 @@ const libraryHomeS = StyleSheet.create({
   streakIcon: { color: bookezColors.secondaryAccent, fontSize: 16, lineHeight: 19 },
   streakValue: { color: C.ink, fontSize: 23, lineHeight: 25, fontWeight: '800', marginTop: 2 },
   streakLabel: { color: bookezColors.secondaryAccent, fontSize: 6, letterSpacing: 0.8, fontWeight: '800', marginTop: 3 },
-  dailyCard: { marginTop: 16, padding: 16, borderRadius: 23, backgroundColor: bookezColors.surface, borderWidth: 1, borderColor: bookezColors.border, shadowColor: '#493F35', shadowOpacity: 0.24, shadowRadius: 13, shadowOffset: { width: 0, height: 5 }, elevation: 2 },
+  dailyCard: { marginTop: 16, padding: 16, borderRadius: 23, backgroundColor: bookezColors.card, borderWidth: 1, borderColor: bookezColors.cardBorder, shadowColor: '#493F35', shadowOpacity: 0.24, shadowRadius: 13, shadowOffset: { width: 0, height: 5 }, elevation: 2 },
   dailyCardComplete: { backgroundColor: bookezColors.successSoft, borderColor: bookezColors.success },
   dailyTop: { flexDirection: 'row', alignItems: 'flex-start' },
   dailyIcon: { width: 37, height: 37, borderRadius: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: bookezColors.accentSoft },
@@ -1475,7 +1483,7 @@ const libraryHomeS = StyleSheet.create({
   writeButtonText: { color: bookezColors.textOnAccent, fontSize: 9, fontWeight: '800' },
   writeButtonArrow: { color: bookezColors.textOnAccent, fontSize: 16 },
   periodGrid: { marginTop: 10, flexDirection: 'row', gap: 9 },
-  periodCard: { flex: 1, minWidth: 0, padding: 12, borderRadius: 18, backgroundColor: bookezColors.surface, borderWidth: 1, borderColor: bookezColors.border },
+  periodCard: { flex: 1, minWidth: 0, padding: 12, borderRadius: 18, backgroundColor: bookezColors.card, borderWidth: 1, borderColor: bookezColors.cardBorder },
   periodCardWarm: { backgroundColor: bookezColors.rust, borderColor: bookezColors.border },
   periodLabel: { color: C.muted, fontSize: 7, letterSpacing: 0.75, fontWeight: '800' },
   periodValue: { color: C.ink, fontSize: 18, fontWeight: '800', marginTop: 5 },
@@ -1535,7 +1543,7 @@ const libraryHomeS = StyleSheet.create({
   dailyGoalUnitLabelSelected: { color: bookezColors.textPrimary },
   dailyGoalUnitHint: { color: C.muted, fontSize: 7, lineHeight: 10, marginTop: 2 },
   dailyGoalUnitCheck: { color: C.periwinkle, fontSize: 12, fontWeight: '800', marginLeft: 3 },
-  dailyGoalQuantityCard: { marginTop: 13, padding: 12, borderRadius: 17, backgroundColor: bookezColors.surfaceRaised, borderWidth: 1, borderColor: bookezColors.border },
+  dailyGoalQuantityCard: { marginTop: 13, padding: 12, borderRadius: 17, backgroundColor: bookezColors.card, borderWidth: 1, borderColor: bookezColors.cardBorder },
   dailyGoalQuantityHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' },
   dailyGoalQuantityCopy: { flex: 1, minWidth: 0 },
   dailyGoalQuantityHint: { color: C.muted, fontSize: 8, lineHeight: 11, marginTop: 3 },
@@ -1682,6 +1690,7 @@ function Library({ projects, activeProject, userId, onPage, onSelectProject, onP
   const [focusProjectTitle, setFocusProjectTitle] = useState<string | null>(null);
   const [focusPickerOpen, setFocusPickerOpen] = useState(false);
   const [sourcesProject, setSourcesProject] = useState<Project | null>(null);
+  const [notebookProjectId, setNotebookProjectId] = useState<string | null>(null);
   const [feedbackProject, setFeedbackProject] = useState<Project | null>(null);
   const [communityShareProject, setCommunityShareProject] = useState<Project | null>(null);
   const [communityShareEnabled, setCommunityShareEnabled] = useState(false);
@@ -1747,6 +1756,12 @@ function Library({ projects, activeProject, userId, onPage, onSelectProject, onP
 
   const selectAndOpen = (project: Project, nextPage: Page) => { setMenuProject(null); if (nextPage === 'Write') onOpenWritingBook(project.title); else { onSelectProject(project.title); onPage(nextPage); } };
   const updateLibraryProject = (title: string, changes: Partial<Project>) => onProjectsChange(projects.map((project) => project.title === title ? { ...project, ...changes, updatedAt: Date.now() } : project));
+  const notebookProject = projects.find((project) => project.cloudId === notebookProjectId && !project.deletedAt);
+  const openNotebook = (project: Project) => {
+    const id = project.cloudId ?? createLocalUuid();
+    if (!project.cloudId) updateLibraryProject(project.title, { cloudId: id });
+    setMenuProject(null); setNotebookProjectId(id);
+  };
   const duplicateProject = (project: Project) => {
     const title = `${project.title} Copy`;
     const copyId = createLocalUuid();
@@ -1815,14 +1830,14 @@ const copy: Project = { ...project, cloudId: copyId, cloudRevision: 0, title, up
         <Pressable onPress={() => setMenuProject(project)} style={[s.projectOverflowButton, libraryEditorialS.projectOverflowButton]} accessibilityLabel={`More actions for ${project.title}`}><Text style={[s.projectOverflowText, libraryEditorialS.projectOverflowText]}>•••</Text></Pressable>
       </Pressable>
       <View style={[s.projectStats, libraryEditorialS.projectStats]}><Text style={[s.projectStatText, libraryEditorialS.projectStatText]}>{formatCount(projectSnapshot.wordCount)} words</Text><Text style={[s.projectStatDot, libraryEditorialS.projectStatDot]}>·</Text><Text numberOfLines={1} style={[s.projectStatText, libraryEditorialS.projectStatText]}>{currentPart}</Text><Text style={[s.projectStatDot, libraryEditorialS.projectStatDot]}>·</Text><Text style={[s.projectStatText, libraryEditorialS.projectStatText]}>{project.images?.length ? `${project.images.length} visual${project.images.length === 1 ? '' : 's'}` : getImageSystemConfig(project.type).mode === 'IMAGE_LED' ? 'Illustrations planned' : 'Visuals optional'}</Text><Text style={[s.projectStatDot, libraryEditorialS.projectStatDot]}>·</Text><Text style={[s.projectStatText, libraryEditorialS.projectStatText]}>{formatLastEdited(project.updatedAt)}</Text></View>
-      <View style={[s.projectEngagementRow, libraryEditorialS.projectEngagementRow]} accessibilityLabel={project.communityPublic ? `${projectEngagement?.viewCount ?? 0} Community views and ${projectEngagement?.reactionCount ?? 0} reactions` : 'Share this book in Community to see reader activity'}>{project.communityPublic ? <><View style={s.projectEngagementMetric}><Text style={[s.projectEngagementIcon, libraryEditorialS.projectEngagementIcon]}>◎</Text><Text style={[s.projectEngagementText, libraryEditorialS.projectEngagementText]}>{formatCount(projectEngagement?.viewCount ?? 0)} views</Text></View><View style={s.projectEngagementDivider} /><View style={s.projectEngagementMetric}><Text style={[s.projectEngagementIcon, libraryEditorialS.projectEngagementIcon]}>✦</Text><Text style={[s.projectEngagementText, libraryEditorialS.projectEngagementText]}>{formatCount(projectEngagement?.reactionCount ?? 0)} reactions</Text></View></> : <Text style={[s.projectEngagementHint, libraryEditorialS.projectEngagementHint]}>◎ Share in Community to see reader activity</Text>}</View>
+      <View style={[s.projectEngagementRow, libraryEditorialS.projectEngagementRow, { paddingRight: 65 }]}>{project.communityPublic ? <><View style={s.projectEngagementMetric}><Text style={[s.projectEngagementIcon, libraryEditorialS.projectEngagementIcon]}>◎</Text><Text style={[s.projectEngagementText, libraryEditorialS.projectEngagementText]}>{formatCount(projectEngagement?.viewCount ?? 0)} views</Text></View><View style={s.projectEngagementDivider} /><View style={s.projectEngagementMetric}><Text style={[s.projectEngagementIcon, libraryEditorialS.projectEngagementIcon]}>✦</Text><Text style={[s.projectEngagementText, libraryEditorialS.projectEngagementText]}>{formatCount(projectEngagement?.reactionCount ?? 0)} reactions</Text></View></> : <Text numberOfLines={1} style={[s.projectEngagementHint, libraryEditorialS.projectEngagementHint, { flexShrink: 1 }]}>◎ Share in Community to see reader activity</Text>}<LibraryNotesButton title={project.title} onPress={() => openNotebook(project)} /></View>
       {!project.archived && <View style={[s.projectCardActions, libraryEditorialS.projectCardActions]}><BookezButton label="Continue writing" icon="feather" compact onPress={() => selectAndOpen(project, 'Write')} style={libraryEditorialS.projectContinueButton} /><BookezButton label="Preview book" variant="secondary" compact onPress={() => { onSelectProject(project.title); onOpenBookStudio(project.title, 'read'); }} style={libraryEditorialS.projectPreviewButton} /></View>}
       {!project.archived && projectSnapshot.manuscriptComplete && project.cloudId && <Pressable onPress={() => onOpenEditor(project.cloudId!)} style={editorEntryS.libraryEntry} accessibilityRole="button" accessibilityLabel={`Review ${project.title} in Editor`}><Text style={editorEntryS.libraryEntryText}>⚑  Review in Editor</Text><Text style={editorEntryS.libraryEntryArrow}>→</Text></Pressable>}
     </BookezInstrumentReveal>;
   };
 
   return <><PageHeader page="Library" onPage={onPage} editorial /><Text style={[s.intro, libraryEditorialS.intro]}>Pick up a thread, or begin a brand new little world.</Text>
-    <BookezInstrumentReveal triggerKey={`Library-focus-${focusProject?.title ?? activeProject}`} delay={70} reduceMotion={reduceMotion} variant="folio" direction={-1} style={[s.focusCard, libraryEditorialS.focusCard]}><LinearGradient pointerEvents="none" colors={[bookezColors.surfaceRaised, bookezColors.manuscript, '#F9F4EA']} locations={[0, 0.6, 1]} style={StyleSheet.absoluteFill} /><LibraryHeroFolioHardware /><View pointerEvents="none" style={libraryEditorialS.focusCardAccent} /><View pointerEvents="none" style={libraryEditorialS.focusTopRule} />{focusProject ? <View pointerEvents="none" style={[s.focusCoverPeek, libraryEditorialS.focusCoverPeek]} accessibilityLabel={`${focusProject.title} cover`}>{focusCover?.uri ? <><Image source={{ uri: focusCover.uri }} style={s.focusCoverImage} resizeMode="cover" accessibilityLabel={`${focusProject.title} cover image`} /><View style={s.focusCoverVeil} /></> : <BookezDefaultCover type={focusProject.type} animated />}</View> : null}<BookezInkReveal triggerKey="Library-desk" delay={110} style={libraryEditorialS.focusArtworkReveal}><View style={libraryEditorialS.focusArtworkGraphic}><BookezWritingDesk width={138} height={83} color={bookezColors.textPrimary} accent={bookezColors.secondaryAccent} /></View></BookezInkReveal>
+    <BookezInstrumentReveal triggerKey={`Library-focus-${focusProject?.title ?? activeProject}`} delay={70} reduceMotion={reduceMotion} variant="folio" direction={-1} style={[s.focusCard, libraryEditorialS.focusCard]}><LinearGradient pointerEvents="none" colors={[bookezColors.surfaceRaised, bookezColors.card, bookezColors.manuscript]} locations={[0, 0.6, 1]} style={StyleSheet.absoluteFill} /><LibraryHeroFolioHardware /><View pointerEvents="none" style={libraryEditorialS.focusCardAccent} /><View pointerEvents="none" style={libraryEditorialS.focusTopRule} />{focusProject ? <View pointerEvents="none" style={[s.focusCoverPeek, libraryEditorialS.focusCoverPeek]} accessibilityLabel={`${focusProject.title} cover`}>{focusCover?.uri ? <><Image source={{ uri: focusCover.uri }} style={s.focusCoverImage} resizeMode="cover" accessibilityLabel={`${focusProject.title} cover image`} /><View style={s.focusCoverVeil} /></> : <BookezDefaultCover type={focusProject.type} animated />}</View> : null}<BookezInkReveal triggerKey="Library-desk" delay={110} style={libraryEditorialS.focusArtworkReveal}><View style={libraryEditorialS.focusArtworkGraphic}><BookezWritingDesk width={138} height={83} color={bookezColors.textPrimary} accent={bookezColors.secondaryAccent} /></View></BookezInkReveal>
       <View style={[s.focusHeader, libraryEditorialS.focusHeader]}><Text style={[s.focusEyebrow, libraryEditorialS.focusEyebrow]}>{focusIsManual ? 'YOUR FOCUS BOOK' : 'CLOSEST TO COMPLETION'}</Text><Pressable onPress={() => setFocusPickerOpen(true)} hitSlop={8} style={[s.focusPickerButton, libraryEditorialS.focusPickerButton]} accessibilityRole="button" accessibilityLabel="Choose the book shown in the focus card"><Text style={[s.focusPickerButtonText, libraryEditorialS.focusPickerButtonText]}>Switch</Text><Text style={[s.focusPickerButtonArrow, libraryEditorialS.focusPickerButtonArrow]}>⌄</Text></Pressable></View>
       <Text style={[s.focusTitle, libraryEditorialS.focusTitle]}>{focusProject?.title ?? activeProject}</Text><Text style={[s.focusCopy, libraryEditorialS.focusCopy]}>Follow the thread from first idea to finished manuscript.</Text>{focusSnapshot && <Text style={[s.focusProgress, libraryEditorialS.focusProgress]}>{focusSnapshot.progressPercent}% complete · {focusSnapshot.stage}</Text>}
       {focusProject && focusSnapshot && <LibraryWritingHome embedded project={focusProject} projects={activeBooks} snapshot={focusSnapshot} onUpdateProject={updateLibraryProject} onOpenWritingBook={onOpenWritingBook} onContinueStep={() => { if (onContinueProgress) onContinueProgress(focusSnapshot.progress.nextStep); else onOpenWritingBook(focusProject.title); }} onPage={(nextPage) => { onSelectProject(focusProject.title); onPage(nextPage); }} />}
@@ -1857,6 +1872,7 @@ const copy: Project = { ...project, cloudId: copyId, cloudRevision: 0, title, up
 
     <Modal animationType="fade" visible={menuProject !== null} transparent onRequestClose={() => setMenuProject(null)}>
       <Pressable style={[s.libraryMenuShade, libraryEditorialS.libraryMenuShade]} onPress={() => setMenuProject(null)}><View style={[s.libraryMenu, libraryEditorialS.libraryMenu]}><Text style={[s.libraryMenuOverline, libraryEditorialS.libraryMenuOverline]}>BOOK ACTIONS</Text><Text numberOfLines={1} style={[s.libraryMenuTitle, libraryEditorialS.libraryMenuTitle]}>{menuProject?.title}</Text>
+        <Pressable onPress={() => menuProject && openNotebook(menuProject)} style={s.libraryMenuRow} accessibilityRole="button" accessibilityLabel="Open book Notes"><Text style={s.libraryMenuIcon}>▤</Text><Text style={s.libraryMenuLabel}>Book notes</Text><Text style={s.libraryMenuArrow}>›</Text></Pressable>
         <Pressable onPress={() => { if (!menuProject) return; const title = menuProject.title; setMenuProject(null); onOpenBookStudio(title, 'export'); }} style={libraryMenuFeaturedS.row} accessibilityRole="button" accessibilityLabel={`Export ${menuProject?.title ?? 'this book'}`}><View style={libraryMenuFeaturedS.icon}><Text style={libraryMenuFeaturedS.iconText}>↗</Text></View><View style={libraryMenuFeaturedS.copy}><Text style={libraryMenuFeaturedS.label}>Export book</Text><Text style={libraryMenuFeaturedS.hint}>PDF, Word, EPUB & backup</Text></View><Text style={libraryMenuFeaturedS.arrow}>›</Text></Pressable>
         <Pressable onPress={() => menuProject && onOpenBookStudio(menuProject.title, getBookStudioState(menuProject).lastSection)} style={s.libraryMenuRow}><Text style={s.libraryMenuIcon}>▣</Text><Text style={s.libraryMenuLabel}>Open Book Studio</Text><Text style={s.libraryMenuArrow}>›</Text></Pressable>
         <Pressable onPress={() => { if (menuProject?.cloudId) { onOpenEditor(menuProject.cloudId); setMenuProject(null); } }} style={s.libraryMenuRow} accessibilityRole="button" accessibilityLabel={`Open Editor for ${menuProject?.title ?? 'book'}`}><Text style={s.libraryMenuIcon}>⚑</Text><Text style={s.libraryMenuLabel}>Review in Editor</Text><Text style={s.libraryMenuArrow}>›</Text></Pressable>
@@ -1881,6 +1897,11 @@ const copy: Project = { ...project, cloudId: copyId, cloudRevision: 0, title, up
       <View style={s.librarySourcesShade}><Pressable style={s.librarySourcesDismiss} onPress={() => setSourcesProject(null)} /><View style={s.librarySourcesSheet}><View style={s.sheetHandle} /><View style={s.librarySourcesHeader}><View style={[s.librarySourcesMark, { backgroundColor: sourcesProject?.color ?? C.periwinkle }]}><Text style={s.librarySourcesMarkText}>{sourcesProject?.mark ?? '◌'}</Text></View><View style={s.librarySourcesHeaderCopy}><Text style={s.librarySourcesOverline}>BOOKEZ / RESEARCH</Text><Text numberOfLines={1} style={s.librarySourcesHeaderTitle}>{sourcesProject?.title ?? 'Sources & references'}</Text><Text style={s.librarySourcesHeaderHint}>{sourcesProject ? `${getProjectSourceCount(projects.find((project) => project.title === sourcesProject.title) ?? sourcesProject)} saved source${getProjectSourceCount(projects.find((project) => project.title === sourcesProject.title) ?? sourcesProject) === 1 ? '' : 's'}` : ''}</Text></View><Pressable onPress={() => setSourcesProject(null)} style={s.closeButton} accessibilityLabel="Close sources and references"><Text style={s.closeButtonText}>×</Text></Pressable></View><Text style={s.librarySourcesIntro}>Keep research beside this book while you build it. References are optional and never block writing; turn on the References page in Plan when you want them included in the finished work.</Text>{sourcesProject && <ScrollView style={s.librarySourcesScroll} contentContainerStyle={s.librarySourcesContent} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}><ReferenceTool project={projects.find((project) => project.title === sourcesProject.title) ?? sourcesProject} onUpdateProject={updateLibraryProject} /></ScrollView>}</View></View>
     </Modal>
     {feedbackProject && <FeedbackRequestBuilder project={toFeedbackProject(feedbackProject)} userId={userId} onClose={() => setFeedbackProject(null)} />}
+    {notebookProject && <BookNotebook key={`${userId}:${notebookProject.cloudId}`} ownerId={userId} book={getNotebookBook(notebookProject)} onClose={() => setNotebookProjectId(null)} onConvert={(conversion, linkId) => {
+      const result = convertNotebookItem(notebookProject, conversion, linkId);
+      updateLibraryProject(notebookProject.title, { plan: result.plan, unitGoal: result.unitGoal });
+      return result.link;
+    }} />}
   </>;
 }
 
@@ -2394,6 +2415,34 @@ function getWriteParts(project: Project, blueprint: PlanBlueprint): WritePart[] 
   });
   const plannedParts = [...structureParts, ...unitParts];
   return plannedParts.length ? plannedParts : [{ key: 'freewrite:0', title: 'Free writing', helper: 'Begin anywhere. You can shape this into parts later.', kind: 'structure' as const, category: 'body' as const, required: true }];
+}
+
+function getNotebookBook(project: Project): NotebookBook {
+  const blueprint = planBlueprints[project.type] ?? planBlueprints['Custom Project'];
+  return { id: project.cloudId!, title: project.title, type: project.type, destinations: [
+    ...getWriteParts(project, blueprint).map((part) => ({ id: part.key, kind: 'chapter' as const, label: part.title, detail: [part.unitIndex === undefined ? '' : project.plan.unitIdeas[part.unitIndex], project.plan.partNotes[part.key]].filter(Boolean).join('\n\n') })),
+    { id: 'plotThread', kind: 'plot' as const, label: blueprint.plotLabel, detail: project.plan.plotThread },
+    ...blueprint.plotPrompts.map((prompt) => ({ id: prompt.label, kind: 'plot' as const, label: prompt.label, detail: project.plan.plotNotes[prompt.label] })),
+    { id: 'people', kind: 'character' as const, label: blueprint.peopleLabel, detail: project.plan.people },
+    ...(project.plan.writingFlags ?? []).map((flag) => ({ id: flag.id, kind: 'task' as const, label: flag.note.slice(0, 65) || flag.partTitle, detail: flag.note })),
+  ] };
+}
+
+function convertNotebookItem(project: Project, conversion: NoteConversion, linkId: string) {
+  const parts = getWriteParts(project, planBlueprints[project.type] ?? planBlueprints['Custom Project']);
+  const part = parts.find((item) => item.key === conversion.destinationId) ?? parts.find((item) => item.kind === 'unit') ?? parts[0];
+  if (conversion.kind === 'outline' && !parts.some((item) => item.key === conversion.destinationId)) throw new Error('Choose an existing writing part for the outline.');
+  const result = convertBookNote(project.plan, project.unitGoal, conversion.kind === 'task' ? { ...conversion, destinationId: part.key } : conversion, linkId);
+  if (conversion.kind !== 'scene' && conversion.kind !== 'task') result.link.label = getNotebookBook(project).destinations.find((item) => item.id === result.link.targetId)?.label ?? result.link.label;
+  if (conversion.kind === 'task') {
+    const flag = result.plan.writingFlags?.find((item) => item.id === linkId);
+    if (flag) {
+      flag.partTitle = part.title;
+      const issue = writingFlagAsEditorIssue(project, flag);
+      result.plan.editorIssues = [...(result.plan.editorIssues ?? []), { ...issue, title: conversion.title.trim() || 'Note reminder' }];
+    }
+  }
+  return result;
 }
 
 const getEditorSections = (project: Project): EditorSection[] => getWriteParts(project, planBlueprints[project.type] ?? planBlueprints['Custom Project'])
@@ -5646,6 +5695,65 @@ function Write({ projects, activeProject, userId, onOpenWritingBook, onUpdatePro
     sessionPanel ? ({ goal: 'goal-meter', versions: 'version-history', log: 'session-log', repetition: 'repetition-scan', brief: 'section-brief', shelf: 'reference-shelf', find: 'find-across-book', outline: 'outline-navigator', continuity: 'continuity-tracker', flags: 'writing-flags' }[sessionPanel] ?? '') : '',
   ].filter(Boolean);
 
+  // Stable bridge: cockpit transcript/progress updates never set Write state.
+  // Read the latest plan only when needed, and never send the entire manuscript.
+  const cockpitHandlers = useRef<CockpitBridge>({ getSnapshot: () => null, apply: () => ({ ok: false }) });
+  const cockpitBridge = useRef<CockpitBridge>({
+    getSnapshot: (key) => cockpitHandlers.current.getSnapshot(key),
+    apply: (preview, undo) => cockpitHandlers.current.apply(preview, undo),
+  }).current;
+  cockpitHandlers.current = {
+    getSnapshot: (key) => {
+      const latest = latestPlans.current[currentProject.title] ?? currentProject.plan;
+      const part = key ? parts.find((item) => item.key === key) : activePart;
+      if (!part || !currentProject.cloudId) return null;
+      const index = parts.findIndex((item) => item.key === part.key);
+      const next = parts.slice(index + 1).find((item) => item.kind === 'unit');
+      const text = latest.drafts[part.key] ?? '';
+      const note = (latest.partNotes[part.key] ?? '').slice(0, 1200);
+      return {
+        ownerId: userId, projectId: currentProject.cloudId, projectTitle: currentProject.title,
+        partKey: part.key, partTitle: part.title, text, revision: latest.chapterRevisions?.[part.key] ?? 0,
+        people: latest.people, unitIdeas: latest.unitIdeas,
+        nextUnit: next?.unitIndex !== undefined ? { key: next.key, title: next.title, index: next.unitIndex } : undefined,
+        parts: parts.map((item) => ({ key: item.key, title: item.title })),
+        context: { projectTitle: currentProject.title, projectType: currentProject.type,
+          chapterTitle: part.title, chapterPlan: part.helper.slice(0, 1200), nearbyText: text.slice(-1800),
+          notes: note, currentSectionSummary: note, bookIdea: latest.idea.slice(0, 1200),
+          pointOfView: (latest.pointOfView ?? '').slice(0, 300), plotThread: latest.plotThread.slice(0, 1800),
+          characters: latest.people.slice(0, 2000), toneSample: text.slice(-900) },
+      };
+    },
+    apply: (preview, undo = false) => {
+      const latest = latestPlans.current[currentProject.title] ?? currentProject.plan;
+      const target = parts.find((part) => part.key === preview.partKey);
+      if (preview.projectId !== currentProject.cloudId || (preview.kind !== 'character' && !target)) return { ok: false, reason: 'The original book or chapter is no longer available. Nothing was changed.' };
+      if (!undo && (!preview.after.trim() || ((preview.kind === 'append' || preview.kind === 'dictation' || preview.kind === 'character') && !preview.after.slice(preview.before.length).trim()))) return { ok: false, reason: 'The preview is empty. Your original writing was kept.' };
+      const result = undo ? undoCockpitPreview(latest, currentProject.cloudId!, preview) : applyCockpitPreview(latest, currentProject.cloudId!, preview);
+      if (!result.ok) return result;
+      const draftChange = preview.kind !== 'character' && preview.kind !== 'outline';
+      // Existing checkpoints plus exact before/after guards make these changes recoverable.
+      const dictationBaseline = target && lastAutoCheckpoint.current?.partKey === target.key ? lastAutoCheckpoint.current.text : preview.before;
+      const needsCheckpoint = preview.kind !== 'dictation' || draftChangeSize(dictationBaseline, preview.after) >= 650;
+      const safety = draftChange && needsCheckpoint && target && latest.drafts[target.key]?.trim()
+        ? makeDraftVersion(target, latest.drafts[target.key], true, undo ? 'Before cockpit undo' : 'Before Luna cockpit edit') : undefined;
+      if (safety && target) lastAutoCheckpoint.current = { partKey: target.key, text: preview.after, at: Date.now() };
+      let next = { ...result.plan, ...(safety ? { draftVersions: [safety, ...(latest.draftVersions ?? [])].slice(0, 30) } : {}) };
+      if (draftChange) {
+        const before = latest.drafts[preview.partKey] ?? '';
+        const after = next.drafts[preview.partKey] ?? '';
+        const delta = undo ? Math.min(0, countWords(after) - countWords(before)) : Math.max(0, countWords(after) - countWords(before));
+        const ai = preview.kind !== 'dictation';
+        next = { ...next, activity: addActivity(latest, { words: delta, pages: delta / 250, aiWords: ai ? delta : 0, aiPages: ai ? delta / 250 : 0 }) };
+        if (preview.partKey === activePart?.key && ai) setLastAIEdit(undo ? null : { before, after });
+      }
+      latestPlans.current[currentProject.title] = next;
+      onUpdateProject(currentProject.title, { plan: next });
+      // Deliberately do not focus, select, navigate, or reset the editor.
+      return { ok: true };
+    },
+  };
+
   return <>
     {focusMode && <View style={s.focusModeHeader}><Text style={s.focusModeLabel}>FOCUS MODE</Text><Pressable onPress={toggleFocusMode} style={s.focusModeExit} accessibilityRole="button" accessibilityLabel="Exit focus mode"><Text style={s.focusModeExitText}>Exit focus</Text></Pressable></View>}
     <BookezInkReveal triggerKey={`Write-${currentProject.title}`} style={[s.writeHero, compactHero && s.writeHeroCompact, focusMode && s.focusHidden]}>
@@ -5657,9 +5765,10 @@ function Write({ projects, activeProject, userId, onOpenWritingBook, onUpdatePro
           <Text style={writeEditorialS.writeManuscriptStudio}>BOOKEZ STUDIO</Text>
           <Text numberOfLines={2} style={[writeEditorialS.writeManuscriptTitle, completed && writeEditorialS.writeManuscriptTitleComplete]}>{completed ? 'MANUSCRIPT COMPLETE' : 'MANUSCRIPT'}</Text>
           <Text style={writeEditorialS.writeManuscriptSubtitle}>{completed ? 'Your story is ready for its next chapter.' : 'Craft your story.\nOne word at a time.'}</Text>
+          {activePart && currentProject.cloudId && <AIWriteCockpitEntry key={`${userId ?? 'local'}:${currentProject.cloudId}`} bridge={cockpitBridge} />}
         </View>
         <View style={[writeEditorialS.writeManuscriptArt, compactHero && writeEditorialS.writeManuscriptArtCompact]} accessible={false}>
-          <BookezManuscriptFolio width={compactHero ? 142 : 166} height={compactHero ? 86 : 100} color={bookezColors.textPrimary} accent={bookezColors.secondaryAccent} />
+          <BookezManuscriptFolio width={compactHero ? 142 : 166} height={compactHero ? 86 : 100} color={bookezColors.textPrimary} accent={bookezColors.accent} animated />
         </View>
       </View>
       <Pressable onPress={() => setProjectMenuOpen(true)} style={writeEditorialS.writeManuscriptProjectCard} accessibilityRole="button" accessibilityLabel="Switch writing project">
@@ -5683,6 +5792,7 @@ function Write({ projects, activeProject, userId, onOpenWritingBook, onUpdatePro
       <View style={[s.writePartHeader, focusMode && s.focusHidden]}><View style={[s.writePartNumber, { backgroundColor: activeArea.color }]}><Text style={s.writePartNumberText}>{String(activeIndex + 1).padStart(2, '0')}</Text></View><View style={s.writePartCopy}><Text style={[s.writePartKicker, { color: activeArea.color }]}>{activePart.title === 'Free writing' ? 'OPEN DRAFT' : activeArea.label}</Text><Text style={s.writePartTitle}>{activePart.title}</Text><Text style={s.writePartHelper}>{activePart.helper}</Text>{plan.pointOfView?.trim() && <View style={s.writePartPerspective}><Text style={s.writePartPerspectiveLabel}>POV</Text><Text numberOfLines={1} style={s.writePartPerspectiveText}>{plan.pointOfView}</Text></View>}</View></View>
       <View style={[s.writeAssistArea, focusMode && s.focusHidden]}>
         <WriteToolBelt belt="top" config={toolBeltConfig} onConfigChange={setToolBeltConfig} activeToolIds={activeWriteToolIds} onToolPress={handleWriteToolPress} editorial />
+        {notesOpen && activePart && currentProject.cloudId && <LinkedBookNotes key={`${userId}:${currentProject.cloudId}`} ownerId={userId} book={getNotebookBook(currentProject)} chapterId={activePart.key} onConvert={(conversion, linkId) => { const result = convertNotebookItem(currentProject, conversion, linkId); onUpdateProject(currentProject.title, { plan: result.plan, unitGoal: result.unitGoal }); return result.link; }} />}
         {helpOpen && <View style={[s.writeAssistPanel, s.writeAssistPanelHelp]}><Text style={s.writeAssistPanelTitle}>HELP ME WRITE</Text><Text style={s.writeHelpIntro}>Choose a question to keep beside you. Bookez won’t write the part for you.</Text>{helpPrompts.map((prompt) => <Pressable key={prompt} onPress={() => setSelectedHelpPrompt(prompt)} style={[s.writeHelpPrompt, selectedHelpPrompt === prompt && s.writeHelpPromptSelected]}><Text style={[s.writeHelpPromptText, selectedHelpPrompt === prompt && s.writeHelpPromptTextSelected]}>{prompt}</Text><Text style={s.writeHelpPromptArrow}>→</Text></Pressable>)}{selectedHelpPrompt && <Text style={s.writeHelpSelected}>Keep asking: “{selectedHelpPrompt}”</Text>}</View>}
         {notesOpen && <View style={[s.writeAssistPanel, s.writeAssistPanelNotes]}><View style={s.writeAssistPanelHeader}><Text style={s.writeAssistPanelTitle}>YOUR PRIVATE NOTES</Text><Text style={s.writeAssistPanelHint}>{contextNotes.length ? `${contextNotes.length} pieces of context available · Compass may use these as guidance` : 'Editable thoughts for you; Compass can use them as context'}</Text></View>{contextNotes.length ? contextNotes.map((note) => <View key={note.label} style={s.writeNoteRow}><Text style={s.writeNoteLabel}>{note.label}</Text><Text style={s.writeNoteText}>{note.value}</Text></View>) : <Text style={s.writeNotesEmpty}>No notes yet. Add a thought to keep beside this part.</Text>}{plan.partNotes[activePart.key]?.trim() && <View style={[s.writeSavedNote, s.writeAssistNoteInset]}><Text style={s.writeSavedNoteLabel}>YOUR NOTE</Text><Text style={s.writeSavedNoteText}>{compactNote(plan.partNotes[activePart.key])}</Text></View>}<View style={[s.writeQuickNote, s.writeAssistNoteInset]}><Text style={s.writeQuickNoteLabel}>PRIVATE NOTE FOR THIS PART</Text><DictationInput editorial value={plan.partNotes[activePart.key] || ''} onChangeText={updatePartNote} placeholder="Capture an idea for yourself…" placeholderTextColor="#667A60" multiline style={s.writeQuickNoteInput} accessibilityLabel="Private note for this part" /></View></View>}
         {compassOpen && <View style={[s.writeAssistPanel, s.writeAssistPanelCompass]}><View style={s.writeCompassHeader}><View style={s.writeCompassTitleRow}><View style={[s.writeCompassIcon, s.writeAssistIconCompass]}><Text style={s.writeCompassIconText}>⌁</Text></View><View><Text style={s.writeCompassKicker}>WRITING COMPASS</Text><Text style={s.writeCompassSub}>Generated guidance from your plan, notes, and draft</Text></View></View><Pressable onPress={refreshCompass} style={s.writeCompassRefresh} accessibilityLabel="Refresh writing compass"><Text style={s.writeCompassRefreshText}>Refresh</Text></Pressable></View><View style={s.writeCompassRow}><Text style={s.writeCompassLabel}>WHAT BELONGS HERE</Text><Text style={s.writeCompassText}>{compass.belongs}</Text></View><View style={s.writeCompassRow}><Text style={s.writeCompassLabel}>YOUR NEXT STEP</Text><Text style={s.writeCompassText}>{compass.next}</Text></View><View style={s.writeCompassRow}><Text style={s.writeCompassLabel}>KEEP IN MIND</Text><Text style={s.writeCompassText}>{compass.keep}</Text></View></View>}
@@ -6586,9 +6696,15 @@ function ProfileSupportSheet({ visible, type, onClose, onSwitchToFeedback }: { v
   const [problemArea, setProblemArea] = useState('Writing');
   const [message, setMessage] = useState('');
   const [submitted, setSubmitted] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState('');
+  const sendingRef = useRef(false);
+  const formRequest = useRef(0);
   const [helpTopic, setHelpTopic] = useState('plan');
   useEffect(() => {
+    formRequest.current += 1;
     if (!visible) return;
+    setSendError('');
     setSubmitted(false);
     setMessage('');
     setFeedbackKind('suggestion');
@@ -6603,18 +6719,25 @@ function ProfileSupportSheet({ visible, type, onClose, onSwitchToFeedback }: { v
   const title = isHelp ? 'Find your way around.' : isProblem ? 'Tell us what got in the way.' : 'Help shape what comes next.';
   const copy = isHelp ? 'A few calm answers for the moments when you’re not sure what to do next.' : isProblem ? 'A clear report helps us understand what happened and make the writing space sturdier.' : 'A thoughtful note, a small idea, or a detail you want to keep can make Bookez better.';
 
-  const submit = () => {
-    if (!message.trim()) return;
-    setSubmitted(true);
+  const submit = async () => {
+    if (!message.trim() || sendingRef.current) return;
+    sendingRef.current = true; setSending(true); setSendError('');
+    const request = formRequest.current;
+    try {
+      await submitBookezSupport(isProblem ? problemArea === 'Account' ? 'account' : 'bug' : feedbackKind === 'suggestion' ? 'feature_request' : 'general',
+        isProblem ? `${problemArea} problem` : feedbackKind === 'suggestion' ? 'An idea for Bookez' : 'What’s working in Bookez', message);
+      if (request === formRequest.current) setSubmitted(true);
+    } catch (caught) { if (request === formRequest.current) setSendError(caught instanceof Error ? caught.message : 'Your message was not sent. Please try again.'); }
+    finally { sendingRef.current = false; setSending(false); }
   };
 
   return <Modal animationType="slide" visible={visible} transparent onRequestClose={onClose}>
     <View style={feedbackS.shade}><Pressable style={feedbackS.dismiss} onPress={onClose} /><View style={feedbackS.sheet}>
       <View style={s.sheetHandle} />
-      {submitted ? <View style={feedbackS.success}><View style={[feedbackS.successIcon, isProblem && feedbackS.successIconProblem]}><Text style={feedbackS.successIconText}>✓</Text></View><Text style={feedbackS.successTitle}>{isProblem ? 'Thanks for helping us fix it.' : 'Thank you for shaping Bookez.'}</Text><Text style={feedbackS.successCopy}>{isProblem ? 'Your report has been saved for this session. The more detail you share, the easier it is to improve.' : 'Your note has been saved for this session.'}</Text><Pressable onPress={onClose} style={[feedbackS.button, isProblem && feedbackS.buttonProblem]}><Text style={feedbackS.buttonText}>Done</Text><Text style={feedbackS.buttonArrow}>→</Text></Pressable></View> : <>
+      {submitted ? <View style={feedbackS.success}><View style={[feedbackS.successIcon, isProblem && feedbackS.successIconProblem]}><Text style={feedbackS.successIconText}>✓</Text></View><Text style={feedbackS.successTitle}>{isProblem ? 'Thanks for helping us fix it.' : 'Thank you for shaping Bookez.'}</Text><Text style={feedbackS.successCopy}>{isProblem ? 'Your report was sent to Bookez. You can find replies in Feedback & suggestions.' : 'Your message was sent to Bookez. You can find replies in Feedback & suggestions.'}</Text><Pressable onPress={onClose} style={[feedbackS.button, isProblem && feedbackS.buttonProblem]}><Text style={feedbackS.buttonText}>Done</Text><Text style={feedbackS.buttonArrow}>→</Text></Pressable></View> : <>
         <View style={feedbackS.modalHeader}><View style={[feedbackS.modalIcon, isProblem ? feedbackS.modalIconProblem : isHelp ? feedbackS.modalIconHelp : feedbackS.modalIconFeedback]}><Text style={feedbackS.modalIconText}>{icon}</Text></View><View style={feedbackS.modalHeaderCopy}><Text style={feedbackS.modalEyebrow}>{kicker}</Text><Text style={feedbackS.modalTitle}>{title}</Text></View><Pressable onPress={onClose} style={feedbackS.modalClose} accessibilityLabel="Close support"><Text style={feedbackS.modalCloseText}>×</Text></Pressable></View>
         <Text style={feedbackS.modalCopy}>{copy}</Text>
-        {isHelp ? <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={feedbackS.helpContent}>{supportHelpTopics.map((topic) => { const expanded = helpTopic === topic.id; return <View key={topic.id} style={[feedbackS.helpRow, expanded && feedbackS.helpRowExpanded]}><Pressable onPress={() => setHelpTopic(expanded ? '' : topic.id)} style={feedbackS.helpRowButton} accessibilityRole="button" accessibilityState={{ expanded }}><View style={feedbackS.helpRowIcon}><Text style={feedbackS.helpRowIconText}>{topic.icon}</Text></View><View style={feedbackS.helpRowCopy}><Text style={feedbackS.helpRowTitle}>{topic.title}</Text><Text style={feedbackS.helpRowDescription}>{topic.copy}</Text></View><Text style={feedbackS.helpRowChevron}>{expanded ? '⌃' : '⌄'}</Text></Pressable>{expanded && <Text style={feedbackS.helpRowBody}>{topic.body}</Text>}</View>; })}<View style={feedbackS.helpFooter}><Text style={feedbackS.helpFooterTitle}>Still not finding it?</Text><Text style={feedbackS.helpFooterCopy}>Send a note and we’ll use it to make the next answer easier to find.</Text><Pressable onPress={onSwitchToFeedback} style={feedbackS.helpFooterButton}><Text style={feedbackS.helpFooterButtonText}>Send feedback instead</Text><Text style={feedbackS.helpFooterButtonArrow}>→</Text></Pressable></View></ScrollView> : <><Text style={feedbackS.fieldLabel}>{isProblem ? 'WHAT HAPPENED?' : 'WHAT WOULD YOU LIKE TO SHARE?'}</Text>{isProblem ? <View style={feedbackS.choiceGrid}>{['Writing', 'Cloud sync', 'Account', 'Other'].map((area) => <Pressable key={area} onPress={() => setProblemArea(area)} style={[feedbackS.choice, problemArea === area && feedbackS.choiceSelected]}><Text style={[feedbackS.choiceText, problemArea === area && feedbackS.choiceTextSelected]}>{area}</Text></Pressable>)}</View> : <View style={feedbackS.choiceRow}><Pressable onPress={() => setFeedbackKind('suggestion')} style={[feedbackS.choice, feedbackKind === 'suggestion' && feedbackS.choiceSelected]}><Text style={[feedbackS.choiceText, feedbackKind === 'suggestion' && feedbackS.choiceTextSelected]}>An idea</Text></Pressable><Pressable onPress={() => setFeedbackKind('recommendation')} style={[feedbackS.choice, feedbackKind === 'recommendation' && feedbackS.choiceSelected]}><Text style={[feedbackS.choiceText, feedbackKind === 'recommendation' && feedbackS.choiceTextSelected]}>What’s working</Text></Pressable></View>}<TextInput value={message} onChangeText={setMessage} multiline numberOfLines={5} textAlignVertical="top" placeholder={isProblem ? `Describe what happened in ${problemArea.toLowerCase()}…` : feedbackKind === 'recommendation' ? 'What should we keep making room for?' : 'What would make Bookez more useful?'} placeholderTextColor="#667A60" style={[feedbackS.input, isProblem && feedbackS.inputProblem]} accessibilityLabel={isProblem ? 'Problem description' : 'Feedback message'} /><Text style={feedbackS.formHint}>{isProblem ? 'Please don’t include passwords or private manuscript text.' : 'A sentence or two is enough.'}</Text><Pressable onPress={submit} disabled={!message.trim()} style={[feedbackS.button, isProblem && feedbackS.buttonProblem, !message.trim() && feedbackS.buttonDisabled]} accessibilityRole="button"><Text style={feedbackS.buttonText}>{isProblem ? 'Send report' : 'Send to the creator'}</Text><Text style={feedbackS.buttonArrow}>→</Text></Pressable></>}
+        {isHelp ? <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={feedbackS.helpContent}>{supportHelpTopics.map((topic) => { const expanded = helpTopic === topic.id; return <View key={topic.id} style={[feedbackS.helpRow, expanded && feedbackS.helpRowExpanded]}><Pressable onPress={() => setHelpTopic(expanded ? '' : topic.id)} style={feedbackS.helpRowButton} accessibilityRole="button" accessibilityState={{ expanded }}><View style={feedbackS.helpRowIcon}><Text style={feedbackS.helpRowIconText}>{topic.icon}</Text></View><View style={feedbackS.helpRowCopy}><Text style={feedbackS.helpRowTitle}>{topic.title}</Text><Text style={feedbackS.helpRowDescription}>{topic.copy}</Text></View><Text style={feedbackS.helpRowChevron}>{expanded ? '⌃' : '⌄'}</Text></Pressable>{expanded && <Text style={feedbackS.helpRowBody}>{topic.body}</Text>}</View>; })}<View style={feedbackS.helpFooter}><Text style={feedbackS.helpFooterTitle}>Still not finding it?</Text><Text style={feedbackS.helpFooterCopy}>Send a note and we’ll use it to make the next answer easier to find.</Text><Pressable onPress={onSwitchToFeedback} style={feedbackS.helpFooterButton}><Text style={feedbackS.helpFooterButtonText}>Send feedback instead</Text><Text style={feedbackS.helpFooterButtonArrow}>→</Text></Pressable></View></ScrollView> : <ScrollView style={{ flexShrink: 1 }} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 12 }}><Text style={feedbackS.fieldLabel}>{isProblem ? 'WHAT HAPPENED?' : 'WHAT WOULD YOU LIKE TO SHARE?'}</Text>{isProblem ? <View style={feedbackS.choiceGrid}>{['Writing', 'Cloud sync', 'Account', 'Other'].map((area) => <Pressable key={area} onPress={() => setProblemArea(area)} style={[feedbackS.choice, problemArea === area && feedbackS.choiceSelected]}><Text style={[feedbackS.choiceText, problemArea === area && feedbackS.choiceTextSelected]}>{area}</Text></Pressable>)}</View> : <View style={feedbackS.choiceRow}><Pressable onPress={() => setFeedbackKind('suggestion')} style={[feedbackS.choice, feedbackKind === 'suggestion' && feedbackS.choiceSelected]}><Text style={[feedbackS.choiceText, feedbackKind === 'suggestion' && feedbackS.choiceTextSelected]}>An idea</Text></Pressable><Pressable onPress={() => setFeedbackKind('recommendation')} style={[feedbackS.choice, feedbackKind === 'recommendation' && feedbackS.choiceSelected]}><Text style={[feedbackS.choiceText, feedbackKind === 'recommendation' && feedbackS.choiceTextSelected]}>What’s working</Text></Pressable></View>}<TextInput value={message} onChangeText={setMessage} multiline maxLength={4000} editable={!sending} numberOfLines={5} textAlignVertical="top" placeholder={isProblem ? `Describe what happened in ${problemArea.toLowerCase()}…` : feedbackKind === 'recommendation' ? 'What should we keep making room for?' : 'What would make Bookez more useful?'} placeholderTextColor="#667A60" style={[feedbackS.input, isProblem && feedbackS.inputProblem]} accessibilityLabel={isProblem ? 'Problem description' : 'Feedback message'} /><Text style={feedbackS.formHint}>{isProblem ? 'Please don’t include passwords or private manuscript text.' : 'A sentence or two is enough.'}</Text><Text style={[feedbackS.formHint, { color: bookezColors.destructive }]} accessibilityRole="alert">{sendError}</Text><Pressable onPress={() => void submit()} disabled={sending || !message.trim()} style={[feedbackS.button, isProblem && feedbackS.buttonProblem, (sending || !message.trim()) && feedbackS.buttonDisabled]} accessibilityRole="button"><Text style={feedbackS.buttonText}>{sending ? 'Sending…' : isProblem ? 'Send report' : 'Send to the creator'}</Text><Text style={feedbackS.buttonArrow}>→</Text></Pressable>{visible && <SupportTicketHistory />}</ScrollView>}
       </>}
     </View></View>
   </Modal>;
@@ -6967,6 +7090,7 @@ function Profile({ projects, reminders, onRemindersChange, smartReminders, onSma
       <Pressable onPress={() => setLegalDocument('terms')} style={s.settingsRow}><View style={s.settingsRowCopy}><View style={[s.settingsIcon, s.settingsIconGold]}><Text style={s.settingsIconText}>§</Text></View><View><Text style={s.settingsText}>Terms of service</Text><Text style={s.settingsSub}>The simple rules for using Bookez</Text></View></View><Text style={s.chevron}>›</Text></Pressable>
     </View>
 
+    <BookezAdminEntry />
     {__DEV__ && <><Text style={s.preferenceTitle}>Developer</Text><View style={s.settingsCard}><Pressable onPress={() => Sentry.captureException(new Error("Bookez Sentry test"))} style={s.settingsRow} accessibilityRole="button"><View style={s.settingsRowCopy}><View style={[s.settingsIcon, s.settingsIconBlue]}><Text style={s.settingsIconText}>⌁</Text></View><View><Text style={s.settingsText}>Send Sentry test</Text><Text style={s.settingsSub}>Development-only error event</Text></View></View><Text style={s.chevron}>›</Text></Pressable></View></>}
 
     <Text style={s.preferenceTitle}>Account & data</Text>
@@ -7443,7 +7567,8 @@ function FolioSurfaceOrnament({ triggerKey, reduceMotion, tone = 'paper', delay 
     return () => animation.stop();
   }, [delay, mechanism, reduceMotion, trace, triggerKey]);
 
-  const ink = tone === 'ink' || triggerKey.startsWith('Profile-') || triggerKey.startsWith('Stats-metric-') || triggerKey.startsWith('Stats-chart-');
+  // Only dark surfaces opt into ink; animation keys must not darken paper cards.
+  const ink = tone === 'ink';
   return <View pointerEvents="none" accessible={false} style={s.folioOrnament}>
     <Animated.View style={[s.folioBackSheet, ink && s.folioBackSheetInk, { opacity: mechanism.interpolate({ inputRange: [0, 0.32, 1], outputRange: [0, 0.22, ink ? 0.28 : 0.48] }), transform: [{ perspective: 700 }, { translateX: mechanism.interpolate({ inputRange: [0, 1], outputRange: [7, 0] }) }, { rotateY: mechanism.interpolate({ inputRange: [0, 1], outputRange: ['-4deg', '0deg'] }) }, { rotate: mechanism.interpolate({ inputRange: [0, 1], outputRange: ['0.7deg', '0deg'] }) }] }]} />
     <Animated.View style={[s.folioTopPage, ink && s.folioTopPageInk, { opacity: mechanism.interpolate({ inputRange: [0, 0.4, 1], outputRange: [0, 0.2, ink ? 0.36 : 0.62] }), transform: [{ translateY: mechanism.interpolate({ inputRange: [0, 1], outputRange: [4, 0] }) }, { scaleX: mechanism.interpolate({ inputRange: [0, 1], outputRange: [0.82, 1] }) }] }]} />
@@ -7922,6 +8047,10 @@ export default Sentry.wrap(function App() {
   const [cloudConflictCount, setCloudConflictCount] = useState(0);
   const [storageOwnerId, setStorageOwnerId] = useState('local');
   const [cloudMigrationReady, setCloudMigrationReady] = useState(false);
+  useEffect(() => {
+    if (!cloudUserId || !cloudBackupEnabled || !storageReady) return;
+    return startBookNotesSync(cloudUserId);
+  }, [cloudUserId, cloudBackupEnabled, storageReady]);
   const [achievementCelebration, setAchievementCelebration] = useState<TrackedAchievement | null>(null);
   const achievementBaseline = useRef<Record<string, boolean> | null>(null);
   const achievementOwner = useRef<string | null>(null);
@@ -8491,9 +8620,10 @@ export default Sentry.wrap(function App() {
     setCloudBackupEnabled(false);
     try {
       await deleteBookezAccount();
+      if (cloudUserId) await clearBookNotesForOwner(cloudUserId);
       await clearBookezLocalSyncData();
       const localKeys = await bookezSecureStorage.getAllKeys();
-      const bookezDataKeys = localKeys.filter((key) => key === projectStorageKey || key.startsWith('bookez.projects.backup.') || key.startsWith('bookez.onboarding.') || key.startsWith('bookez.notification-preferences.'));
+      const bookezDataKeys = localKeys.filter((key) => key === projectStorageKey || key.startsWith('bookez.projects.backup.') || key.startsWith('bookez.onboarding.') || key.startsWith('bookez.notification-preferences.') || key.startsWith(`bookez.cockpit.v1.${cloudUserId ?? 'local'}.`));
       if (bookezDataKeys.length) await bookezSecureStorage.multiRemove(bookezDataKeys);
       setProjects([]);
       setCloudUserId(null);
@@ -8606,15 +8736,15 @@ const libraryEditorialS = StyleSheet.create({
   newProjectButton: { backgroundColor: bookezColors.surfaceRaised, borderWidth: 1, borderColor: bookezColors.border, borderRadius: 10 },
   newProjectText: { color: bookezColors.accent, letterSpacing: 0.8 },
   librarySectionEyebrow: { color: bookezColors.secondaryAccent, fontSize: 8, letterSpacing: 1.25, fontWeight: '800' },
-  projectCard: { marginBottom: 12, padding: 14, borderRadius: 16, backgroundColor: bookezColors.surface, borderWidth: 1, borderLeftWidth: 2, borderColor: bookezColors.border, borderLeftColor: bookezWithAlpha(bookezColors.secondaryAccent, 0.68), ...bookezShadows.subtle },
+  projectCard: { marginBottom: 12, padding: 14, borderRadius: 16, backgroundColor: bookezColors.card, borderWidth: 1, borderLeftWidth: 2, borderColor: bookezColors.cardBorder, borderLeftColor: bookezWithAlpha(bookezColors.secondaryAccent, 0.68), ...bookezShadows.subtle },
   projectMark: { width: 48, height: 48, borderRadius: 16, shadowColor: '#493F35', shadowOpacity: 0.12, shadowRadius: 7, shadowOffset: { width: 0, height: 3 }, elevation: 2 },
   projectTitle: { color: bookezColors.textPrimary, fontFamily: bookezType.sectionTitle.fontFamily, fontSize: 15, lineHeight: 19, fontWeight: '600' },
   projectType: { color: bookezColors.secondaryAccent, fontSize: 9, marginTop: 3, fontWeight: '700' },
-  projectDetail: { color: bookezColors.textSecondary, marginTop: 4, fontSize: 9, letterSpacing: 0.15 },
+  projectDetail: { color: bookezColors.cardTextSecondary, marginTop: 4, fontSize: 9, letterSpacing: 0.15 },
   projectOverflowButton: { backgroundColor: bookezColors.surfaceMuted, borderWidth: 1, borderColor: bookezColors.border },
   projectOverflowText: { color: bookezColors.accent },
   projectStats: { borderTopColor: bookezColors.divider },
-  projectStatText: { color: bookezColors.textSecondary },
+  projectStatText: { color: bookezColors.cardTextSecondary },
   projectStatDot: { color: bookezColors.manuscriptEdge },
   projectCommunityBadge: { backgroundColor: bookezColors.successSoft },
   projectCommunityBadgeText: { color: bookezColors.success },
@@ -8625,11 +8755,11 @@ const libraryEditorialS = StyleSheet.create({
   projectCardActions: { marginTop: bookezSpacing.sm, gap: bookezSpacing.xs },
   projectContinueButton: { flex: 1, backgroundColor: bookezColors.accentStrong, borderColor: bookezColors.accentStrong },
   projectPreviewButton: { flex: 0.66, backgroundColor: bookezColors.surfaceRaised, borderColor: bookezColors.border },
-  addProjectRow: { marginTop: 4, borderRadius: 16, borderColor: bookezColors.manuscriptEdge, minHeight: 76, paddingHorizontal: 14, backgroundColor: bookezColors.surface, ...bookezShadows.subtle },
+  addProjectRow: { marginTop: 4, borderRadius: 16, borderColor: bookezColors.cardBorder, minHeight: 76, paddingHorizontal: 14, backgroundColor: bookezColors.card, ...bookezShadows.subtle },
   addProjectPlus: { backgroundColor: bookezColors.accentSoft, borderWidth: 1, borderColor: bookezColors.burgundySoft },
   addProjectPlusText: { color: bookezColors.accent },
   addProjectTitle: { color: bookezColors.textPrimary, fontFamily: bookezType.sectionTitle.fontFamily, fontSize: 14, fontWeight: '600' },
-  addProjectSub: { color: bookezColors.textSecondary, fontSize: 10 },
+  addProjectSub: { color: bookezColors.cardTextSecondary, fontSize: 10 },
   navShell: { backgroundColor: bookezColors.surface, borderWidth: 1, borderColor: bookezColors.border, ...bookezShadows.lifted },
   navNode: { backgroundColor: bookezColors.surfaceRaised, borderColor: 'transparent' },
   navNodeActive: { backgroundColor: bookezColors.accentSoft, borderColor: bookezColors.borderStrong, shadowColor: bookezColors.accent, shadowOpacity: 0.16 },
@@ -8658,7 +8788,7 @@ const libraryEditorialS = StyleSheet.create({
   closeButtonText: { color: bookezColors.textSecondary },
   projectInput: { backgroundColor: bookezColors.surfaceRaised, borderColor: bookezColors.border, color: bookezColors.textPrimary },
   typePrompt: { color: bookezColors.secondaryAccent },
-  typeCard: { borderColor: bookezColors.border, backgroundColor: bookezColors.surfaceRaised },
+  typeCard: { borderColor: bookezColors.cardBorder, backgroundColor: bookezColors.card },
   typeCardSelected: { borderColor: bookezColors.accent, backgroundColor: bookezColors.accentSoft },
   typeName: { color: bookezColors.textPrimary, fontFamily: bookezType.cardTitle.fontFamily },
   typeExample: { color: bookezColors.textSecondary },
@@ -8708,10 +8838,10 @@ const planEditorialS = StyleSheet.create({
   planVisualRuleShort: { backgroundColor: bookezColors.divider },
   planVisualCaptionLine: { backgroundColor: bookezColors.manuscriptEdge },
   planVisualCaptionText: { color: bookezColors.secondaryAccent },
-  planSelectedCard: { backgroundColor: bookezColors.surface, borderColor: bookezColors.borderWarm, ...bookezShadows.subtle },
+  planSelectedCard: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder, ...bookezShadows.subtle },
   planSelectedOverline: { color: bookezColors.secondaryAccent },
   planSelectedTitle: { color: bookezColors.textPrimary, fontFamily: bookezType.sectionTitle.fontFamily, fontWeight: '600' },
-  planSelectedSub: { color: bookezColors.textSecondary },
+  planSelectedSub: { color: bookezColors.cardTextSecondary },
   planJourneyLink: { backgroundColor: bookezColors.accentSoft, borderWidth: 1, borderColor: bookezColors.burgundySoft },
   planJourneyLinkText: { color: bookezColors.accent },
   planSelectedArrow: { color: bookezColors.accent },
@@ -8723,10 +8853,10 @@ const planEditorialS = StyleSheet.create({
   planStepLabel: { color: bookezColors.textSecondary },
   planStepLabelActive: { color: bookezColors.textPrimary },
   planStepShort: { color: bookezColors.textMuted },
-  planStepCardAesthetic: { backgroundColor: bookezColors.surface, borderColor: bookezColors.borderWarm, ...bookezShadows.feature },
+  planStepCardAesthetic: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder, ...bookezShadows.feature },
   planSectionKickerAesthetic: { color: bookezColors.secondaryAccent },
   planSectionTitleAesthetic: { color: bookezColors.textPrimary, fontFamily: bookezType.sectionTitle.fontFamily, fontWeight: '600' },
-  planSectionCopyAesthetic: { color: bookezColors.textSecondary, fontFamily: bookezType.bodySecondary.fontFamily },
+  planSectionCopyAesthetic: { color: bookezColors.cardTextSecondary, fontFamily: bookezType.bodySecondary.fontFamily },
   primaryMetricCardAesthetic: { backgroundColor: bookezColors.manuscript, borderColor: bookezColors.manuscriptEdge, ...bookezShadows.feature },
   primaryMetricAccent: { backgroundColor: bookezColors.surfaceAccent },
   primaryMetricHeaderAesthetic: { },
@@ -8748,7 +8878,7 @@ const planEditorialS = StyleSheet.create({
   planTipWhyButton: { backgroundColor: bookezColors.secondaryAccentSoft },
   planTipWhyText: { color: bookezColors.warning },
   planTipExpandedText: { color: bookezColors.textSecondary, borderTopColor: bookezColors.goldSoft },
-  scopeControlCardAesthetic: { backgroundColor: bookezColors.surfaceMuted, borderColor: bookezColors.border },
+  scopeControlCardAesthetic: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder },
   scopeControlKicker: { color: bookezColors.secondaryAccent },
   scopeControlTitle: { color: bookezColors.textPrimary, fontFamily: bookezType.cardTitle.fontFamily },
   scopeControlCopy: { color: bookezColors.textSecondary },
@@ -8773,7 +8903,7 @@ const planEditorialS = StyleSheet.create({
   deadlineButtonLabel: { color: bookezColors.textPrimary },
   deadlineButtonHint: { color: bookezColors.textSecondary },
   deadlineButtonArrow: { color: bookezColors.accent },
-  planInputCard: { backgroundColor: bookezColors.surfaceMuted, borderColor: bookezColors.border },
+  planInputCard: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder },
   planInputLabel: { color: bookezColors.secondaryAccent },
   planInputHint: { color: bookezColors.textSecondary },
   planTextArea: { color: bookezColors.textPrimary, fontFamily: bookezType.editorial.fontFamily },
@@ -8786,7 +8916,7 @@ const planEditorialS = StyleSheet.create({
   plotPromptHelper: { color: bookezColors.textSecondary },
   planSubheading: { color: bookezColors.textPrimary, fontFamily: bookezType.sectionTitle.fontFamily, fontWeight: '600' },
   storyMapPageHint: { color: bookezColors.textSecondary, backgroundColor: bookezColors.surfaceMuted },
-  planningMethodCard: { backgroundColor: bookezColors.surfaceMuted, borderColor: bookezColors.border },
+  planningMethodCard: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder },
   planningMethodIcon: { backgroundColor: bookezColors.accent },
   planningMethodKicker: { color: bookezColors.secondaryAccent },
   planningMethodTitle: { color: bookezColors.textPrimary, fontFamily: bookezType.cardTitle.fontFamily },
@@ -8798,7 +8928,7 @@ const planEditorialS = StyleSheet.create({
   storyMapPagerCopy: { },
   storyMapPagerLabel: { color: bookezColors.textPrimary, fontFamily: bookezType.cardTitle.fontFamily },
   storyMapPagerCount: { color: bookezColors.secondaryAccent },
-  tocPlanCard: { backgroundColor: bookezColors.surface, borderColor: bookezColors.border, ...bookezShadows.subtle },
+  tocPlanCard: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder, ...bookezShadows.subtle },
   tocPlanIcon: { backgroundColor: bookezColors.accentSoft },
   tocPlanIconText: { color: bookezColors.accent },
   tocPlanEyebrow: { color: bookezColors.secondaryAccent },
@@ -8834,7 +8964,7 @@ const planEditorialS = StyleSheet.create({
   recommendationLegendTitle: { color: bookezColors.secondaryAccent },
   recommendationLegendChip: { borderColor: bookezColors.border },
   recommendationLegendText: { color: bookezColors.textSecondary },
-  referencePlanCard: { backgroundColor: bookezColors.surfaceAccent, borderColor: bookezColors.roseSoft },
+  referencePlanCard: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder },
   referencePlanIcon: { backgroundColor: bookezColors.accentSoft },
   referencePlanIconText: { color: bookezColors.accent },
   referencePlanEyebrow: { color: bookezColors.accent },
@@ -8917,11 +9047,11 @@ const writeEditorialS = StyleSheet.create({
   writeManuscriptSubtitle: { color: bookezColors.textSecondary, fontFamily: bookezType.editorial.fontFamily, fontSize: 12, lineHeight: 15, fontWeight: '600', marginTop: 6 },
   writeManuscriptArt: { width: 166, height: 106, marginRight: -13, marginLeft: -20, marginTop: 12, alignItems: 'center', justifyContent: 'center', transform: [{ rotate: '-1.2deg' }] },
   writeManuscriptArtCompact: { width: 138, height: 92, marginRight: -17, marginLeft: -24 },
-  writeManuscriptProjectCard: { minHeight: 58, marginHorizontal: 10, marginBottom: 9, paddingHorizontal: 10, paddingVertical: 8, borderRadius: 13, overflow: 'hidden', flexDirection: 'row', alignItems: 'center', backgroundColor: bookezColors.surfaceRaised, borderWidth: 1, borderColor: bookezColors.border, ...bookezShadows.subtle },
+  writeManuscriptProjectCard: { minHeight: 58, marginHorizontal: 10, marginBottom: 9, paddingHorizontal: 10, paddingVertical: 8, borderRadius: 13, overflow: 'hidden', flexDirection: 'row', alignItems: 'center', backgroundColor: bookezColors.card, borderWidth: 1, borderColor: bookezColors.cardBorder, ...bookezShadows.subtle },
   writeManuscriptProjectIcon: { width: 38, height: 38, borderRadius: 9, alignItems: 'center', justifyContent: 'center', backgroundColor: bookezColors.accentSoft, borderWidth: 1, borderColor: bookezColors.borderStrong },
   writeManuscriptProjectCopy: { flex: 1, minWidth: 0, marginLeft: 10 },
   writeManuscriptProjectTitle: { color: bookezColors.accent, fontFamily: bookezType.label.fontFamily, fontSize: 8, lineHeight: 12, letterSpacing: 0.5, fontWeight: '800' },
-  writeManuscriptProjectMeta: { color: bookezColors.textSecondary, fontFamily: bookezType.bodySecondary.fontFamily, fontSize: 9, lineHeight: 13, marginTop: 3 },
+  writeManuscriptProjectMeta: { color: bookezColors.cardTextSecondary, fontFamily: bookezType.bodySecondary.fontFamily, fontSize: 9, lineHeight: 13, marginTop: 3 },
   writeManuscriptProjectArrow: { color: bookezColors.accent, fontSize: 23, lineHeight: 25, marginLeft: 8 },
   writeManuscriptProgress: { marginHorizontal: 14, marginBottom: 10 },
   writeManuscriptProgressValue: { color: bookezColors.textPrimary, fontSize: 16, lineHeight: 20 },
@@ -8939,12 +9069,12 @@ const writeEditorialS = StyleSheet.create({
   writeContinueLabel: { color: bookezColors.textOnAccent, letterSpacing: 1 },
   writeContinueHint: { color: bookezColors.burgundySoft },
   writeContinueArrow: { color: bookezColors.textOnAccent },
-  writePartHeader: { marginTop: 17, padding: bookezSpacing.md, borderRadius: bookezRadii.card, backgroundColor: bookezColors.surface, borderColor: bookezColors.border, ...bookezShadows.subtle },
+  writePartHeader: { marginTop: 17, padding: bookezSpacing.md, borderRadius: bookezRadii.card, backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder, ...bookezShadows.subtle },
   writePartKicker: { letterSpacing: 0.95 },
   writePartTitle: { color: bookezColors.textPrimary, fontFamily: bookezType.sectionTitle.fontFamily, fontSize: 21, lineHeight: 26, fontWeight: '600' },
-  writePartHelper: { color: bookezColors.textSecondary, fontFamily: bookezType.bodySecondary.fontFamily, fontSize: 11, lineHeight: 16 },
+  writePartHelper: { color: bookezColors.cardTextSecondary, fontFamily: bookezType.bodySecondary.fontFamily, fontSize: 11, lineHeight: 16 },
   writeAssistArea: { marginTop: 14 },
-  writeAssistTiles: { backgroundColor: bookezColors.surface, borderColor: bookezColors.border },
+  writeAssistTiles: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder },
   writeAssistTile: { backgroundColor: bookezColors.surfaceRaised, borderColor: bookezColors.border, shadowColor: '#493F35' },
   writeAssistTileHelpActive: { backgroundColor: bookezColors.accentSoft, borderColor: bookezColors.borderStrong },
   writeAssistTileNotesActive: { backgroundColor: bookezColors.secondaryAccentSoft, borderColor: bookezColors.goldSoft },
@@ -8953,9 +9083,9 @@ const writeEditorialS = StyleSheet.create({
   writeAssistIconHelp: { backgroundColor: bookezColors.accent },
   writeAssistIconNotes: { backgroundColor: bookezColors.secondaryAccent },
   writeAssistIconCompass: { backgroundColor: bookezColors.dustyBlue },
-  writeAssistPanelHelp: { backgroundColor: bookezColors.surfaceAccent, borderColor: bookezColors.roseSoft },
-  writeAssistPanelNotes: { backgroundColor: bookezColors.warningSoft, borderColor: bookezColors.goldSoft },
-  writeAssistPanelCompass: { backgroundColor: bookezColors.dustyBlueSoft, borderColor: bookezColors.borderWarm },
+  writeAssistPanelHelp: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder },
+  writeAssistPanelNotes: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder },
+  writeAssistPanelCompass: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder },
   writeAssistPanelHeader: { borderBottomColor: bookezColors.goldSoft },
   writeAssistPanelTitle: { color: bookezColors.accent, letterSpacing: 1 },
   writeAssistPanelHint: { color: bookezColors.secondaryAccent },
@@ -9043,18 +9173,18 @@ const writeEditorialS = StyleSheet.create({
   writeAIUndo: { backgroundColor: bookezColors.accentSoft, borderWidth: 1, borderColor: bookezColors.burgundySoft },
   writeAIUndoText: { color: bookezColors.accentStrong },
   writeAIUndoAction: { color: bookezColors.accent },
-  writeEmpty: { backgroundColor: bookezColors.surface, borderWidth: 1, borderColor: bookezColors.border },
+  writeEmpty: { backgroundColor: bookezColors.card, borderWidth: 1, borderColor: bookezColors.cardBorder },
   writeEmptyIcon: { color: bookezColors.accent },
   writeEmptyTitle: { color: bookezColors.textPrimary, fontFamily: bookezType.sectionTitle.fontFamily },
   writeEmptyCopy: { color: bookezColors.textSecondary, fontFamily: bookezType.bodySecondary.fontFamily },
-  writeComplete: { backgroundColor: bookezColors.successSoft, borderColor: bookezColors.borderWarm },
+  writeComplete: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder },
   writeCompleteTitle: { color: bookezColors.textPrimary, fontFamily: bookezType.sectionTitle.fontFamily },
   writeCompleteCopy: { color: bookezColors.sage },
   writeCompleteFlagsButton: { backgroundColor: bookezColors.surface, borderWidth: 1, borderColor: bookezColors.borderWarm },
   writeCompleteFlagsText: { color: bookezColors.success },
   focusModeHeader: { backgroundColor: bookezColors.accentStrong, borderRadius: bookezRadii.control },
   focusModeExit: { backgroundColor: 'rgba(255,248,238,0.12)', borderWidth: 1, borderColor: 'rgba(164,122,66,0.2)' },
-  sessionToolPanel: { backgroundColor: bookezColors.surface, borderColor: bookezColors.border, ...bookezShadows.subtle },
+  sessionToolPanel: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder, ...bookezShadows.subtle },
   sessionToolPanelIcon: { backgroundColor: bookezColors.accentSoft },
   sessionToolPanelIconText: { color: bookezColors.accent },
   sessionToolEyebrow: { color: bookezColors.secondaryAccent },
@@ -9066,7 +9196,7 @@ const writeEditorialS = StyleSheet.create({
   sessionToolChoiceSelected: { backgroundColor: bookezColors.accentSoft, borderColor: bookezColors.borderStrong },
   sessionToolChoiceText: { color: bookezColors.textSecondary },
   sessionToolChoiceTextSelected: { color: bookezColors.accent },
-  sessionToolGoalCard: { backgroundColor: bookezColors.manuscript, borderColor: bookezColors.manuscriptEdge },
+  sessionToolGoalCard: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder },
   sessionToolGoalValue: { color: bookezColors.textPrimary, fontFamily: bookezType.sectionTitle.fontFamily },
   sessionToolGoalPercent: { color: bookezColors.accent },
   sessionToolGoalTrack: { backgroundColor: bookezColors.manuscriptEdge },
@@ -9080,7 +9210,7 @@ const writeEditorialS = StyleSheet.create({
   sessionToolSecondary: { backgroundColor: bookezColors.accentSoft, borderColor: bookezColors.burgundySoft },
   sessionToolSecondaryWide: { backgroundColor: bookezColors.accentSoft, borderColor: bookezColors.burgundySoft },
   sessionToolSecondaryText: { color: bookezColors.accent },
-  sessionToolCompareCard: { backgroundColor: bookezColors.surfaceMuted, borderColor: bookezColors.border },
+  sessionToolCompareCard: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder },
   sessionToolCompareTitle: { color: bookezColors.textPrimary, fontFamily: bookezType.cardTitle.fontFamily },
   sessionToolCompareMeta: { color: bookezColors.textMuted },
   sessionToolCompareLabel: { color: bookezColors.secondaryAccent },
@@ -9095,25 +9225,25 @@ const writeEditorialS = StyleSheet.create({
   sessionToolEmpty: { color: bookezColors.textSecondary },
   sessionToolEmptyBlock: { backgroundColor: bookezColors.surfaceMuted, borderWidth: 1, borderColor: bookezColors.border },
   sessionToolEmptyTitle: { color: bookezColors.textPrimary },
-  sessionToolLogCard: { backgroundColor: bookezColors.surfaceRaised, borderColor: bookezColors.border },
+  sessionToolLogCard: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder },
   sessionToolLogPart: { color: bookezColors.accent },
   sessionToolLogText: { color: bookezColors.textPrimary },
   sessionToolLogLabel: { color: bookezColors.textSecondary },
-  sessionToolResumeCard: { backgroundColor: bookezColors.warningSoft, borderColor: bookezColors.goldSoft },
+  sessionToolResumeCard: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder },
   sessionToolResumeText: { color: bookezColors.textPrimary },
   sessionToolFinding: { backgroundColor: bookezColors.surfaceRaised, borderColor: bookezColors.border },
   sessionToolFindingIcon: { backgroundColor: bookezColors.destructiveSoft },
   sessionToolFindingIconText: { color: bookezColors.destructive },
-  sessionToolFlagCard: { backgroundColor: bookezColors.surfaceRaised, borderColor: bookezColors.border },
-  sessionToolFlagCardResolved: { backgroundColor: bookezColors.surfaceMuted },
+  sessionToolFlagCard: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder },
+  sessionToolFlagCardResolved: { backgroundColor: bookezColors.card },
   sessionToolFlagPart: { color: bookezColors.textMuted },
   sessionToolFlagExcerpt: { color: bookezColors.textPrimary, fontFamily: bookezType.bodySecondary.fontFamily },
   sessionToolFlagNote: { color: bookezColors.textSecondary },
   sessionToolFlagActions: { borderTopColor: bookezColors.divider },
   sessionToolFlagActionText: { color: bookezColors.accent },
   sessionToolFlagDeleteText: { color: bookezColors.destructive },
-  sessionToolAddCard: { backgroundColor: bookezColors.surfaceMuted, borderColor: bookezColors.border },
-  sessionToolShelfCard: { backgroundColor: bookezColors.warningSoft, borderColor: bookezColors.goldSoft },
+  sessionToolAddCard: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder },
+  sessionToolShelfCard: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder },
   sessionToolShelfDetail: { color: bookezColors.textPrimary },
   sessionToolShelfUrl: { color: bookezColors.accent },
   sessionToolBeatRow: { backgroundColor: bookezColors.surfaceRaised, borderColor: bookezColors.border },
@@ -9166,7 +9296,7 @@ const writeEditorialS = StyleSheet.create({
 });
 
 const writeRhythmEditorialS = StyleSheet.create({
-  writeRhythmCardOrganized: { backgroundColor: bookezColors.surface, borderColor: bookezColors.manuscriptEdge, ...bookezShadows.subtle },
+  writeRhythmCardOrganized: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder, ...bookezShadows.subtle },
   modeLabel: { color: bookezColors.secondaryAccent },
   modeChoice: { backgroundColor: bookezColors.surfaceMuted, borderColor: bookezColors.border },
   modeChoiceSelected: { backgroundColor: bookezColors.accentSoft, borderColor: bookezColors.borderStrong },
@@ -9219,12 +9349,12 @@ const journeyEditorialS = StyleSheet.create({
   journeyHeaderSub: { color: bookezColors.textSecondary, fontFamily: bookezType.bodySecondary.fontFamily, fontSize: 12, lineHeight: 18, marginTop: 2 },
   journeyOverflowButton: { backgroundColor: bookezColors.surface, borderColor: bookezColors.border, ...bookezShadows.subtle },
   journeyOverflowText: { color: bookezColors.accent },
-  journeyBookPicker: { marginTop: 15, padding: bookezSpacing.sm, borderRadius: bookezRadii.card, backgroundColor: bookezColors.surface, borderColor: bookezColors.border, ...bookezShadows.subtle },
+  journeyBookPicker: { marginTop: 15, padding: bookezSpacing.sm, borderRadius: bookezRadii.card, backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder, ...bookezShadows.subtle },
   journeyBookPickerLabel: { color: bookezColors.secondaryAccent, letterSpacing: 1.05, fontWeight: '800' },
   journeyBookPickerTitle: { color: bookezColors.textPrimary, fontFamily: bookezType.cardTitle.fontFamily },
-  journeyBookPickerMeta: { color: bookezColors.textSecondary, fontFamily: bookezType.metadata.fontFamily },
+  journeyBookPickerMeta: { color: bookezColors.cardTextSecondary, fontFamily: bookezType.metadata.fontFamily },
   journeyPickerChevron: { color: bookezColors.accent },
-  journeySummaryCard: { marginTop: 16, padding: bookezSpacing.lg, borderRadius: 20, backgroundColor: bookezColors.surface, borderWidth: 1, borderColor: bookezColors.borderWarm, ...bookezShadows.lifted },
+  journeySummaryCard: { marginTop: 16, padding: bookezSpacing.lg, borderRadius: 20, backgroundColor: bookezColors.card, borderWidth: 1, borderColor: bookezColors.cardBorder, ...bookezShadows.lifted },
   journeySummaryEyebrow: { color: bookezColors.secondaryAccent, letterSpacing: 1.1, fontWeight: '800' },
   journeySummaryStage: { color: bookezColors.textPrimary, fontFamily: bookezType.sectionTitle.fontFamily, fontSize: 20, lineHeight: 25, fontWeight: '600' },
   journeySummaryPercent: { color: bookezColors.accent, fontFamily: bookezType.sectionTitle.fontFamily, fontSize: 30, lineHeight: 34, fontWeight: '600' },
@@ -9252,8 +9382,8 @@ const journeyEditorialS = StyleSheet.create({
   journeyContinueText: { color: bookezColors.textOnAccent, fontFamily: bookezType.button.fontFamily },
   journeyContinueAction: { color: bookezColors.textOnAccent },
   journeyContinueArrow: { color: bookezColors.textOnAccent },
-  journeyTodayCard: { backgroundColor: bookezColors.surface, borderColor: bookezColors.border, ...bookezShadows.subtle },
-  journeyTodayCardPaused: { backgroundColor: bookezColors.surfaceMuted, borderColor: bookezColors.border },
+  journeyTodayCard: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder, ...bookezShadows.subtle },
+  journeyTodayCardPaused: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder },
   journeyTodayCardFoundation: { backgroundColor: bookezColors.warningSoft, borderColor: bookezColors.goldSoft },
   journeyTodayIcon: { backgroundColor: bookezColors.accentSoft },
   journeyTodayIconPaused: { backgroundColor: bookezColors.surfaceRaised },
@@ -9930,7 +10060,7 @@ Object.entries({
   cardHint: { color: bookezColors.textSecondary },
   addButton: { backgroundColor: bookezColors.accentSoft },
   addButtonText: { color: bookezColors.secondaryAccent },
-  guideCard: { backgroundColor: bookezColors.surfaceRaised, borderColor: bookezColors.border },
+  guideCard: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder },
   guideEyebrow: { color: bookezColors.secondaryAccent },
   guideTitle: { color: bookezColors.textPrimary },
   guideIcon: { color: bookezColors.secondaryAccent, backgroundColor: bookezColors.accentSoft },
@@ -9952,7 +10082,7 @@ Object.entries({
   coverReplaceText: { color: bookezColors.secondaryAccent },
   coverRemoveButton: { backgroundColor: bookezColors.destructiveSoft },
   coverRemoveText: { color: bookezColors.destructive },
-  hiddenCard: { backgroundColor: bookezColors.surfaceMuted, borderColor: bookezColors.border },
+  hiddenCard: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder },
   hiddenIcon: { backgroundColor: bookezColors.surfaceAccent },
   hiddenIconText: { color: bookezColors.textMuted },
   enableButton: { backgroundColor: bookezColors.accentSoft },
@@ -10065,8 +10195,8 @@ const mediaStyles = StyleSheet.create({
 
 const mediaStyleMap = mediaStyles as unknown as Record<string, unknown>;
 Object.entries({
-  conditionalStatsCard: { backgroundColor: bookezColors.surfaceRaised, borderColor: bookezColors.border },
-  conditionalStatsCardCitation: { backgroundColor: bookezColors.surfaceAccent, borderColor: bookezColors.border },
+  conditionalStatsCard: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder },
+  conditionalStatsCardCitation: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder },
   conditionalStatsEyebrow: { color: bookezColors.secondaryAccent },
   conditionalStatsEyebrowCitation: { color: bookezColors.secondaryAccent },
   conditionalStatsTitle: { color: bookezColors.textPrimary },
@@ -10203,7 +10333,7 @@ Object.entries({
   aiHeaderTitle: { color: bookezColors.textPrimary },
   aiSpark: { backgroundColor: bookezColors.surfaceMuted },
   aiSparkText: { color: bookezColors.secondaryAccent },
-  aiDraftCard: { backgroundColor: bookezColors.surfaceRaised, borderColor: bookezColors.border },
+  aiDraftCard: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder },
   aiDraftLabel: { color: bookezColors.textSecondary },
   aiSelectHint: { color: bookezColors.textMuted },
   aiDraftText: { color: bookezColors.textPrimary },
@@ -10214,7 +10344,7 @@ Object.entries({
   aiToolTextSelected: { color: bookezColors.textOnAccent },
   aiMore: { backgroundColor: bookezColors.surfaceMuted },
   aiMoreText: { color: bookezColors.textSecondary },
-  aiPreviewCard: { backgroundColor: bookezColors.surfaceRaised, borderColor: bookezColors.border, shadowColor: '#493F35' },
+  aiPreviewCard: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder, shadowColor: '#493F35' },
   aiPreviewLabel: { color: bookezColors.secondaryAccent },
   aiPreviewCheck: { color: bookezColors.success },
   aiPreviewText: { color: bookezColors.textPrimary },
@@ -10234,7 +10364,7 @@ Object.entries({
 });
 
 const s: any = Object.assign(StyleSheet.create({
-  storyAnchorsCard: { marginTop: 15, padding: 16, borderRadius: 23, backgroundColor: bookezColors.surfaceRaised, borderWidth: 1.5, borderColor: bookezColors.gold, shadowColor: '#493F35', shadowOpacity: 0.1, shadowRadius: 12, shadowOffset: { width: 0, height: 5 }, elevation: 2 },
+  storyAnchorsCard: { marginTop: 15, padding: 16, borderRadius: 23, backgroundColor: bookezColors.card, borderWidth: 1.5, borderColor: bookezColors.cardBorder, shadowColor: '#493F35', shadowOpacity: 0.1, shadowRadius: 12, shadowOffset: { width: 0, height: 5 }, elevation: 2 },
   storyAnchorsHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
   storyAnchorsHeaderCopy: { flex: 1, minWidth: 0 },
   storyAnchorsEyebrow: { color: bookezColors.secondaryAccent, fontSize: 8, letterSpacing: 1.05, fontWeight: '800' },
@@ -10259,7 +10389,7 @@ const s: any = Object.assign(StyleSheet.create({
   povChoiceText: { color: bookezColors.textSecondary, fontSize: 9, fontWeight: '700' },
   povChoiceTextActive: { color: bookezColors.accent },
   povDetailInput: { minHeight: 54, padding: 10, borderRadius: 12, backgroundColor: bookezColors.surface, borderWidth: 1, borderColor: bookezColors.border, fontSize: 10, lineHeight: 15, textAlignVertical: 'top' },
-  writeStoryPlanCard: { marginBottom: 12, padding: 11, borderRadius: 17, backgroundColor: bookezColors.surfaceRaised, borderWidth: 1, borderColor: bookezColors.gold },
+  writeStoryPlanCard: { marginBottom: 12, padding: 11, borderRadius: 17, backgroundColor: bookezColors.card, borderWidth: 1, borderColor: bookezColors.cardBorder },
   writeContextBody: { flexShrink: 1 },
   writeStoryPlanHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
   writeStoryPlanKicker: { color: bookezColors.secondaryAccent, fontSize: 7, letterSpacing: 0.8, fontWeight: '800' },
@@ -10300,7 +10430,7 @@ const s: any = Object.assign(StyleSheet.create({
   writeUtilityIconImageText: { color: '#FFF8EE', fontSize: 18 },
   writeUtilityTip: { alignSelf: 'flex-start', marginTop: 7, paddingVertical: 7, paddingHorizontal: 9, borderRadius: 10, backgroundColor: '#F9F4EA', borderWidth: 1, borderColor: '#DDCDB5', shadowColor: '#493F35', shadowOpacity: 0.05, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 1 },
   writeUtilityTipText: { color: C.muted, fontSize: 8, lineHeight: 12 },
-  writeSessionDetailsUtility: { marginTop: 12, padding: 10, borderRadius: 20, backgroundColor: '#F9F4EA', borderWidth: 1, borderColor: '#667A60' },
+  writeSessionDetailsUtility: { marginTop: 12, padding: 10, borderRadius: 20, backgroundColor: bookezColors.card, borderWidth: 1, borderColor: bookezColors.cardBorder },
   writeSessionStatsUtility: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   writeSessionDetailBlockUtility: { width: '30%', minHeight: 56, paddingVertical: 8, paddingHorizontal: 4, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F9F4EA' },
   chapterEndCompactRow: { marginTop: 10, flexDirection: 'row', alignItems: 'center', gap: 7 }, chapterEndIconButton: { width: 31, height: 31, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F9F4EA', borderWidth: 1, borderColor: '#DDCDB5' }, chapterEndIconButtonMarked: { backgroundColor: '#F9F4EA', borderColor: '#667A60' }, chapterEndIconText: { color: '#667A60', fontSize: 16, fontWeight: '700' }, chapterEndIconTextMarked: { color: '#667A60' }, chapterEndCompactLabel: { color: '#667A60', fontSize: 7, letterSpacing: 0.7, fontWeight: '700' },
@@ -10406,7 +10536,7 @@ Object.assign(s, {
   pageSceneSparkRight: { right: -2 },
   pageSceneSparkText: { color: bookezColors.secondaryAccent, fontSize: 12, lineHeight: 15, textShadowColor: 'rgba(19,36,61,0.34)', textShadowRadius: 4 },
   folioOrnament: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, zIndex: 0 },
-  folioBackSheet: { position: 'absolute', top: 4, right: 2, bottom: 3, left: 5, borderRadius: 16, borderWidth: StyleSheet.hairlineWidth, borderColor: bookezColors.manuscriptEdge, backgroundColor: bookezColors.surfaceMuted },
+  folioBackSheet: { position: 'absolute', top: 4, right: 2, bottom: 3, left: 5, borderRadius: 16, borderWidth: StyleSheet.hairlineWidth, borderColor: bookezColors.manuscriptEdge, backgroundColor: 'transparent' },
   folioBackSheetInk: { borderColor: bookezColors.secondaryAccent, backgroundColor: bookezColors.textPrimary },
   folioTopPage: { position: 'absolute', top: 1, right: 14, left: 20, height: 4, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: bookezColors.manuscriptEdge, borderTopLeftRadius: 8, borderTopRightRadius: 8, backgroundColor: bookezColors.surfaceRaised },
   folioTopPageSecond: { top: 3, right: 24, left: 29, opacity: 0.42 },
@@ -10732,7 +10862,7 @@ const studioEditorialS = StyleSheet.create({
   safe: { flex: 1, backgroundColor: bookezColors.background },
   scroll: { flex: 1 },
   content: { paddingHorizontal: bookezSpacing.page, paddingTop: bookezSpacing.xs, paddingBottom: 46 },
-  bookIdentityCard: { marginTop: bookezSpacing.md, padding: bookezSpacing.md, borderRadius: bookezRadii.cardLarge, backgroundColor: bookezColors.surface, borderWidth: 1, borderColor: bookezColors.manuscriptEdge, ...bookezShadows.subtle },
+  bookIdentityCard: { marginTop: bookezSpacing.md, padding: bookezSpacing.md, borderRadius: bookezRadii.cardLarge, backgroundColor: bookezColors.card, borderWidth: 1, borderColor: bookezColors.cardBorder, ...bookezShadows.subtle },
   bookIdentityHeader: { flexDirection: 'row', alignItems: 'flex-start' },
   bookIdentityCover: { width: 62, height: 82, borderRadius: bookezRadii.control, backgroundColor: bookezColors.surfaceMuted },
   bookIdentityCoverEmpty: { alignItems: 'center', justifyContent: 'center', backgroundColor: bookezColors.accentSoft, borderWidth: 1, borderColor: bookezColors.burgundySoft },
@@ -10740,7 +10870,7 @@ const studioEditorialS = StyleSheet.create({
   bookIdentityCopy: { flex: 1, minWidth: 0, marginLeft: bookezSpacing.sm, paddingTop: 1 },
   bookIdentityEyebrow: { color: bookezColors.secondaryAccent, fontFamily: bookezType.label.fontFamily, fontSize: 9, lineHeight: 13, letterSpacing: 1.05, fontWeight: '800' },
   bookIdentityTitle: { color: bookezColors.textPrimary, fontFamily: bookezType.sectionTitle.fontFamily, fontSize: 20, lineHeight: 25, fontWeight: '600', marginTop: 4 },
-  bookIdentityStatus: { color: bookezColors.textSecondary, fontFamily: bookezType.caption.fontFamily, fontSize: 11, lineHeight: 15, marginTop: 5 },
+  bookIdentityStatus: { color: bookezColors.cardTextSecondary, fontFamily: bookezType.caption.fontFamily, fontSize: 11, lineHeight: 15, marginTop: 5 },
   bookIdentityStatusDot: { width: 32, height: 32, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: bookezColors.warningSoft, borderWidth: 1, borderColor: bookezColors.goldSoft },
   bookIdentityStatusDotReady: { backgroundColor: bookezColors.successSoft, borderColor: bookezColors.borderWarm },
   bookIdentityStatusDotText: { color: bookezColors.warning, fontSize: 17, fontWeight: '800' },
@@ -10748,7 +10878,7 @@ const studioEditorialS = StyleSheet.create({
   bookIdentityStat: { flex: 1, minWidth: 0 },
   bookIdentityDivider: { width: 1, marginHorizontal: bookezSpacing.sm, backgroundColor: bookezColors.divider },
   bookIdentityStatValue: { color: bookezColors.textPrimary, fontFamily: bookezType.sectionTitle.fontFamily, fontSize: 18, lineHeight: 23, fontWeight: '600' },
-  bookIdentityStatLabel: { color: bookezColors.textMuted, fontFamily: bookezType.label.fontFamily, fontSize: 8, lineHeight: 12, letterSpacing: 0.75, fontWeight: '800', marginTop: 4 },
+  bookIdentityStatLabel: { color: bookezColors.cardTextSecondary, fontFamily: bookezType.label.fontFamily, fontSize: 8, lineHeight: 12, letterSpacing: 0.75, fontWeight: '800', marginTop: 4 },
   exportPreviewCard: { marginTop: bookezSpacing.md, padding: bookezSpacing.md, borderRadius: bookezRadii.cardLarge, backgroundColor: bookezColors.manuscript, borderWidth: 1, borderColor: bookezColors.manuscriptEdge, ...bookezShadows.subtle },
   exportPreviewHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' },
   exportPreviewEyebrow: { color: bookezColors.secondaryAccent, fontFamily: bookezType.label.fontFamily, fontSize: 9, lineHeight: 13, letterSpacing: 1.05, fontWeight: '800' },
@@ -10794,9 +10924,9 @@ const studioLegacyEditorialS = StyleSheet.create({
   studioTabText: { color: bookezColors.textSecondary, fontFamily: bookezType.button.fontFamily },
   studioTabTextSelected: { color: bookezColors.textOnAccent },
   studioKicker: { color: bookezColors.secondaryAccent, fontFamily: bookezType.label.fontFamily },
-  studioSummaryCard: { backgroundColor: bookezColors.surface, borderWidth: 1, borderColor: bookezColors.border, ...bookezShadows.subtle },
+  studioSummaryCard: { backgroundColor: bookezColors.card, borderWidth: 1, borderColor: bookezColors.cardBorder, ...bookezShadows.subtle },
   studioSummaryTitle: { color: bookezColors.textPrimary, fontFamily: bookezType.sectionTitle.fontFamily, fontWeight: '600' },
-  studioSummaryCopy: { color: bookezColors.textSecondary, fontFamily: bookezType.caption.fontFamily },
+  studioSummaryCopy: { color: bookezColors.cardTextSecondary, fontFamily: bookezType.caption.fontFamily },
   studioStatusDot: { backgroundColor: bookezColors.warningSoft, borderWidth: 1, borderColor: bookezColors.goldSoft },
   studioStatusDotFinished: { backgroundColor: bookezColors.successSoft },
   studioStatusDotText: { color: bookezColors.warning },
@@ -10828,7 +10958,7 @@ const studioLegacyEditorialS = StyleSheet.create({
   studioOptionText: { color: bookezColors.textSecondary, fontFamily: bookezType.metadata.fontFamily },
   studioPrimaryButton: { backgroundColor: bookezColors.accent, borderRadius: bookezRadii.control, ...bookezShadows.lifted },
   studioPrimaryButtonText: { color: bookezColors.textOnAccent, fontFamily: bookezType.button.fontFamily },
-  coverSetupCard: { backgroundColor: bookezColors.surface, borderColor: bookezColors.border, ...bookezShadows.subtle },
+  coverSetupCard: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder, ...bookezShadows.subtle },
   coverSetupIcon: { backgroundColor: bookezColors.secondaryAccentSoft },
   coverSetupIconText: { color: bookezColors.secondaryAccent },
   coverSetupTitle: { color: bookezColors.textPrimary, fontFamily: bookezType.sectionTitle.fontFamily, fontWeight: '600' },
@@ -10984,7 +11114,7 @@ const exportEditorialS = StyleSheet.create({
   panelHeadingIcon: { width: 34, height: 34, borderRadius: bookezRadii.control, backgroundColor: bookezColors.accentSoft, color: bookezColors.accent, lineHeight: 34 },
   panelLabel: { color: bookezColors.secondaryAccent, fontFamily: bookezType.label.fontFamily, fontSize: 9, lineHeight: 13, letterSpacing: 1.05 },
   formatGrid: { marginTop: bookezSpacing.sm, gap: bookezSpacing.xs },
-  formatCard: { width: '48%', minHeight: 110, marginRight: 0, marginBottom: 0, padding: bookezSpacing.sm, borderRadius: bookezRadii.control, backgroundColor: bookezColors.surfaceMuted, borderColor: bookezColors.border },
+  formatCard: { width: '48%', minHeight: 110, marginRight: 0, marginBottom: 0, padding: bookezSpacing.sm, borderRadius: bookezRadii.control, backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder },
   formatCardSelected: { backgroundColor: bookezColors.accentSoft, borderColor: bookezColors.focusRing },
   formatIcon: { backgroundColor: bookezColors.border },
   formatIconSelected: { backgroundColor: bookezColors.accent },
@@ -10993,7 +11123,7 @@ const exportEditorialS = StyleSheet.create({
   formatLabelSelected: { color: bookezColors.accent },
   formatDescription: { color: bookezColors.textSecondary, fontFamily: bookezType.caption.fontFamily },
   layoutGrid: { marginTop: bookezSpacing.sm, gap: bookezSpacing.xs },
-  layoutCard: { minHeight: 58, padding: bookezSpacing.sm, borderRadius: bookezRadii.control, backgroundColor: bookezColors.surfaceMuted, borderColor: bookezColors.border },
+  layoutCard: { minHeight: 58, padding: bookezSpacing.sm, borderRadius: bookezRadii.control, backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder },
   layoutCardSelected: { backgroundColor: bookezColors.accentSoft, borderColor: bookezColors.borderStrong },
   radio: { borderColor: bookezColors.border },
   radioSelected: { borderColor: bookezColors.accent },
@@ -11080,7 +11210,7 @@ const statsEditorialS = StyleSheet.create({
   statsMetricIcon: { color: bookezColors.accent, fontSize: 18 },
   statsMetricCardValue: { color: bookezColors.textPrimary, fontFamily: bookezType.sectionTitle.fontFamily, fontSize: 21, lineHeight: 27, fontWeight: '600', marginTop: 13 },
   statsMetricCardLabel: { color: bookezColors.textSecondary, fontFamily: bookezType.label.fontFamily, fontSize: 9, lineHeight: 13, letterSpacing: 0.65, fontWeight: '800', marginTop: 5 },
-  achievementOverviewCard: { position: 'relative', marginTop: 24, padding: bookezSpacing.md, borderRadius: 20, backgroundColor: bookezColors.manuscript, borderWidth: 1, borderColor: bookezColors.secondaryAccent, ...bookezShadows.feature },
+  achievementOverviewCard: { position: 'relative', marginTop: 24, padding: bookezSpacing.md, borderRadius: 20, backgroundColor: bookezColors.card, borderWidth: 1, borderColor: bookezColors.cardBorder, ...bookezShadows.feature },
   achievementOverviewHeader: { alignItems: 'flex-start' },
   achievementOverviewIcon: { width: 38, height: 38, borderRadius: bookezRadii.control, backgroundColor: bookezColors.secondaryAccentSoft, borderWidth: 1, borderColor: bookezColors.goldSoft },
   achievementOverviewIconText: { color: bookezColors.secondaryAccent, fontSize: 18 },
@@ -11111,8 +11241,8 @@ const statsEditorialS = StyleSheet.create({
   statsSectionTitle: { color: bookezColors.textPrimary, fontFamily: bookezType.sectionTitle.fontFamily, fontSize: 20, lineHeight: 25, fontWeight: '600' },
   statsCardHint: { color: bookezColors.textSecondary, fontFamily: bookezType.caption.fontFamily, fontSize: 11, lineHeight: 15, marginTop: 4 },
   statsSectionCount: { color: bookezColors.accent, fontFamily: bookezType.button.fontFamily, fontSize: 11, lineHeight: 16, marginBottom: 2 },
-  achievementCard: { marginTop: 10, padding: bookezSpacing.sm, borderRadius: bookezRadii.card, backgroundColor: bookezColors.surface, borderWidth: 1, borderColor: bookezColors.border, ...bookezShadows.subtle },
-  achievementCardAllTime: { marginTop: 10, padding: bookezSpacing.md, borderRadius: bookezRadii.card, backgroundColor: bookezColors.surface, borderWidth: 1, borderColor: bookezColors.border, ...bookezShadows.subtle },
+  achievementCard: { marginTop: 10, padding: bookezSpacing.sm, borderRadius: bookezRadii.card, backgroundColor: bookezColors.card, borderWidth: 1, borderColor: bookezColors.cardBorder, ...bookezShadows.subtle },
+  achievementCardAllTime: { marginTop: 10, padding: bookezSpacing.md, borderRadius: bookezRadii.card, backgroundColor: bookezColors.card, borderWidth: 1, borderColor: bookezColors.cardBorder, ...bookezShadows.subtle },
   achievementSubsectionLabel: { color: bookezColors.secondaryAccent, fontFamily: bookezType.label.fontFamily, fontSize: 9, lineHeight: 13, letterSpacing: 1, marginTop: 13, marginBottom: 8 },
   achievementSummaryItem: { backgroundColor: bookezColors.manuscript, borderRadius: bookezRadii.control, borderWidth: 1, borderColor: bookezColors.manuscriptEdge },
   achievementSummaryValue: { color: bookezColors.textPrimary, fontFamily: bookezType.sectionTitle.fontFamily, fontSize: 18, lineHeight: 23, fontWeight: '600' },
@@ -11175,13 +11305,13 @@ const statsEditorialS = StyleSheet.create({
   statsEmptyIcon: { color: bookezColors.secondaryAccent },
   statsEmptyTitle: { color: bookezColors.textPrimary, fontFamily: bookezType.cardTitle.fontFamily, fontSize: 15, lineHeight: 20, fontWeight: '700' },
   statsEmptyCopy: { color: bookezColors.textSecondary, fontFamily: bookezType.caption.fontFamily, fontSize: 11, lineHeight: 15 },
-  statsBreakdownCard: { marginTop: 24, padding: bookezSpacing.md, borderRadius: bookezRadii.card, backgroundColor: bookezColors.surface, borderWidth: 1, borderColor: bookezColors.border, ...bookezShadows.subtle },
+  statsBreakdownCard: { marginTop: 24, padding: bookezSpacing.md, borderRadius: bookezRadii.card, backgroundColor: bookezColors.card, borderWidth: 1, borderColor: bookezColors.cardBorder, ...bookezShadows.subtle },
   inputMixTrack: { height: 10, marginTop: 16, borderRadius: 5, backgroundColor: bookezColors.surfaceMuted },
   inputMixDictation: { backgroundColor: bookezColors.secondaryAccent },
   inputMixWriting: { backgroundColor: bookezColors.accent },
   inputMixLabel: { color: bookezColors.textSecondary, fontFamily: bookezType.caption.fontFamily, fontSize: 11 },
   inputMixValue: { color: bookezColors.textPrimary, fontFamily: bookezType.metadata.fontFamily, fontSize: 11, lineHeight: 15 },
-  dictationStatsCard: { marginTop: 24, padding: bookezSpacing.md, borderRadius: bookezRadii.card, backgroundColor: bookezColors.surfaceAccent, borderColor: bookezColors.burgundySoft, ...bookezShadows.subtle },
+  dictationStatsCard: { marginTop: 24, padding: bookezSpacing.md, borderRadius: bookezRadii.card, backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder, ...bookezShadows.subtle },
   dictationStatsEyebrow: { color: bookezColors.destructive, fontFamily: bookezType.label.fontFamily, fontSize: 9, lineHeight: 13, letterSpacing: 1 },
   dictationStatsTitle: { color: bookezColors.textPrimary, fontFamily: bookezType.sectionTitle.fontFamily, fontSize: 19, lineHeight: 24, fontWeight: '600', marginTop: 4 },
   dictationStatsHint: { color: bookezColors.textSecondary, fontFamily: bookezType.caption.fontFamily, fontSize: 11, lineHeight: 15, marginTop: 4 },
@@ -11190,10 +11320,10 @@ const statsEditorialS = StyleSheet.create({
   dictationStatValue: { color: bookezColors.textPrimary, fontFamily: bookezType.sectionTitle.fontFamily, fontSize: 18, lineHeight: 23, fontWeight: '600' },
   dictationStatLabel: { color: bookezColors.textSecondary, fontFamily: bookezType.label.fontFamily, fontSize: 8, lineHeight: 11, letterSpacing: 0.5, fontWeight: '800', marginTop: 4 },
   dictationStatsEmpty: { color: bookezColors.textSecondary, fontFamily: bookezType.caption.fontFamily, fontSize: 11, lineHeight: 15, borderTopColor: bookezColors.burgundySoft },
-  specializedStatsCard: { marginTop: 24, padding: bookezSpacing.md, borderRadius: bookezRadii.card, backgroundColor: bookezColors.surface, borderColor: bookezColors.border, ...bookezShadows.subtle },
+  specializedStatsCard: { marginTop: 24, padding: bookezSpacing.md, borderRadius: bookezRadii.card, backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder, ...bookezShadows.subtle },
   specializedStatsCardWarm: { backgroundColor: bookezColors.secondaryAccentSoft, borderColor: bookezColors.goldSoft },
   specializedStatsCardMint: { backgroundColor: bookezColors.successSoft, borderColor: bookezColors.borderWarm },
-  specializedStatsCardRose: { backgroundColor: bookezColors.surfaceAccent, borderColor: bookezColors.burgundySoft },
+  specializedStatsCardRose: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder },
   specializedStatsEyebrow: { color: bookezColors.secondaryAccent, fontFamily: bookezType.label.fontFamily, fontSize: 9, lineHeight: 13, letterSpacing: 1 },
   specializedStatsTitle: { color: bookezColors.textPrimary, fontFamily: bookezType.sectionTitle.fontFamily, fontSize: 20, lineHeight: 25, fontWeight: '600', marginTop: 5 },
   specializedStatsSubtitle: { color: bookezColors.textSecondary, fontFamily: bookezType.caption.fontFamily, fontSize: 11, lineHeight: 15, marginTop: 4 },
@@ -11208,7 +11338,7 @@ const statsEditorialS = StyleSheet.create({
   statsInsightMetric: { borderTopColor: bookezColors.goldSoft },
   statsInsightMetricLabel: { color: bookezColors.secondaryAccent, fontFamily: bookezType.label.fontFamily, fontSize: 9, lineHeight: 13, letterSpacing: 0.65 },
   statsInsightMetricValue: { color: bookezColors.textPrimary, fontFamily: bookezType.sectionTitle.fontFamily, fontSize: 17, lineHeight: 22, fontWeight: '600' },
-  statsBookCard: { marginTop: 10, padding: bookezSpacing.md, borderRadius: bookezRadii.card, backgroundColor: bookezColors.surface, borderWidth: 1, borderColor: bookezColors.border, ...bookezShadows.subtle },
+  statsBookCard: { marginTop: 10, padding: bookezSpacing.md, borderRadius: bookezRadii.card, backgroundColor: bookezColors.card, borderWidth: 1, borderColor: bookezColors.cardBorder, ...bookezShadows.subtle },
   statsBookCardDivider: { backgroundColor: bookezColors.divider },
   statsBookCardLabel: { color: bookezColors.textSecondary, fontFamily: bookezType.label.fontFamily, fontSize: 9, lineHeight: 13, letterSpacing: 0.6 },
   statsBookCardValue: { color: bookezColors.textPrimary, fontFamily: bookezType.sectionTitle.fontFamily, fontSize: 21, lineHeight: 27, fontWeight: '600', marginTop: 6 },
@@ -11228,7 +11358,7 @@ const statsEditorialS = StyleSheet.create({
   statsInlineInfoClose: { backgroundColor: bookezColors.surface },
   statsInlineInfoCloseText: { color: bookezColors.textPrimary },
   conditionalStatsCard: { marginTop: 24, padding: bookezSpacing.md, borderRadius: bookezRadii.card, backgroundColor: bookezColors.successSoft, borderColor: bookezColors.borderWarm, ...bookezShadows.subtle },
-  conditionalStatsCardCitation: { marginTop: 24, padding: bookezSpacing.md, borderRadius: bookezRadii.card, backgroundColor: bookezColors.surfaceAccent, borderColor: bookezColors.burgundySoft, ...bookezShadows.subtle },
+  conditionalStatsCardCitation: { marginTop: 24, padding: bookezSpacing.md, borderRadius: bookezRadii.card, backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder, ...bookezShadows.subtle },
   conditionalStatsEyebrow: { color: bookezColors.success, fontFamily: bookezType.label.fontFamily, fontSize: 9, lineHeight: 13, letterSpacing: 1 },
   conditionalStatsEyebrowCitation: { color: bookezColors.accent, fontFamily: bookezType.label.fontFamily, fontSize: 9, lineHeight: 13, letterSpacing: 1 },
   conditionalStatsTitle: { color: bookezColors.textPrimary, fontFamily: bookezType.sectionTitle.fontFamily, fontSize: 19, lineHeight: 24, fontWeight: '600', marginTop: 5 },
@@ -11249,7 +11379,7 @@ const statsEditorialS = StyleSheet.create({
 });
 
 const profileEditorialS = StyleSheet.create({
-  profileHero: { position: 'relative', borderRadius: 20, backgroundColor: bookezColors.surface, borderColor: bookezColors.secondaryAccent, ...bookezShadows.hero },
+  profileHero: { position: 'relative', borderRadius: 20, backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder, ...bookezShadows.hero },
   profileAvatar: { backgroundColor: bookezColors.surfaceAccent, shadowColor: '#493F35', shadowOpacity: 0.12 },
   profileAvatarText: { color: bookezColors.accent },
   profileHalo: { borderColor: bookezColors.surfaceRaised },
@@ -11267,9 +11397,9 @@ const profileEditorialS = StyleSheet.create({
   profileSnapshotValue: { color: bookezColors.textPrimary, fontFamily: bookezType.sectionTitle.fontFamily, fontWeight: '600' },
   profileSnapshotLabel: { color: bookezColors.textSecondary, fontFamily: bookezType.label.fontFamily },
   preferenceTitle: { color: bookezColors.textPrimary, fontFamily: bookezType.sectionTitle.fontFamily, fontWeight: '600' },
-  preferences: { position: 'relative', backgroundColor: bookezColors.surface, borderColor: bookezColors.border, borderWidth: 1, ...bookezShadows.subtle },
-  settingsCard: { position: 'relative', backgroundColor: bookezColors.surface, borderColor: bookezColors.border, borderWidth: 1, ...bookezShadows.subtle },
-  accountCard: { position: 'relative', backgroundColor: bookezColors.surface, borderColor: bookezColors.border, borderWidth: 1, ...bookezShadows.subtle },
+  preferences: { position: 'relative', backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder, borderWidth: 1, ...bookezShadows.subtle },
+  settingsCard: { position: 'relative', backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder, borderWidth: 1, ...bookezShadows.subtle },
+  accountCard: { position: 'relative', backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder, borderWidth: 1, ...bookezShadows.subtle },
   accountEmailPanel: { paddingVertical: bookezSpacing.sm },
   accountEmailKicker: { color: bookezColors.secondaryAccent, fontFamily: bookezType.label.fontFamily },
   accountEmailValue: { color: bookezColors.textSecondary, fontFamily: bookezType.caption.fontFamily },
@@ -11284,7 +11414,7 @@ const profileEditorialS = StyleSheet.create({
   settingsIconCoral: { backgroundColor: bookezColors.destructiveSoft },
   settingsIconText: { color: bookezColors.textPrimary },
   deleteText: { color: bookezColors.destructive, fontFamily: bookezType.button.fontFamily },
-  accountClosureCard: { position: 'relative', marginTop: 16, padding: bookezSpacing.md, borderRadius: bookezRadii.card, backgroundColor: bookezColors.surfaceRaised, borderWidth: 1, borderColor: bookezColors.burgundySoft, shadowColor: '#493F35', shadowOpacity: 0.1, shadowRadius: 12, shadowOffset: { width: 0, height: 6 }, elevation: 3 },
+  accountClosureCard: { position: 'relative', marginTop: 16, padding: bookezSpacing.md, borderRadius: bookezRadii.card, backgroundColor: bookezColors.card, borderWidth: 1, borderColor: bookezColors.cardBorder, shadowColor: '#493F35', shadowOpacity: 0.1, shadowRadius: 12, shadowOffset: { width: 0, height: 6 }, elevation: 3 },
   accountClosureRule: { flexDirection: 'row', alignItems: 'center', marginBottom: 14, opacity: 0.72 },
   accountClosureRuleLine: { flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: bookezColors.burgundySoft },
   accountClosureRuleMark: { marginHorizontal: 8, color: bookezColors.destructive, fontFamily: bookezType.metadata.fontFamily, fontSize: 10 },
@@ -11374,7 +11504,7 @@ const profileSyncEditorialS = StyleSheet.create({
   storageSheet: { backgroundColor: bookezColors.surface, borderColor: bookezColors.border, borderWidth: 1, ...bookezShadows.lifted },
   storageTitle: { color: bookezColors.textPrimary, fontFamily: bookezType.pageTitle.fontFamily, fontWeight: '600' },
   storageDescription: { color: bookezColors.textSecondary, fontFamily: bookezType.bodySecondary.fontFamily },
-  comparisonCard: { backgroundColor: bookezColors.surfaceAccent, borderColor: bookezColors.roseSoft },
+  comparisonCard: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder },
   comparisonCardCloud: { backgroundColor: bookezColors.dustyBlueSoft, borderColor: bookezColors.borderWarm },
   comparisonIcon: { backgroundColor: bookezColors.secondaryAccentSoft },
   comparisonIconCloud: { backgroundColor: bookezColors.dustyBlue },
@@ -11420,7 +11550,7 @@ Object.entries({
   citationLookupText: { color: bookezColors.textOnAccent },
   citationLocalNote: { color: bookezColors.textMuted },
   citationLookupError: { color: bookezColors.destructive },
-  citationMetadataCard: { backgroundColor: bookezColors.surfaceAccent, borderColor: bookezColors.border },
+  citationMetadataCard: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder },
   citationMetadataLabel: { color: bookezColors.secondaryAccent },
   citationMetadataTitle: { color: bookezColors.textPrimary },
   citationMetadataDetail: { color: bookezColors.textSecondary },
@@ -11429,12 +11559,12 @@ Object.entries({
   citationManualToggleArrow: { color: bookezColors.secondaryAccent },
   citationReviewEditButton: { backgroundColor: bookezColors.surfaceMuted, borderColor: bookezColors.border },
   citationReviewEditText: { color: bookezColors.textPrimary },
-  imageCitationReviewCard: { backgroundColor: bookezColors.surfaceAccent, borderColor: bookezColors.border },
+  imageCitationReviewCard: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder },
   imageCitationPreview: { backgroundColor: bookezColors.manuscriptEdge },
   imageCitationSavedList: { backgroundColor: bookezColors.surfaceMuted, borderColor: bookezColors.border },
   imageCitationSavedRow: { borderTopColor: bookezColors.divider },
   imageCitationSavedThumb: { backgroundColor: bookezColors.surfaceAccent },
-  citationGeneratorCard: { backgroundColor: bookezColors.surface, borderColor: bookezColors.border },
+  citationGeneratorCard: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder },
   citationIcon: { backgroundColor: bookezColors.secondaryAccent },
   citationIconText: { color: bookezColors.textOnAccent },
   citationEyebrow: { color: bookezColors.secondaryAccent },
@@ -11459,7 +11589,7 @@ Object.entries({
   citationAddButtonAdded: { backgroundColor: bookezColors.successSoft },
   citationAddText: { color: bookezColors.textPrimary },
   citationExisting: { color: bookezColors.textSecondary },
-  stylePreferencesCard: { backgroundColor: bookezColors.surface, borderColor: bookezColors.border, shadowColor: '#493F35' },
+  stylePreferencesCard: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder, shadowColor: '#493F35' },
   stylePreferencesHeader: { borderBottomColor: bookezColors.divider },
   stylePreferencesEyebrow: { color: bookezColors.secondaryAccent },
   stylePreferencesTitle: { color: bookezColors.textPrimary },
@@ -11537,19 +11667,19 @@ const statsAncientS = StyleSheet.create({
   bigNumber: { color: bookezColors.textOnAccent, textShadowColor: 'rgba(19,36,61,0.2)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 1 },
   bigNumberLabel: { color: bookezColors.borderWarm },
   statsMetricHint: { color: bookezColors.borderWarm },
-  statsMetricCard: { minHeight: 106, borderRadius: 10, borderColor: ancientGameColors.brassDark, shadowColor: '#493F35', shadowOpacity: 0.48, shadowRadius: 7, shadowOffset: { width: 0, height: 5 }, elevation: 4 },
-  statsMetricCardLavender: { backgroundColor: bookezColors.surfaceAccent, borderColor: bookezColors.burgundySoft },
-  statsMetricCardWarm: { backgroundColor: bookezColors.secondaryAccentSoft, borderColor: ancientGameColors.brassDark },
-  statsMetricCardSuccess: { backgroundColor: ancientGameColors.moss, borderColor: bookezColors.borderWarm },
-  statsMetricCardBlue: { backgroundColor: ancientGameColors.teal, borderColor: bookezColors.borderWarm },
+  statsMetricCard: { minHeight: 106, borderRadius: 10, borderColor: bookezColors.cardBorder, shadowColor: '#493F35', shadowOpacity: 0.48, shadowRadius: 7, shadowOffset: { width: 0, height: 5 }, elevation: 4 },
+  statsMetricCardLavender: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder },
+  statsMetricCardWarm: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder },
+  statsMetricCardSuccess: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder },
+  statsMetricCardBlue: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder },
   statsMetricIcon: { color: ancientGameColors.gold },
-  statsMetricCardValue: { color: ancientGameColors.goldPale, textShadowColor: 'rgba(19,36,61,0.12)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 2 },
-  statsMetricCardLabel: { color: ancientGameColors.muted },
-  achievementOverviewCard: { backgroundColor: ancientGameColors.panel, borderColor: ancientGameColors.brass, borderRadius: 12, shadowColor: '#493F35', shadowOpacity: 0.48 },
+  statsMetricCardValue: { color: bookezColors.textPrimary, textShadowColor: 'rgba(19,36,61,0.12)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 2 },
+  statsMetricCardLabel: { color: bookezColors.cardTextSecondary },
+  achievementOverviewCard: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder, borderRadius: 12, shadowColor: '#493F35', shadowOpacity: 0.48 },
   achievementOverviewIcon: { backgroundColor: bookezColors.secondaryAccentSoft, borderColor: ancientGameColors.brass },
   achievementOverviewEyebrow: { color: ancientGameColors.brass },
-  achievementOverviewTitle: { color: ancientGameColors.goldPale },
-  achievementOverviewHint: { color: ancientGameColors.muted },
+  achievementOverviewTitle: { color: bookezColors.textPrimary },
+  achievementOverviewHint: { color: bookezColors.cardTextSecondary },
   achievementOverviewCount: { backgroundColor: bookezColors.surface, borderColor: ancientGameColors.brassDark },
   achievementOverviewCountValue: { color: ancientGameColors.goldPale },
   achievementOverviewCountLabel: { color: ancientGameColors.muted },
@@ -11558,7 +11688,7 @@ const statsAncientS = StyleSheet.create({
   achievementOverviewStats: { borderTopColor: ancientGameColors.brassDark },
   achievementOverviewStatLabel: { color: ancientGameColors.brass },
   achievementOverviewStatValue: { color: ancientGameColors.goldPale },
-  achievementOverviewStatDetail: { color: ancientGameColors.muted },
+  achievementOverviewStatDetail: { color: bookezColors.cardTextSecondary },
   achievementOverviewDivider: { backgroundColor: ancientGameColors.brassDark },
   achievementOverviewNext: { backgroundColor: bookezColors.surfaceRaised, borderColor: ancientGameColors.brassDark },
   achievementOverviewNextIcon: { backgroundColor: ancientGameColors.moss },
@@ -11569,8 +11699,8 @@ const statsAncientS = StyleSheet.create({
   statsSectionTitle: { color: ancientGameColors.goldPale },
   statsCardHint: { color: ancientGameColors.muted },
   statsSectionCount: { color: ancientGameColors.gold },
-  achievementCard: { backgroundColor: ancientGameColors.panel, borderColor: ancientGameColors.brassDark, borderRadius: 11 },
-  achievementCardAllTime: { backgroundColor: ancientGameColors.panel, borderColor: ancientGameColors.brassDark, borderRadius: 11 },
+  achievementCard: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder, borderRadius: 11 },
+  achievementCardAllTime: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder, borderRadius: 11 },
   achievementSubsectionLabel: { color: ancientGameColors.brass },
   achievementSummaryItem: { backgroundColor: bookezColors.surfaceRaised, borderColor: ancientGameColors.brassDark, borderRadius: 9 },
   achievementSummaryValue: { color: ancientGameColors.goldPale },
@@ -11591,30 +11721,30 @@ const statsAncientS = StyleSheet.create({
   achievementFilterSelected: { backgroundColor: bookezColors.accentSoft, borderColor: ancientGameColors.brass },
   achievementFilterText: { color: ancientGameColors.muted },
   achievementFilterTextSelected: { color: ancientGameColors.goldPale },
-  chartCard: { backgroundColor: ancientGameColors.panel, borderColor: ancientGameColors.brass, borderRadius: 12, shadowColor: '#493F35', shadowOpacity: 0.5 },
-  chartTitle: { color: ancientGameColors.goldPale },
+  chartCard: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder, borderRadius: 12, shadowColor: '#493F35', shadowOpacity: 0.5 },
+  chartTitle: { color: bookezColors.textPrimary },
   chartTotal: { color: ancientGameColors.gold },
-  chartLegendText: { color: ancientGameColors.muted },
+  chartLegendText: { color: bookezColors.cardTextSecondary },
   bar: { backgroundColor: ancientGameColors.gold },
   barActive: { backgroundColor: bookezColors.burgundy },
   barTime: { backgroundColor: bookezColors.sage },
-  barLabel: { color: ancientGameColors.muted },
-  statsEmptyHint: { color: ancientGameColors.muted },
-  statsDayRow: { backgroundColor: ancientGameColors.panel, borderColor: ancientGameColors.brassDark, borderRadius: 9, shadowColor: '#493F35', shadowOpacity: 0.25 },
+  barLabel: { color: bookezColors.cardTextSecondary },
+  statsEmptyHint: { color: bookezColors.cardTextSecondary },
+  statsDayRow: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder, borderRadius: 9, shadowColor: '#493F35', shadowOpacity: 0.25 },
   statsDayTitle: { color: ancientGameColors.bone },
-  statsDaySub: { color: ancientGameColors.muted },
-  statsDayValue: { color: ancientGameColors.goldPale },
+  statsDaySub: { color: bookezColors.cardTextSecondary },
+  statsDayValue: { color: bookezColors.textPrimary },
   statsDayLabel: { color: ancientGameColors.brass },
-  statsEmptyCard: { backgroundColor: ancientGameColors.panel, borderColor: ancientGameColors.brassDark, borderRadius: 10 },
+  statsEmptyCard: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder, borderRadius: 10 },
   statsEmptyIcon: { color: ancientGameColors.gold },
-  statsEmptyTitle: { color: ancientGameColors.goldPale },
-  statsEmptyCopy: { color: ancientGameColors.muted },
-  statsBreakdownCard: { backgroundColor: ancientGameColors.panel, borderColor: ancientGameColors.brassDark, borderRadius: 11, shadowColor: '#493F35', shadowOpacity: 0.35 },
+  statsEmptyTitle: { color: bookezColors.textPrimary },
+  statsEmptyCopy: { color: bookezColors.cardTextSecondary },
+  statsBreakdownCard: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder, borderRadius: 11, shadowColor: '#493F35', shadowOpacity: 0.35 },
   inputMixTrack: { backgroundColor: ancientGameColors.panelSoft },
   inputMixDictation: { backgroundColor: bookezColors.success },
   inputMixWriting: { backgroundColor: ancientGameColors.gold },
-  inputMixLabel: { color: ancientGameColors.muted },
-  inputMixValue: { color: ancientGameColors.goldPale },
+  inputMixLabel: { color: bookezColors.cardTextSecondary },
+  inputMixValue: { color: bookezColors.textPrimary },
   dictationStatsCard: { backgroundColor: ancientGameColors.rust, borderColor: bookezColors.roseSoft, borderRadius: 11 },
   dictationStatsEyebrow: { color: ancientGameColors.brass },
   dictationStatsTitle: { color: ancientGameColors.goldPale },
@@ -11624,13 +11754,13 @@ const statsAncientS = StyleSheet.create({
   dictationStatValue: { color: ancientGameColors.goldPale },
   dictationStatLabel: { color: ancientGameColors.danger },
   dictationStatsEmpty: { color: ancientGameColors.muted, borderTopColor: bookezColors.roseSoft },
-  specializedStatsCard: { backgroundColor: ancientGameColors.panel, borderColor: ancientGameColors.brassDark, borderRadius: 11 },
+  specializedStatsCard: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder, borderRadius: 11 },
   specializedStatsCardWarm: { backgroundColor: ancientGameColors.rust, borderColor: bookezColors.roseSoft },
   specializedStatsCardMint: { backgroundColor: ancientGameColors.moss, borderColor: bookezColors.borderWarm },
-  specializedStatsCardRose: { backgroundColor: bookezColors.surfaceAccent, borderColor: bookezColors.burgundySoft },
+  specializedStatsCardRose: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder },
   specializedStatsEyebrow: { color: ancientGameColors.brass },
   specializedStatsTitle: { color: ancientGameColors.goldPale },
-  specializedStatsSubtitle: { color: ancientGameColors.muted },
+  specializedStatsSubtitle: { color: bookezColors.cardTextSecondary },
   specializedStat: { backgroundColor: bookezColors.surfaceRaised, borderColor: ancientGameColors.brassDark, borderRadius: 8 },
   specializedStatLabel: { color: ancientGameColors.brass },
   specializedStatValue: { color: ancientGameColors.goldPale },
@@ -11642,15 +11772,15 @@ const statsAncientS = StyleSheet.create({
   statsInsightMetric: { borderTopColor: ancientGameColors.brassDark },
   statsInsightMetricLabel: { color: ancientGameColors.brass },
   statsInsightMetricValue: { color: ancientGameColors.goldPale },
-  statsBookCard: { backgroundColor: ancientGameColors.panel, borderColor: ancientGameColors.brassDark, borderRadius: 11, shadowColor: '#493F35', shadowOpacity: 0.32 },
+  statsBookCard: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder, borderRadius: 11, shadowColor: '#493F35', shadowOpacity: 0.32 },
   statsBookCardDivider: { backgroundColor: ancientGameColors.brassDark },
   statsBookCardLabel: { color: ancientGameColors.brass },
   statsBookCardValue: { color: ancientGameColors.goldPale },
-  statsBookCardMetric: { backgroundColor: bookezColors.surfaceRaised, borderWidth: 1, borderColor: ancientGameColors.brassDark, borderRadius: 8 },
+  statsBookCardMetric: { backgroundColor: bookezColors.card, borderWidth: 1, borderColor: bookezColors.cardBorder, borderRadius: 8 },
   statsBookCardMetricExpanded: { backgroundColor: bookezColors.secondaryAccentSoft, borderColor: ancientGameColors.brass },
   statsBookCardAction: { color: ancientGameColors.gold },
   conditionalStatsCard: { backgroundColor: ancientGameColors.moss, borderColor: bookezColors.borderWarm, borderRadius: 11 },
-  conditionalStatsCardCitation: { backgroundColor: bookezColors.surfaceAccent, borderColor: bookezColors.burgundySoft, borderRadius: 11 },
+  conditionalStatsCardCitation: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder, borderRadius: 11 },
   conditionalStatsEyebrow: { color: ancientGameColors.brass },
   conditionalStatsEyebrowCitation: { color: ancientGameColors.brass },
   conditionalStatsTitle: { color: ancientGameColors.goldPale },
@@ -11662,34 +11792,34 @@ const statsAncientS = StyleSheet.create({
 });
 
 const profileAncientS = StyleSheet.create({
-  profileHero: { marginTop: 7, padding: 15, borderRadius: 12, backgroundColor: ancientGameColors.panel, borderWidth: 1.5, borderColor: ancientGameColors.brass, shadowColor: '#493F35', shadowOpacity: 0.58, shadowRadius: 14, shadowOffset: { width: 0, height: 8 }, elevation: 7 },
+  profileHero: { marginTop: 7, padding: 15, borderRadius: 12, backgroundColor: bookezColors.card, borderWidth: 1.5, borderColor: bookezColors.cardBorder, shadowColor: '#493F35', shadowOpacity: 0.58, shadowRadius: 14, shadowOffset: { width: 0, height: 8 }, elevation: 7 },
   profileAvatar: { backgroundColor: bookezColors.surfaceAccent, borderWidth: 2, borderColor: ancientGameColors.brass, shadowColor: ancientGameColors.gold, shadowOpacity: 0.18 },
   profileAvatarText: { color: ancientGameColors.goldPale, fontFamily: bookezType.pageTitle.fontFamily },
   profileHalo: { borderColor: bookezColors.surfaceRaised },
   profileOverline: { color: ancientGameColors.brass, letterSpacing: 1.15 },
-  profileName: { color: ancientGameColors.goldPale, textShadowColor: 'rgba(19,36,61,0.12)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 2 },
+  profileName: { color: bookezColors.textPrimary, textShadowColor: 'rgba(19,36,61,0.12)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 2 },
   profileEmail: { color: ancientGameColors.bone },
-  profileMemberSince: { color: ancientGameColors.muted },
+  profileMemberSince: { color: bookezColors.cardTextSecondary },
   profileEditButton: { backgroundColor: bookezColors.accentSoft, borderColor: ancientGameColors.brassDark, borderRadius: 8, shadowColor: '#493F35', shadowOpacity: 0.36, shadowRadius: 4, shadowOffset: { width: 0, height: 3 } },
   profileEditButtonText: { color: ancientGameColors.goldPale, fontFamily: bookezType.sectionTitle.fontFamily, fontSize: 11 },
   preferenceTitle: { marginTop: 26, marginBottom: 9, color: ancientGameColors.brass, fontFamily: bookezType.label.fontFamily, fontSize: 10, lineHeight: 14, letterSpacing: 1.15, fontWeight: '800', textTransform: 'uppercase' },
-  onboardingProfileCard: { backgroundColor: ancientGameColors.panel, borderColor: ancientGameColors.brassDark, borderRadius: 11, shadowColor: '#493F35', shadowOpacity: 0.42, overflow: 'hidden' },
+  onboardingProfileCard: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder, borderRadius: 11, shadowColor: '#493F35', shadowOpacity: 0.42, overflow: 'hidden' },
   onboardingProfileGlow: { backgroundColor: 'rgba(91,24,48,0.08)' },
   onboardingProfileIcon: { backgroundColor: bookezColors.secondaryAccentSoft, borderWidth: 1, borderColor: ancientGameColors.brass },
   onboardingProfileIconText: { color: ancientGameColors.goldPale },
   onboardingProfileKicker: { color: ancientGameColors.brass },
-  onboardingProfileTitle: { color: ancientGameColors.goldPale },
-  onboardingProfileSub: { color: ancientGameColors.muted },
+  onboardingProfileTitle: { color: bookezColors.textPrimary },
+  onboardingProfileSub: { color: bookezColors.cardTextSecondary },
   onboardingProfileButton: { backgroundColor: bookezColors.surface, borderColor: ancientGameColors.brassDark, borderRadius: 8 },
   onboardingProfileButtonText: { color: ancientGameColors.bone, fontFamily: bookezType.sectionTitle.fontFamily },
   onboardingProfileButtonArrow: { color: ancientGameColors.gold },
-  notificationPanel: { backgroundColor: ancientGameColors.panel, borderColor: ancientGameColors.brassDark, borderRadius: 11, shadowColor: '#493F35', shadowOpacity: 0.42 },
+  notificationPanel: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder, borderRadius: 11, shadowColor: '#493F35', shadowOpacity: 0.42 },
   notificationBell: { backgroundColor: bookezColors.secondaryAccentSoft, borderWidth: 1, borderColor: ancientGameColors.brassDark },
   notificationBellText: { color: ancientGameColors.gold },
-  notificationTitle: { color: ancientGameColors.goldPale, fontFamily: bookezType.sectionTitle.fontFamily },
-  notificationSub: { color: ancientGameColors.muted },
+  notificationTitle: { color: bookezColors.textPrimary, fontFamily: bookezType.sectionTitle.fontFamily },
+  notificationSub: { color: bookezColors.cardTextSecondary },
   notificationPanelBody: { borderTopColor: ancientGameColors.brassDark },
-  notificationPanelHint: { color: ancientGameColors.muted },
+  notificationPanelHint: { color: bookezColors.cardTextSecondary },
   notificationSmartCard: { backgroundColor: bookezColors.accentSoft, borderColor: ancientGameColors.brassDark, borderRadius: 9 },
   notificationSmartIcon: { backgroundColor: bookezColors.accent, borderWidth: 1, borderColor: ancientGameColors.brass },
   notificationSmartIconText: { color: ancientGameColors.goldPale },
@@ -11719,16 +11849,16 @@ const profileAncientS = StyleSheet.create({
   notificationAddButton: { backgroundColor: bookezColors.surface, borderColor: ancientGameColors.brass, borderRadius: 8 },
   notificationAddIcon: { color: ancientGameColors.gold },
   notificationAddText: { color: ancientGameColors.goldPale },
-  notificationDisabledCopy: { color: ancientGameColors.muted },
-  voicePanel: { backgroundColor: ancientGameColors.panel, borderColor: ancientGameColors.brassDark, borderRadius: 11, shadowColor: '#493F35', shadowOpacity: 0.42 },
+  notificationDisabledCopy: { color: bookezColors.cardTextSecondary },
+  voicePanel: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder, borderRadius: 11, shadowColor: '#493F35', shadowOpacity: 0.42 },
   voicePanelIcon: { backgroundColor: bookezColors.secondaryAccentSoft, borderWidth: 1, borderColor: ancientGameColors.brassDark },
   voicePanelIconText: { color: ancientGameColors.gold },
   voicePanelKicker: { color: ancientGameColors.brass },
-  voicePanelTitle: { color: ancientGameColors.goldPale, fontFamily: bookezType.sectionTitle.fontFamily },
-  voicePanelStatus: { color: ancientGameColors.muted },
+  voicePanelTitle: { color: bookezColors.textPrimary, fontFamily: bookezType.sectionTitle.fontFamily },
+  voicePanelStatus: { color: bookezColors.cardTextSecondary },
   voicePanelChevron: { color: ancientGameColors.gold },
   voicePanelBody: { borderTopColor: ancientGameColors.brassDark },
-  voicePanelHint: { color: ancientGameColors.muted },
+  voicePanelHint: { color: bookezColors.cardTextSecondary },
   voicePickerTrigger: { backgroundColor: bookezColors.surface, borderColor: ancientGameColors.brassDark, borderRadius: 8 },
   voicePickerTriggerIcon: { backgroundColor: bookezColors.secondaryAccentSoft },
   voicePickerTriggerIconText: { color: ancientGameColors.gold },
@@ -11738,8 +11868,8 @@ const profileAncientS = StyleSheet.create({
   voicePreviewButton: { backgroundColor: bookezColors.secondaryAccentSoft, borderWidth: 1, borderColor: ancientGameColors.brassDark, borderRadius: 8 },
   voicePreviewButtonIcon: { color: ancientGameColors.gold },
   voicePreviewButtonText: { color: ancientGameColors.goldPale },
-  settingsCard: { backgroundColor: ancientGameColors.panel, borderColor: ancientGameColors.brassDark, borderRadius: 11, shadowColor: '#493F35', shadowOpacity: 0.42 },
-  accountCard: { backgroundColor: ancientGameColors.panel, borderColor: ancientGameColors.brassDark, borderRadius: 11, shadowColor: '#493F35', shadowOpacity: 0.42 },
+  settingsCard: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder, borderRadius: 11, shadowColor: '#493F35', shadowOpacity: 0.42 },
+  accountCard: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder, borderRadius: 11, shadowColor: '#493F35', shadowOpacity: 0.42 },
   accountEmailPanel: { paddingVertical: 12 },
   accountEmailKicker: { color: ancientGameColors.brass },
   accountEmailValue: { color: ancientGameColors.bone },
@@ -11747,7 +11877,7 @@ const profileAncientS = StyleSheet.create({
   changeEmailButtonText: { color: ancientGameColors.goldPale, fontFamily: bookezType.sectionTitle.fontFamily },
   changeEmailButtonArrow: { color: ancientGameColors.gold },
   settingsText: { color: ancientGameColors.bone, fontFamily: bookezType.sectionTitle.fontFamily },
-  settingsSub: { color: ancientGameColors.muted },
+  settingsSub: { color: bookezColors.cardTextSecondary },
   settingsIconBlue: { backgroundColor: ancientGameColors.teal, borderWidth: 1, borderColor: bookezColors.borderWarm },
   settingsIconGold: { backgroundColor: bookezColors.secondaryAccentSoft, borderWidth: 1, borderColor: ancientGameColors.brassDark },
   settingsIconSage: { backgroundColor: ancientGameColors.moss, borderWidth: 1, borderColor: bookezColors.borderWarm },
@@ -11773,12 +11903,12 @@ const profileAncientS = StyleSheet.create({
 });
 
 const profileSyncAncientS = StyleSheet.create({
-  dropdown: { backgroundColor: ancientGameColors.panel, borderColor: ancientGameColors.brassDark, borderRadius: 11, shadowColor: '#493F35', shadowOpacity: 0.42 },
+  dropdown: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder, borderRadius: 11, shadowColor: '#493F35', shadowOpacity: 0.42 },
   dropdownIcon: { backgroundColor: bookezColors.secondaryAccentSoft, borderWidth: 1, borderColor: ancientGameColors.brassDark },
   dropdownIconText: { color: ancientGameColors.gold },
   dropdownKicker: { color: ancientGameColors.brass },
-  dropdownTitle: { color: ancientGameColors.goldPale, fontFamily: bookezType.sectionTitle.fontFamily },
-  dropdownStatus: { color: ancientGameColors.muted },
+  dropdownTitle: { color: bookezColors.textPrimary, fontFamily: bookezType.sectionTitle.fontFamily },
+  dropdownStatus: { color: bookezColors.cardTextSecondary },
   dropdownChevron: { color: ancientGameColors.gold },
   dropdownBody: { borderTopColor: ancientGameColors.brassDark },
   card: { backgroundColor: bookezColors.surface, borderColor: ancientGameColors.brassDark, borderRadius: 9 },

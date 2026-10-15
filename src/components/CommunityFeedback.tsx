@@ -410,7 +410,7 @@ Object.assign(s, {
 // control into the same light editorial register as the main screens.
 Object.entries({
   readerResponse: { backgroundColor: bookezColors.surfaceRaised },
-  publicReaderCard: { backgroundColor: bookezColors.surfaceRaised, borderColor: bookezColors.border },
+  publicReaderCard: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder },
   authorReply: { backgroundColor: bookezColors.surfaceRaised },
   shade: { backgroundColor: 'rgba(19,36,61,0.24)' },
   sheet: { backgroundColor: bookezColors.surface },
@@ -436,12 +436,12 @@ Object.entries({
   switchThumb: { backgroundColor: bookezColors.textOnAccent },
   tab: { backgroundColor: bookezColors.surfaceMuted },
   tabActive: { backgroundColor: bookezColors.accentSoft },
-  requestCard: { backgroundColor: bookezColors.surfaceRaised, borderColor: bookezColors.border },
+  requestCard: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder },
   miniPill: { backgroundColor: bookezColors.accentSoft },
   requestFooter: { borderTopColor: bookezColors.divider },
   questionBox: { backgroundColor: bookezColors.warningSoft, borderColor: bookezColors.manuscriptEdge },
   dangerButton: { backgroundColor: bookezColors.destructiveSoft },
-  responseCard: { backgroundColor: bookezColors.surfaceRaised, borderColor: bookezColors.border },
+  responseCard: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder },
   emptyInline: { backgroundColor: bookezColors.surfaceMuted },
   toolButton: { backgroundColor: bookezColors.surfaceMuted },
   playerCard: { backgroundColor: bookezColors.accentSoft },

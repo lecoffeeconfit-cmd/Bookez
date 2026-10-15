@@ -1,9 +1,11 @@
 import { requireOptionalNativeModule } from 'expo';
 import { LinearGradient } from 'expo-linear-gradient';
+import * as Speech from 'expo-speech';
 import { forwardRef, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Alert, Animated, AppState, Easing, Pressable, StyleSheet, Text, TextInput, type TextInputProps, View } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
 import { appendDictationSegment } from '../lib/dictation';
+import { ownsSpeechSession, releaseSpeechSession, requestSpeechSession, waitForSpeechRecognitionIdle } from '../lib/speech-session';
 import { bookezColors } from '../theme/bookez';
 import { useBookezReduceMotion } from './BookezUI';
 import { BookezBookmark, BookezManuscript } from './bookez-art';
@@ -28,7 +30,6 @@ type DictationInputProps = TextInputProps & {
 };
 
 let nextDictationInputId = 0;
-let activeDictationInputId: string | null = null;
 
 function MicrophoneMark({ color }: { color: string }) {
   return <Svg width={16} height={18} viewBox="0 0 20 24" accessible={false}>
@@ -143,17 +144,21 @@ const NativeDictationInput = forwardRef<TextInput, DictationInputProps>(function
   const sessionBaseRef = useRef('');
   const onDictationStateRef = useRef(onDictationState);
   const mountedRef = useRef(true);
+  const startingRef = useRef(false);
+  const startVersionRef = useRef(0);
   const enabledRef = useRef(dictationEnabled);
   enabledRef.current = dictationEnabled && props.editable !== false;
   if (!inputIdRef.current) inputIdRef.current = `dictation-input-${++nextDictationInputId}`;
   const inputId = inputIdRef.current;
   const stopOwnedDictation = () => {
-    if (activeDictationInputId !== inputId) return;
-    activeDictationInputId = null;
+    startVersionRef.current += 1;
+    startingRef.current = false;
+    const owned = ownsSpeechSession(inputId);
+    releaseSpeechSession(inputId);
     isDictatingRef.current = false;
-    setIsDictating(false);
+    if (mountedRef.current) { setIsDictating(false); setIsStarting(false); }
     onDictationStateRef.current?.(false);
-    ExpoSpeechRecognitionModule.abort();
+    if (owned) ExpoSpeechRecognitionModule.abort();
   };
 
   useEffect(() => { if (!dictationEnabled || props.editable === false) stopOwnedDictation(); }, [dictationEnabled, props.editable]);
@@ -174,18 +179,23 @@ const NativeDictationInput = forwardRef<TextInput, DictationInputProps>(function
     isDictatingRef.current = isDictating;
   }, [isDictating]);
 
-  useEffect(() => () => {
-    mountedRef.current = false;
-    if (activeDictationInputId === inputId) {
-      activeDictationInputId = null;
-      isDictatingRef.current = false;
-      onDictationStateRef.current?.(false);
-      ExpoSpeechRecognitionModule.abort();
-    }
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      startVersionRef.current += 1;
+      const owned = ownsSpeechSession(inputId);
+      releaseSpeechSession(inputId);
+      if (owned) {
+        isDictatingRef.current = false;
+        onDictationStateRef.current?.(false);
+        ExpoSpeechRecognitionModule.abort();
+      }
+    };
   }, []);
 
   useSpeechRecognitionEvent('result', (event) => {
-    if (!isDictatingRef.current || activeDictationInputId !== inputId) return;
+    if (!isDictatingRef.current || !ownsSpeechSession(inputId)) return;
     const transcript = event.results[0]?.transcript?.trim();
     if (!transcript) return;
     const prefix = sessionBaseRef.current;
@@ -196,16 +206,16 @@ const NativeDictationInput = forwardRef<TextInput, DictationInputProps>(function
   });
 
   useSpeechRecognitionEvent('end', () => {
-    if (!isDictatingRef.current || activeDictationInputId !== inputId) return;
-    activeDictationInputId = null;
+    if (!isDictatingRef.current || !ownsSpeechSession(inputId)) return;
+    releaseSpeechSession(inputId);
     isDictatingRef.current = false;
     setIsDictating(false);
     onDictationStateRef.current?.(false);
   });
 
   useSpeechRecognitionEvent('error', (event) => {
-    if (!isDictatingRef.current || activeDictationInputId !== inputId) return;
-    activeDictationInputId = null;
+    if (!isDictatingRef.current || !ownsSpeechSession(inputId)) return;
+    releaseSpeechSession(inputId);
     isDictatingRef.current = false;
     setIsDictating(false);
     onDictationStateRef.current?.(false);
@@ -216,7 +226,8 @@ const NativeDictationInput = forwardRef<TextInput, DictationInputProps>(function
 
   const startDictation = async () => {
     if (!enabledRef.current) return;
-    if (isDictating || isStarting) {
+    if (startingRef.current) return;
+    if (isDictatingRef.current) {
       ExpoSpeechRecognitionModule.stop();
       return;
     }
@@ -226,30 +237,41 @@ const NativeDictationInput = forwardRef<TextInput, DictationInputProps>(function
       return;
     }
 
+    startingRef.current = true;
     setIsStarting(true);
+    const startVersion = ++startVersionRef.current;
+    const canStart = () => mountedRef.current && enabledRef.current && startVersionRef.current === startVersion && AppState.currentState !== 'background' && AppState.currentState !== 'inactive';
     try {
+      await Speech.stop();
+      if (!canStart()) return;
       const permissions = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
-      if (!mountedRef.current || !enabledRef.current) return;
+      if (!canStart()) return;
       if (!permissions.granted) {
         Alert.alert('Microphone permission needed', 'Allow microphone and speech recognition access in Settings to dictate directly in Bookez.');
         return;
       }
 
-      if (activeDictationInputId && activeDictationInputId !== inputId) ExpoSpeechRecognitionModule.abort();
+      const claimed = await requestSpeechSession(inputId, stopOwnedDictation, () => waitForSpeechRecognitionIdle(ExpoSpeechRecognitionModule));
+      if (!claimed) return;
+      if (!canStart()) { if (startVersionRef.current === startVersion) releaseSpeechSession(inputId); return; }
       sessionBaseRef.current = valueRef.current;
-      activeDictationInputId = inputId;
       isDictatingRef.current = true;
       setIsDictating(true);
       onInputMode?.('dictation');
       onDictationStateRef.current?.(true);
       ExpoSpeechRecognitionModule.start({ lang: 'en-US', interimResults: true, continuous: true, addsPunctuation: true });
     } catch {
+      if (!canStart()) return;
+      releaseSpeechSession(inputId);
       isDictatingRef.current = false;
       setIsDictating(false);
       onDictationStateRef.current?.(false);
       Alert.alert('Dictation unavailable', 'Speech recognition could not start on this device.');
     } finally {
-      if (mountedRef.current) setIsStarting(false);
+      if (startVersionRef.current === startVersion) {
+        startingRef.current = false;
+        if (mountedRef.current) setIsStarting(false);
+      }
     }
   };
 
