@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "main": "index.ts",
   "dependencies": {
+    "@expo/metro-runtime": "~57.0.8",
     "@react-native-async-storage/async-storage": "2.2.0",
     "@react-native-masked-view/masked-view": "0.3.2",
     "@sentry/react-native": "~7.11.0",
@@ -29,10 +30,12 @@
     "expo-status-bar": "~57.0.1",
     "expo-web-browser": "~57.0.2",
     "react": "19.2.3",
+    "react-dom": "19.2.3",
     "react-native": "0.86.2",
     "react-native-get-random-values": "~1.11.0",
     "react-native-reanimated": "4.5.1",
     "react-native-svg": "15.15.4",
+    "react-native-web": "~0.21.0",
     "react-native-worklets": "0.10.1"
   },
   "devDependencies": {
@@ -42,6 +45,10 @@
     "typescript": "~6.0.3"
   },
   "scripts": {
+    "test:library-dashboard": "node --experimental-strip-types scripts/test-library-dashboard.mjs",
+    "prepare:ios": "expo prebuild --platform ios --no-clean --no-install && pod install --project-directory=ios && npm run check:ios-native",
+    "check:ios-native": "node scripts/check-ios-native-modules.mjs",
+    "test:ios-native": "node scripts/test-ios-native-modules.mjs",
     "test:ai-cockpit": "node --experimental-strip-types scripts/test-ai-cockpit.mjs",
     "test:ai-cockpit-recovery": "node --experimental-strip-types scripts/test-ai-cockpit-recovery.mjs",
     "test:ai-cockpit-ui": "node scripts/test-ai-cockpit-ui.mjs",

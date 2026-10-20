@@ -126,6 +126,9 @@ export async function signInWithOAuthProvider(provider: Provider) {
   const result = await WebBrowser.openAuthSessionAsync(data.url, bookezRedirectUrl);
   if (result.type !== 'success' || !result.url) return false;
 
+  if (!isTrustedBookezAuthCallback(result.url)) {
+    throw new Error('Sign-in returned an unexpected callback. Please try again.');
+  }
   await handleBookezAuthUrl(result.url);
   const sessionResult = await supabase.auth.getSession();
   if (sessionResult.error) throw sessionResult.error;
@@ -264,7 +267,20 @@ export async function updateBookezPassword(password: string) {
   if (error) throw error;
 }
 
-export async function handleBookezAuthUrl(url: string): Promise<{ type?: 'recovery' | 'email_change' } | undefined> {
+type BookezAuthCallbackResult = { type?: 'recovery' | 'email_change' } | undefined;
+let lastAuthCallback: { url: string; result: Promise<BookezAuthCallbackResult> } | undefined;
+
+// Android's link listener and auth browser can deliver the same one-use PKCE
+// code. Share their exchange, including a completed exchange, instead of racing.
+export function handleBookezAuthUrl(url: string): Promise<BookezAuthCallbackResult> {
+  if (!isTrustedBookezAuthCallback(url)) return Promise.resolve(undefined);
+  if (lastAuthCallback?.url === url) return lastAuthCallback.result;
+  const result = completeBookezAuthUrl(url);
+  lastAuthCallback = { url, result };
+  return result;
+}
+
+async function completeBookezAuthUrl(url: string): Promise<BookezAuthCallbackResult> {
   if (!isTrustedBookezAuthCallback(url)) return;
   const parsed = Linking.parse(url);
   const query = parsed.queryParams ?? {};
@@ -275,6 +291,8 @@ export async function handleBookezAuthUrl(url: string): Promise<{ type?: 'recove
     if (typeof queryValue === 'string') return queryValue;
     return hashParams?.get(name) ?? null;
   };
+  const providerError = getParam('error_description') ?? getParam('error');
+  if (providerError) throw new Error(providerError);
   const code = getParam('code');
   const tokenHash = getParam('token_hash');
   const callbackType = getParam('type');

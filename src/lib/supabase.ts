@@ -1,4 +1,5 @@
-import { AppState } from 'react-native';
+import { AppState, Platform } from 'react-native';
+import * as Linking from 'expo-linking';
 import { createClient } from '@supabase/supabase-js';
 import type { Database } from './database.types';
 import { bookezSecureStorage } from './secure-storage';
@@ -10,7 +11,9 @@ if (!supabaseUrl || !supabasePublishableKey) {
   throw new Error('Missing EXPO_PUBLIC_SUPABASE_URL or EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY. Add them to the local environment before starting Bookez.');
 }
 
-export const bookezRedirectUrl = 'bookez://auth/callback';
+export const bookezRedirectUrl = Platform.OS === 'web'
+  ? Linking.createURL('/')
+  : 'bookez://auth/callback';
 export const bookezEmailConfirmationRedirectUrl = 'https://bookez-email-confirmation.lecoffeeconfit888.chatgpt.site';
 
 export const supabase = createClient<Database>(supabaseUrl, supabasePublishableKey, {

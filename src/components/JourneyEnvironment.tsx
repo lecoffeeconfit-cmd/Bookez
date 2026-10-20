@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { LinearGradient } from 'expo-linear-gradient';
 import MaskedView from '@react-native-masked-view/masked-view';
-import { Image, StyleSheet, View, useWindowDimensions, type StyleProp, type ViewStyle } from 'react-native';
+import { Image, Platform, StyleSheet, View, useWindowDimensions, type StyleProp, type ViewStyle } from 'react-native';
+import { bookezColors } from '../theme/bookez';
 import Animated, {
   Easing,
   Extrapolation,
@@ -31,6 +32,14 @@ const BIOME_ARTWORK = [
   require('../../assets/journey/journey-night-forest.png'),
   require('../../assets/journey/journey-canyon.png'),
   require('../../assets/journey/journey-sunset.png'),
+] as const;
+
+const BIOME_CONTINUATIONS = [
+  require('../../assets/journey/journey-meadow-below.png'),
+  require('../../assets/journey/journey-alpine-below.png'),
+  require('../../assets/journey/journey-night-forest-below.png'),
+  require('../../assets/journey/journey-canyon-below.png'),
+  require('../../assets/journey/journey-sunset-below.png'),
 ] as const;
 
 const withAlpha = (hex: string, alpha: number) => {
@@ -67,40 +76,52 @@ const BIOMES: BiomeConfig[] = [
   },
 ];
 
+function ArtworkFade({ fade, children }: { fade: number; children: ReactNode }) {
+  // Fade only the incoming art over the fully opaque preceding image. Fading
+  // both images exposes the backdrop and creates a horizontal band.
+  const stop = Math.min(0.45, fade);
+  if (Platform.OS === 'web') {
+    const mask = `linear-gradient(to bottom, transparent 0%, #000 ${stop * 100}%, #000 100%)`;
+    return <View style={[StyleSheet.absoluteFill, { maskImage: mask, WebkitMaskImage: mask } as ViewStyle]}>{children}</View>;
+  }
+  return <MaskedView style={StyleSheet.absoluteFill} maskElement={<LinearGradient colors={['transparent', '#FFF', '#FFF']} locations={[0, stop, 1]} style={styles.artworkMask} />}>{children}</MaskedView>;
+}
+
+function ScenicArtwork({ index, width, height }: { index: number; width: number; height: number }) {
+  const source = BIOME_ARTWORK[index];
+  // All ten scenic assets are 1024 × 1536. Keep their 2:3 framing on native
+  // and web (React Native Web does not expose Image.resolveAssetSource).
+  const tileHeight = width * 1.5;
+  const overlap = tileHeight * 0.22;
+  const stride = tileHeight - overlap;
+  const tileCount = Math.max(1, Math.ceil((height - overlap) / stride));
+
+  // Fit the full width at the original aspect ratio. Extend the river with
+  // scenery below it instead of magnifying a single image to the route height.
+  return <View style={StyleSheet.absoluteFill}>
+    {Array.from({ length: tileCount }, (_, tile) => {
+      const artwork = <Image source={tile === 0 ? source : BIOME_CONTINUATIONS[index]} resizeMode="contain" fadeDuration={0} accessibilityIgnoresInvertColors style={styles.maskedArtworkImage} />;
+      return <View key={tile} style={[styles.biomeArtworkFrame, { top: tile * stride, width, height: tileHeight }]}>
+        {tile === 0 ? artwork : <ArtworkFade fade={overlap / tileHeight}>{artwork}</ArtworkFade>}
+      </View>;
+    })}
+  </View>;
+}
+
 function ScenicLayer({ width, height }: { width: number; height: number }) {
   const sectionHeight = height / BIOME_ARTWORK.length;
   const transitionOverlap = Math.min(180, Math.max(110, sectionHeight * 0.16));
 
-  // Keep each biome on one complete source image. Mixing separately generated
-  // continuations into the same frame made their different crops visible as
-  // hard horizontal seams.
+  // The regions share one uninterrupted canvas, with soft incoming transitions.
   return <View pointerEvents="none" style={[styles.scenicLayer, { width, height }]}>
-    {BIOME_ARTWORK.map((source, index) => {
+    {BIOME_ARTWORK.map((_, index) => {
       const biome = BIOMES[index];
       const isFirst = index === 0;
-      const isLast = index === BIOME_ARTWORK.length - 1;
       const frameTop = index * sectionHeight - (isFirst ? 0 : transitionOverlap);
-      const frameHeight = sectionHeight + (isFirst ? 0 : transitionOverlap) + (isLast ? 0 : transitionOverlap);
-      const fadeHeight = Math.min(transitionOverlap, frameHeight * 0.24);
-      const topFadeStop = isFirst ? 0 : fadeHeight / frameHeight;
-      const bottomFadeStop = isLast ? 1 : 1 - fadeHeight / frameHeight;
+      const frameHeight = sectionHeight + (isFirst ? 0 : transitionOverlap);
+      const artwork = <ScenicArtwork index={index} width={width} height={frameHeight} />;
       return <View key={biome.id} collapsable={false} style={[styles.biomeArtworkFrame, { width, height: frameHeight, top: frameTop }]}>
-        <MaskedView
-          style={StyleSheet.absoluteFill}
-          maskElement={<LinearGradient
-            colors={[isFirst ? '#F5EEE1' : 'transparent', '#F5EEE1', '#F5EEE1', isLast ? '#F5EEE1' : 'transparent'] as const}
-            locations={[0, topFadeStop, bottomFadeStop, 1] as const}
-            style={styles.artworkMask}
-          />}
-        >
-          <Image
-            source={source}
-            resizeMode="cover"
-            fadeDuration={0}
-            accessibilityIgnoresInvertColors
-            style={styles.maskedArtworkImage}
-          />
-        </MaskedView>
+        {isFirst ? artwork : <ArtworkFade fade={transitionOverlap / frameHeight}>{artwork}</ArtworkFade>}
         <LinearGradient
           colors={[withAlpha(biome.base, 0.08), 'rgba(239,230,216,0.01)', withAlpha(biome.base, 0.08)] as const}
           start={{ x: 0, y: 0.5 }}
@@ -244,7 +265,7 @@ export default function JourneyEnvironment({ width, height, progress, reduceMoti
 }
 
 const styles = StyleSheet.create({
-  environment: { position: 'absolute', top: 0, left: 0, backgroundColor: '#F9F4EA' },
+  environment: { position: 'absolute', top: 0, left: 0, backgroundColor: bookezColors.surfaceMuted },
   scenicLayer: { position: 'absolute', top: 0, left: 0, overflow: 'hidden' },
   biomeArtworkFrame: { position: 'absolute', left: 0, overflow: 'hidden' },
   artworkMask: { flex: 1 },

@@ -1,5 +1,34 @@
 # Bookez TestFlight release
 
+Before archiving from Xcode, synchronize the generated iOS project:
+
+```sh
+npm run prepare:ios
+npm run test:ios-native
+npx tsc --noEmit
+```
+
+Open `ios/Bookez.xcworkspace`, select a new build number, then archive. Run
+`prepare:ios` after pulling updates that change native dependencies or Expo
+plugins. It applies the current Expo configuration and installs CocoaPods while
+preserving local Xcode settings. Xcode now checks the installed Expo pods and
+module registrations against the JavaScript dependencies before compiling.
+
+Build 4's archived binary omitted `ExpoCrypto`, `ExpoWebBrowser`,
+`ExpoAppleAuthentication`, and `ExpoSplashScreen`. The new JavaScript imported
+Crypto and WebBrowser during startup, causing a native-module error before the
+first screen could render. JavaScript export and TypeScript checks alone cannot
+detect this mismatch. This repair requires a new native build uploaded to
+TestFlight; the existing build cannot acquire the missing libraries. Verify a
+Release build on an iPhone, including updating over the previous installation,
+before submitting. Keep the previous installation's data during this check.
+
+Repair validation: TypeScript, the native-dependency regression checks, iOS
+JavaScript export, and the Xcode Release simulator build passed. The compiled
+app reached the sign-in screen on an iPhone 17 Pro / iOS 26.5 simulator with no
+fatal JavaScript or missing-module startup errors. A TestFlight upload and an
+upgrade check on a physical iPhone are still required.
+
 The repository now includes `eas.json` with development, preview, and production
 profiles. Before the first cloud build, complete these one-time account steps:
 

@@ -36,6 +36,8 @@ import { submitBookezSupport } from './src/lib/bookez-admin';
 import { insertAIProse, isAIPreviewCurrent, type AIInsertPlacement, type AIPreviewTarget } from './src/lib/ai-drafting';
 import EditorMode, { EditorIssueComposer } from './src/components/EditorMode';
 import BookProgressDock, { type ProgressDockMode } from './src/components/BookProgressDock';
+import LibraryBookDashboard from './src/components/LibraryBookDashboard';
+import LibraryBookCardSurface, { libraryBookCardStyles } from './src/components/LibraryBookCardSurface';
 import WriteToolBelt, { sanitizeWriteToolBeltConfig, WRITE_TOOL_BELT_STORAGE_KEY, WRITE_TOOL_DEFAULTS, type WriteToolBeltConfig, type WriteToolDefinition } from './src/components/WriteToolBelt';
 import BookNotebook, { LibraryNotesButton, LinkedBookNotes, type NotebookBook } from './src/components/BookNotebook';
 import { clearBookNotesForOwner, startBookNotesSync } from './src/lib/book-notes';
@@ -43,6 +45,8 @@ import { convertBookNote, type NoteConversion } from './src/lib/book-notes-model
 import { BookezButton, BookezIcon, BookezInkReveal, useBookezReduceMotion } from './src/components/BookezUI';
 import { BookezAchievementSeal, BookezBookmark, BookezBookStack, BookezCommunityMark, BookezDefaultCover, BookezFlourish, BookezJourneyMarker, BookezManuscript, BookezManuscriptFolio, BookezMysticIcon, BookezOpenBook, BookezPlanningFolio, BookezPlanningLeaf, BookezPublishingBook, BookezQuill, BookezWritingDesk } from './src/components/bookez-art';
 import JourneyEnvironment from './src/components/JourneyEnvironment';
+import JourneyStepCard from './src/components/JourneyStepCard';
+import { combineJourneyEstimates, estimateJourneyDraft, journeyTimeRange, type JourneyTimeEstimate } from './src/lib/journey-estimates';
 import type { AIWritingOperation } from './src/lib/ai-writing';
 import { memoryText, projectFingerprint, type AIProjectChange, type AIProjectMemory, type AIProjectPart } from './src/lib/ai-project';
 import { AI_USAGE_POLICY, AI_USAGE_STORAGE_KEY, aiUsageCooldownLabel, aiUsageCooldownRemaining, aiUsageMonthKey, type AIUsageLedger } from './src/lib/ai-usage';
@@ -1681,6 +1685,7 @@ function LibraryWritingHome({ project, projects, snapshot, onUpdateProject, onOp
 
 function Library({ projects, activeProject, userId, onPage, onSelectProject, onProjectsChange, onOpenBookStudio, onOpenWritingBook, onOpenEditor, onContinueProgress }: { projects: Project[]; activeProject: string; userId: string | null; onPage: (page: Page) => void; onSelectProject: (title: string) => void; onProjectsChange: (projects: Project[]) => void; onOpenBookStudio: (title: string, section: StudioSection) => void; onOpenWritingBook: (title: string) => void; onOpenEditor: (projectId: string) => void; onContinueProgress?: (step: BookProgressNextStep) => void }) {
   const reduceMotion = useBookezReduceMotion();
+  const { height: libraryWindowHeight } = useWindowDimensions();
   const [composerOpen, setComposerOpen] = useState(false);
   const [selectedType, setSelectedType] = useState(projectTypes[0]);
   const [projectName, setProjectName] = useState('');
@@ -1689,6 +1694,7 @@ function Library({ projects, activeProject, userId, onPage, onSelectProject, onP
   const [renameValue, setRenameValue] = useState('');
   const [focusProjectTitle, setFocusProjectTitle] = useState<string | null>(null);
   const [focusPickerOpen, setFocusPickerOpen] = useState(false);
+  const [writingHomeOpen, setWritingHomeOpen] = useState(false);
   const [sourcesProject, setSourcesProject] = useState<Project | null>(null);
   const [notebookProjectId, setNotebookProjectId] = useState<string | null>(null);
   const [feedbackProject, setFeedbackProject] = useState<Project | null>(null);
@@ -1699,7 +1705,8 @@ function Library({ projects, activeProject, userId, onPage, onSelectProject, onP
   const [communityShareBusy, setCommunityShareBusy] = useState(false);
   const [communityEngagement, setCommunityEngagement] = useState<Record<string, CommunityEngagement>>({});
 
-  const activeBooks = projects.filter((project) => !project.archived && !project.deletedAt);
+  const visibleBooks = projects.filter((project) => !project.deletedAt);
+  const activeBooks = visibleBooks.filter((project) => !project.archived);
   const activeCommunityProjectIds = activeBooks.map((project) => project.cloudId).filter((id): id is string => Boolean(id)).sort();
   const activeCommunityProjectKey = activeCommunityProjectIds.join('|');
   useEffect(() => {
@@ -1723,11 +1730,19 @@ function Library({ projects, activeProject, userId, onPage, onSelectProject, onP
   const closestProject = [...activeBooks].sort((a, b) => {
     const progressDifference = getJourneySnapshot(b).progressPercent - getJourneySnapshot(a).progressPercent;
     return progressDifference || (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
-  })[0] ?? projects[0];
-  const focusProject = projects.find((project) => project.title === activeProject && !project.archived && !project.deletedAt) ?? projects.find((project) => project.title === focusProjectTitle && !project.archived) ?? closestProject;
+  })[0];
+  const focusProject = activeBooks.find((project) => project.title === activeProject) ?? activeBooks.find((project) => project.title === focusProjectTitle) ?? closestProject;
   const focusSnapshot = focusProject ? getJourneySnapshot(focusProject) : null;
-  const focusCover = focusProject?.images?.find((image) => image.placement === 'cover');
-  const focusIsManual = Boolean(focusProject && focusProject.title !== closestProject?.title);
+  const dashboardBooks = visibleBooks.map((project) => ({
+    id: project.cloudId ?? project.title,
+    title: project.title,
+    type: project.type,
+    coverImageUri: project.images?.find((image) => image.placement === 'cover')?.uri,
+    updatedAt: project.updatedAt,
+    archived: project.archived,
+    weekWords: sumActivityWords(project.plan ?? defaultPlanFor(project.type), 7),
+    progress: getJourneySnapshot(project).progress,
+  }));
 
   const openFocusBook = (nextPage: Page) => {
     if (!focusProject) return;
@@ -1820,7 +1835,8 @@ const copy: Project = { ...project, cloudId: copyId, cloudRevision: 0, title, up
     const currentPart = projectSnapshot.nextPart?.title ?? (projectSnapshot.parts[projectSnapshot.parts.length - 1]?.title ?? 'No section selected');
     const coverImage = project.images?.find((image) => image.placement === 'cover');
     const projectEngagement = project.cloudId ? communityEngagement[project.cloudId] : undefined;
-    return <BookezInstrumentReveal key={projectKey(project, index)} triggerKey={`Library-book-${project.title}-${index}`} delay={Math.min(360, 135 + (index * 55))} reduceMotion={reduceMotion} variant="folio" direction={index % 2 === 0 ? -1 : 1} style={[s.libraryProjectCard, libraryEditorialS.projectCard, project.archived && s.libraryProjectCardArchived]}>
+    return <BookezInstrumentReveal key={projectKey(project, index)} triggerKey={`Library-book-${project.title}-${index}`} delay={Math.min(360, 135 + (index * 55))} reduceMotion={reduceMotion} variant="folio" direction={index % 2 === 0 ? -1 : 1} style={[s.libraryProjectCard, libraryBookCardStyles.card, project.title === focusProject?.title && libraryBookCardStyles.selected, project.archived && s.libraryProjectCardArchived]}>
+      <LibraryBookCardSurface />
       <Pressable onPress={() => onSelectProject(project.title)} style={s.libraryProjectTop} accessibilityLabel={`Select ${project.title}`}>
         <Pressable onPress={() => { onSelectProject(project.title); onOpenBookStudio(project.title, 'assemble'); }} style={[s.projectMark, libraryEditorialS.projectMark]} accessibilityRole="button" accessibilityLabel={coverImage ? `Edit cover for ${project.title}` : `Add cover to ${project.title}`}>
           {coverImage ? <Image source={{ uri: coverImage.uri }} style={s.libraryProjectCover} resizeMode="cover" accessibilityLabel={`${project.title} cover image`} /> : <BookezDefaultCover type={project.type} width={36} height={48} />}
@@ -1836,17 +1852,25 @@ const copy: Project = { ...project, cloudId: copyId, cloudRevision: 0, title, up
     </BookezInstrumentReveal>;
   };
 
-  return <><PageHeader page="Library" onPage={onPage} editorial /><Text style={[s.intro, libraryEditorialS.intro]}>Pick up a thread, or begin a brand new little world.</Text>
-    <BookezInstrumentReveal triggerKey={`Library-focus-${focusProject?.title ?? activeProject}`} delay={70} reduceMotion={reduceMotion} variant="folio" direction={-1} style={[s.focusCard, libraryEditorialS.focusCard]}><LinearGradient pointerEvents="none" colors={[bookezColors.surfaceRaised, bookezColors.card, bookezColors.manuscript]} locations={[0, 0.6, 1]} style={StyleSheet.absoluteFill} /><LibraryHeroFolioHardware /><View pointerEvents="none" style={libraryEditorialS.focusCardAccent} /><View pointerEvents="none" style={libraryEditorialS.focusTopRule} />{focusProject ? <View pointerEvents="none" style={[s.focusCoverPeek, libraryEditorialS.focusCoverPeek]} accessibilityLabel={`${focusProject.title} cover`}>{focusCover?.uri ? <><Image source={{ uri: focusCover.uri }} style={s.focusCoverImage} resizeMode="cover" accessibilityLabel={`${focusProject.title} cover image`} /><View style={s.focusCoverVeil} /></> : <BookezDefaultCover type={focusProject.type} animated />}</View> : null}<BookezInkReveal triggerKey="Library-desk" delay={110} style={libraryEditorialS.focusArtworkReveal}><View style={libraryEditorialS.focusArtworkGraphic}><BookezWritingDesk width={138} height={83} color={bookezColors.textPrimary} accent={bookezColors.secondaryAccent} /></View></BookezInkReveal>
-      <View style={[s.focusHeader, libraryEditorialS.focusHeader]}><Text style={[s.focusEyebrow, libraryEditorialS.focusEyebrow]}>{focusIsManual ? 'YOUR FOCUS BOOK' : 'CLOSEST TO COMPLETION'}</Text><Pressable onPress={() => setFocusPickerOpen(true)} hitSlop={8} style={[s.focusPickerButton, libraryEditorialS.focusPickerButton]} accessibilityRole="button" accessibilityLabel="Choose the book shown in the focus card"><Text style={[s.focusPickerButtonText, libraryEditorialS.focusPickerButtonText]}>Switch</Text><Text style={[s.focusPickerButtonArrow, libraryEditorialS.focusPickerButtonArrow]}>⌄</Text></Pressable></View>
-      <Text style={[s.focusTitle, libraryEditorialS.focusTitle]}>{focusProject?.title ?? activeProject}</Text><Text style={[s.focusCopy, libraryEditorialS.focusCopy]}>Follow the thread from first idea to finished manuscript.</Text>{focusSnapshot && <Text style={[s.focusProgress, libraryEditorialS.focusProgress]}>{focusSnapshot.progressPercent}% complete · {focusSnapshot.stage}</Text>}
-      {focusProject && focusSnapshot && <LibraryWritingHome embedded project={focusProject} projects={activeBooks} snapshot={focusSnapshot} onUpdateProject={updateLibraryProject} onOpenWritingBook={onOpenWritingBook} onContinueStep={() => { if (onContinueProgress) onContinueProgress(focusSnapshot.progress.nextStep); else onOpenWritingBook(focusProject.title); }} onPage={(nextPage) => { onSelectProject(focusProject.title); onPage(nextPage); }} />}
-      <View style={[s.focusActions, libraryEditorialS.focusActions]}><BookezButton label="Open manuscript" icon="feather" compact onPress={() => openFocusBook('Write')} style={libraryEditorialS.focusPrimaryButton} /><BookezButton label="View journey" variant="secondary" compact onPress={() => openFocusBook('Journey')} style={libraryEditorialS.focusSecondaryButton} /></View>
+  return <><PageHeader page="Library" onPage={onPage} editorial />{libraryWindowHeight >= 740 && <Text style={[s.intro, libraryEditorialS.intro]}>Pick up a thread, or begin a brand new little world.</Text>}
+    <BookezInstrumentReveal triggerKey={`Library-focus-${focusProject?.title ?? 'empty'}`} delay={70} reduceMotion={reduceMotion} variant="folio" direction={-1}>
+      <LibraryBookDashboard books={dashboardBooks} activeBookId={focusProject ? focusProject.cloudId ?? focusProject.title : undefined}
+        onChooseBook={() => setFocusPickerOpen(true)}
+        onSelectBook={(book) => { setFocusProjectTitle(book.title); onSelectProject(book.title); }}
+        onContinue={() => { if (!focusProject || !focusSnapshot) return; if (onContinueProgress) onContinueProgress(focusSnapshot.progress.nextStep); else onOpenWritingBook(focusProject.title); }}
+        onViewJourney={() => openFocusBook('Journey')} onViewStats={() => onPage('Stats')} onCreateBook={() => setComposerOpen(true)}
+        onDailyCheckIn={() => setWritingHomeOpen((open) => !open)} dailyCheckInOpen={writingHomeOpen} checkedInToday={Boolean(focusProject?.plan.dailyCheckIns?.[localActivityKey()])} />
     </BookezInstrumentReveal>
+    {writingHomeOpen && focusProject && focusSnapshot && <View style={libraryEditorialS.writingRhythm}>
+      <Pressable onPress={() => setWritingHomeOpen((open) => !open)} style={libraryEditorialS.rhythmToggle} accessibilityRole="button" accessibilityState={{ expanded: writingHomeOpen }}>
+        <View style={{ flex: 1, minWidth: 0 }}><Text style={libraryEditorialS.rhythmTitle}>Writing goals & daily check-in</Text><Text style={libraryEditorialS.rhythmHint}>Keep a gentle rhythm for {focusProject.title}</Text></View><Text style={libraryEditorialS.rhythmArrow}>{writingHomeOpen ? '−' : '+'}</Text>
+      </Pressable>
+      {writingHomeOpen && <View style={libraryEditorialS.rhythmContent}><LibraryWritingHome embedded project={focusProject} projects={activeBooks} snapshot={focusSnapshot} onUpdateProject={updateLibraryProject} onOpenWritingBook={onOpenWritingBook} onContinueStep={() => { if (onContinueProgress) onContinueProgress(focusSnapshot.progress.nextStep); else onOpenWritingBook(focusProject.title); }} onPage={(nextPage) => { onSelectProject(focusProject.title); onPage(nextPage); }} /></View>}
+    </View>}
     <View style={[s.sectionBar, libraryEditorialS.sectionBar]}><Text style={[s.sectionTitle, libraryEditorialS.sectionTitle]}>Your projects</Text><Pressable onPress={() => setComposerOpen(true)} style={[s.newProjectButton, libraryEditorialS.newProjectButton]}><Text style={[s.newProjectText, libraryEditorialS.newProjectText]}>+ NEW</Text></Pressable></View>
     <Text style={[s.librarySectionEyebrow, libraryEditorialS.librarySectionEyebrow]}>YOUR BOOKS</Text>
-    {projects.filter((project) => !project.archived).map(renderProjectCard)}
-    {projects.some((project) => project.archived) && <><Text style={[s.librarySectionEyebrow, libraryEditorialS.librarySectionEyebrow]}>ARCHIVED</Text>{projects.filter((project) => project.archived).map(renderProjectCard)}</>}
+    {activeBooks.map(renderProjectCard)}
+    {visibleBooks.some((project) => project.archived) && <><Text style={[s.librarySectionEyebrow, libraryEditorialS.librarySectionEyebrow]}>ARCHIVED</Text>{visibleBooks.filter((project) => project.archived).map(renderProjectCard)}</>}
     <Pressable onPress={() => setComposerOpen(true)} style={[s.addProjectRow, libraryEditorialS.addProjectRow]}><View style={[s.addProjectPlus, libraryEditorialS.addProjectPlus]}><Text style={[s.addProjectPlusText, libraryEditorialS.addProjectPlusText]}>+</Text></View><View><Text style={[s.addProjectTitle, libraryEditorialS.addProjectTitle]}>Start another project</Text><Text style={[s.addProjectSub, libraryEditorialS.addProjectSub]}>Choose a format and make it yours</Text></View></Pressable>
 
     <Modal animationType="fade" visible={focusPickerOpen} transparent onRequestClose={() => setFocusPickerOpen(false)}>
@@ -2573,6 +2597,7 @@ type JourneyMilestone = { id: string; title: string; detail: string; icon: strin
 type JourneySnapshot = {
   blueprint: PlanBlueprint;
   progress: BookProgressState;
+  partWordTargets: Record<string, number>;
   parts: WritePart[];
   draftedParts: number;
   requiredPartCount: number;
@@ -2896,7 +2921,9 @@ function getJourneySnapshot(project: Project): JourneySnapshot {
   const blueprint = planBlueprints[project.type] ?? planBlueprints['Custom Project'];
   const plan = project.plan ?? defaultPlanFor(project.type);
   const parts = getWriteParts({ ...project, plan }, blueprint);
-  const progress = BookProgressEngine(getBookProgressSource({ ...project, plan }, blueprint));
+  const source = getBookProgressSource({ ...project, plan }, blueprint);
+  const progress = BookProgressEngine(source);
+  const partWordTargets = Object.fromEntries(source.parts.map((part) => [part.id, part.targetWords ?? 500]));
   const unitCount = Math.max(Number.parseInt(project.unitGoal, 10) || 0, 0);
   const requiredParts = parts.filter((part) => part.required);
   const draftedPartKeys = progress.parts.filter((part) => part.wordCount > 0).map((part) => part.id);
@@ -2924,7 +2951,7 @@ function getJourneySnapshot(project: Project): JourneySnapshot {
   const completionEstimate = getJourneyCompletionEstimate(plan, wordCount, targetWords);
 
   return {
-    blueprint, progress, parts, draftedParts, draftedPartKeys, requiredPartCount: requiredParts.length, requiredDraftedPartKeys, lastRequiredPartIndex, writeIndex: plan.writeIndex, completedUnits, unitCount, selectedStructureCount, wordCount, targetWords,
+    blueprint, progress, partWordTargets, parts, draftedParts, draftedPartKeys, requiredPartCount: requiredParts.length, requiredDraftedPartKeys, lastRequiredPartIndex, writeIndex: plan.writeIndex, completedUnits, unitCount, selectedStructureCount, wordCount, targetWords,
     ideaReady, foundationReady, outlineReady, firstDraftStarted, halfwayReady, draftComplete, manuscriptComplete,
     currentMilestoneIndex, progressPercent, stage, estimateLabel: completionEstimate.label, estimateDetail: completionEstimate.detail, exported: progress.exported, nextPart: parts.find((part) => part.required && (progress.parts.find((progressPart) => progressPart.id === part.key)?.writingPercent ?? 0) < 100) ?? parts[0],
   };
@@ -2984,7 +3011,6 @@ function getJourneyMilestones(snapshot: JourneySnapshot): JourneyMilestone[] {
     id: `chapter-progress-${index + 1}`,
     title: part.title,
     description: `Complete the first draft of ${part.title}.`,
-    estimatedTime: 'About 20 minutes',
     partKey: part.key,
     completed: (snapshot.progress.parts.find((progressPart) => progressPart.id === part.key)?.writingPercent ?? 0) >= 100,
   });
@@ -3020,6 +3046,33 @@ function getJourneyMilestones(snapshot: JourneySnapshot): JourneyMilestone[] {
 
 type JourneyNextStep = { title: string; time: string };
 
+function getJourneyStepTime(snapshot: JourneySnapshot, checkpoint: JourneyMiniCheckpoint, plan: ProjectPlan): JourneyTimeEstimate {
+  if (checkpoint.partKey) {
+    const words = snapshot.progress.parts.find((part) => part.id === checkpoint.partKey)?.wordCount ?? 0;
+    const session = getWritingSessionConfig(plan.writingSessionMode ?? 'gentle', plan.customWritingMinutes ?? '20', plan.customBreakMinutes ?? '5');
+    return estimateJourneyDraft({
+      remainingWords: Math.max(0, (snapshot.partWordTargets[checkpoint.partKey] ?? 500) - words),
+      activity: Object.entries(plan.activity ?? {}).sort(([a], [b]) => a.localeCompare(b)).map(([, day]) => day),
+      sessionMinutes: session.countsUp ? suggestedSessionMinutes(plan.writingFrequency, plan.paceFlexibility) : session.writingMinutes,
+      sessionWords: Number.parseInt((plan.customPaceWords ?? '').replace(/,/g, ''), 10) || 0,
+    });
+  }
+  if (checkpoint.id === 'review') {
+    const minutes = Math.max(10, Math.ceil(Math.max(snapshot.wordCount, snapshot.targetWords) / 150));
+    return journeyTimeRange(minutes, Math.ceil(minutes * 1.5), 'A final read-through at about 150 words per minute, with time for light edits. Larger revisions may take longer.');
+  }
+  const ranges: Record<string, [number, number]> = {
+    idea: [5, 10], 'project-shape': [5, 10], scope: [3, 5], parts: [5, 10],
+    throughline: [5, 10], 'part-ideas': [10, 15], 'opening-direction': [5, 10], 'full-draft': [5, 10],
+  };
+  const [min, max] = ranges[checkpoint.id] ?? [5, 10];
+  return journeyTimeRange(min, max, 'A gentle estimate of active time for this step. Take longer whenever the book needs it.');
+}
+
+function getJourneyMilestoneTime(snapshot: JourneySnapshot, milestone: JourneyMilestone, plan: ProjectPlan): JourneyTimeEstimate {
+  return combineJourneyEstimates(milestone.miniCheckpoints.filter((checkpoint) => !checkpoint.completed).map((checkpoint) => getJourneyStepTime(snapshot, checkpoint, plan)));
+}
+
 function getJourneyNextStep(snapshot: JourneySnapshot, milestone: JourneyMilestone): JourneyNextStep {
   if (milestone.id === 'book-started') return { title: 'Write a one-sentence promise for your book', time: 'About 5 minutes' };
   if (milestone.id === 'book-foundation') return { title: 'Choose the pieces your book needs', time: 'About 10 minutes' };
@@ -3032,49 +3085,32 @@ function getJourneyNextStep(snapshot: JourneySnapshot, milestone: JourneyMilesto
 }
 
 function getJourneyCheckpointProgress(snapshot: JourneySnapshot, milestone: JourneyMilestone, plan: ProjectPlan) {
-  const finishEstimate = getJourneyCompletionEstimate(plan, snapshot.wordCount, snapshot.targetWords);
   if (milestone.status === 'complete') return { progress: 100, estimateLabel: 'Complete', estimateDetail: 'This checkpoint is part of your finished path.' };
-  if (milestone.id === 'book-started') return { progress: 0, estimateLabel: 'About 5 minutes', estimateDetail: 'Capture the book’s promise to begin this path.' };
-  if (milestone.id === 'book-foundation') return { progress: 0, estimateLabel: 'About 10 minutes', estimateDetail: 'Choose the scope and writing pieces that will carry the book.' };
-  if (milestone.id === 'outline') return { progress: snapshot.foundationReady ? 50 : 0, estimateLabel: 'About 10 minutes', estimateDetail: 'A throughline, note, or part idea will make the outline ready.' };
-  if (milestone.id === 'first-draft') return { progress: Math.min(99, snapshot.progress.writingProgress), estimateLabel: finishEstimate.label, estimateDetail: finishEstimate.detail };
-  if (milestone.id === 'halfway-point') return { progress: Math.min(99, Math.round(snapshot.progress.writingProgress * 2)), estimateLabel: finishEstimate.label, estimateDetail: finishEstimate.detail };
-  if (milestone.id === 'draft-complete') return { progress: Math.min(99, snapshot.progress.writingProgress), estimateLabel: finishEstimate.label, estimateDetail: finishEstimate.detail };
-  if (milestone.id === 'manuscript-complete') return { progress: snapshot.progress.revisionProgress, estimateLabel: snapshot.draftComplete ? 'Ready for review' : finishEstimate.label, estimateDetail: snapshot.draftComplete ? 'Resolve any open notes, then complete a final read-through.' : finishEstimate.detail };
-  return { progress: snapshot.manuscriptComplete ? 50 : 0, estimateLabel: snapshot.manuscriptComplete ? 'About 5 minutes' : 'After manuscript completion', estimateDetail: snapshot.manuscriptComplete ? 'Open Book Studio when you are ready to shape the finished book.' : 'This checkpoint unlocks when the manuscript is complete.' };
+  const estimate = getJourneyMilestoneTime(snapshot, milestone, plan);
+  const progress = milestone.id === 'outline' ? snapshot.foundationReady ? 50 : 0
+    : milestone.id === 'halfway-point' ? Math.min(99, Math.round(snapshot.progress.writingProgress * 2))
+      : milestone.id === 'first-draft' || milestone.id === 'draft-complete' ? Math.min(99, snapshot.progress.writingProgress)
+        : milestone.id === 'manuscript-complete' ? snapshot.progress.revisionProgress : 0;
+  return { progress, estimateLabel: estimate.label, estimateDetail: estimate.detail };
 }
 
 function getJourneyMiniCheckpointProgress(snapshot: JourneySnapshot, milestone: JourneyMilestone, checkpoint: JourneyMiniCheckpoint, plan: ProjectPlan) {
   if (checkpoint.completed) return { progress: 100, estimateLabel: 'Complete', estimateDetail: `This step is complete within “${milestone.title}”.` };
-  const finishEstimate = getJourneyCompletionEstimate(plan, snapshot.wordCount, snapshot.targetWords);
-  if (checkpoint.partKey) {
-    const partProgress = snapshot.progress.parts.find((part) => part.id === checkpoint.partKey)?.writingPercent ?? 0;
-    return { progress: partProgress, estimateLabel: partProgress >= 100 ? 'Complete' : checkpoint.estimatedTime ?? finishEstimate.label, estimateDetail: partProgress >= 100 ? 'This chapter has reached its draft target.' : `Continue drafting ${checkpoint.title}.` };
-  }
-  const draftedPercent = snapshot.requiredPartCount ? Math.round((snapshot.draftedParts / snapshot.requiredPartCount) * 100) : 0;
-  const progressForDraft = (threshold = 100) => Math.min(99, Math.round((draftedPercent / threshold) * 100));
-  if (checkpoint.id.startsWith('chapter-progress-')) {
-    const checkpointNumber = Number.parseInt(checkpoint.id.split('-').pop() ?? '1', 10) || 1;
-    const targetParts = milestone.id === 'halfway-point' ? Math.max(1, Math.ceil(snapshot.requiredPartCount / 2)) : Math.max(1, snapshot.requiredPartCount);
-    const checkpointCount = Math.max(1, targetParts);
-    const threshold = Math.max(1, Math.ceil((checkpointNumber * targetParts) / checkpointCount));
-    const progress = snapshot.draftedParts >= threshold ? 100 : Math.min(99, Math.round((snapshot.draftedParts / threshold) * 100));
-    return { progress, estimateLabel: progress === 100 ? 'Complete' : finishEstimate.label, estimateDetail: progress === 100 ? 'This drafting step is complete.' : 'Draft ' + threshold + ' of ' + Math.max(1, snapshot.requiredPartCount) + ' required parts to reach this dot.' };
-  }
-  if (checkpoint.id === 'idea') return { progress: 0, estimateLabel: 'About 5 minutes', estimateDetail: 'Write one sentence that names the promise, problem, or feeling this project will carry.' };
-  if (checkpoint.id === 'project-shape') return { progress: snapshot.foundationReady ? 100 : snapshot.ideaReady ? 50 : 0, estimateLabel: 'About 10 minutes', estimateDetail: 'Choose the project’s scale and the pieces that will give it a clear shape.' };
-  if (checkpoint.id === 'scope') return { progress: snapshot.targetWords > 0 ? 100 : 0, estimateLabel: 'About 5 minutes', estimateDetail: 'Set a target size in Plan so the journey can estimate what remains.' };
-  if (checkpoint.id === 'parts') return { progress: snapshot.selectedStructureCount > 0 && snapshot.unitCount > 0 ? 100 : 0, estimateLabel: 'About 10 minutes', estimateDetail: 'Choose the structure pieces and writing units you want to carry this project.' };
-  if (checkpoint.id === 'throughline') return { progress: snapshot.outlineReady ? 100 : snapshot.foundationReady ? 50 : 0, estimateLabel: 'About 5 minutes', estimateDetail: 'Add a throughline, central question, or guiding idea in Plan.' };
-  if (checkpoint.id === 'part-ideas') return { progress: snapshot.outlineReady ? 100 : snapshot.firstDraftStarted ? 50 : 0, estimateLabel: 'About 5 minutes', estimateDetail: 'Give at least one writing unit a note about what it needs to do.' };
-  if (checkpoint.id === 'opening' || checkpoint.id === 'opening-direction') return { progress: snapshot.firstDraftStarted ? 100 : 0, estimateLabel: 'About 15 minutes', estimateDetail: snapshot.nextPart ? `Open ${snapshot.nextPart.title} and give the project its first real words.` : 'Open the manuscript and write the opening section.' };
-  if (checkpoint.id === 'quarter') return { progress: progressForDraft(25), estimateLabel: finishEstimate.label, estimateDetail: `Draft about a quarter of the planned writing units. ${finishEstimate.detail}` };
-  if (checkpoint.id === 'middle') return { progress: progressForDraft(50), estimateLabel: finishEstimate.label, estimateDetail: `Keep drafting until about half of the planned writing units have words. ${finishEstimate.detail}` };
-  if (checkpoint.id === 'momentum') return { progress: progressForDraft(60), estimateLabel: finishEstimate.label, estimateDetail: 'Build a little more momentum by reaching roughly 60% drafted.' };
-  if (checkpoint.id === 'all-parts' || checkpoint.id === 'last-page') return { progress: progressForDraft(), estimateLabel: finishEstimate.label, estimateDetail: `${snapshot.draftedParts} of ${snapshot.requiredPartCount} required parts have words.` };
-  if (checkpoint.id === 'full-draft') return { progress: snapshot.draftComplete ? 100 : progressForDraft(), estimateLabel: finishEstimate.label, estimateDetail: 'Complete every required writing part so the full draft is assembled.' };
-  if (checkpoint.id === 'review') return { progress: snapshot.progress.revisionProgress, estimateLabel: snapshot.draftComplete ? 'Ready for review' : finishEstimate.label, estimateDetail: snapshot.draftComplete ? 'Read through the assembled draft and make one final pass.' : 'This step opens when every required part has a draft.' };
-  return { progress: 0, estimateLabel: 'About 5 minutes', estimateDetail: `Continue the steps inside “${milestone.title}”.` };
+  const time = getJourneyStepTime(snapshot, checkpoint, plan);
+  const partProgress = checkpoint.partKey ? snapshot.progress.parts.find((part) => part.id === checkpoint.partKey)?.writingPercent ?? 0 : undefined;
+  const progressById: Record<string, number> = {
+    idea: 0,
+    'project-shape': snapshot.foundationReady ? 100 : snapshot.ideaReady ? 50 : 0,
+    scope: snapshot.targetWords > 0 ? 100 : 0,
+    parts: snapshot.selectedStructureCount > 0 && snapshot.unitCount > 0 ? 100 : 0,
+    throughline: snapshot.outlineReady ? 100 : snapshot.foundationReady ? 50 : 0,
+    'part-ideas': snapshot.outlineReady ? 100 : snapshot.firstDraftStarted ? 50 : 0,
+    'opening-direction': snapshot.firstDraftStarted ? 100 : 0,
+    'full-draft': snapshot.draftComplete ? 100 : Math.min(99, Math.round(snapshot.draftedParts / Math.max(1, snapshot.requiredPartCount) * 100)),
+    review: snapshot.progress.revisionProgress,
+  };
+  const progress = partProgress ?? progressById[checkpoint.id] ?? 0;
+  return { progress, estimateLabel: progress >= 100 ? 'Complete' : time.label, estimateDetail: time.detail };
 }
 
 type JourneyCelebrationKind = 'mini' | 'planning' | 'chapter' | 'section' | 'halfway' | 'draft' | 'final';
@@ -5871,7 +5907,8 @@ function Journey({ projects, activeProject, onSelectProject, onUpdateProject, on
   const pulse = useRef(new Animated.Value(0)).current;
   const detailAnimation = useRef(new Animated.Value(0)).current;
   const { width } = useWindowDimensions();
-  const journeyMapWidth = Math.max(240, width - 40);
+  const [containerWidth, setContainerWidth] = useState(0);
+  const journeyMapWidth = Math.max(240, Math.min(720, width - 40, containerWidth || 720));
   const currentMilestoneIndex = milestones.findIndex((milestone) => milestone.status === 'current');
   const currentMilestone = milestones[currentMilestoneIndex >= 0 ? currentMilestoneIndex : milestones.length - 1];
   const selectedMilestone = milestones.find((milestone) => milestone.id === selectedMilestoneId) ?? currentMilestone;
@@ -5889,10 +5926,12 @@ function Journey({ projects, activeProject, onSelectProject, onUpdateProject, on
   const popupFreeLeft = selectedJourneyPoint ? selectedJourneyPoint.x - 38 : 0;
   const popupOnRight = popupFreeRight >= popupWidth || popupFreeRight >= popupFreeLeft;
   const popupLeft = selectedJourneyPoint ? popupOnRight ? Math.min(journeyMapWidth - popupWidth - 8, selectedJourneyPoint.x + 38) : Math.max(8, selectedJourneyPoint.x - popupWidth - 38) : 8;
-  const popupEstimatedHeight = 236;
+  const popupEstimatedHeight = 320;
   const popupTop = selectedJourneyPoint ? selectedJourneyPoint.y < popupEstimatedHeight * 0.72 ? selectedJourneyPoint.y + 34 : Math.max(10, Math.min(journeyLayout.height - popupEstimatedHeight - 10, selectedJourneyPoint.y - popupEstimatedHeight * 0.68)) : 10;
-  const nextStep = { title: snapshot.progress.nextStep.title, time: snapshot.progress.nextStep.description };
-  const nextAction = snapshot.progress.nextStep.buttonLabel;
+  const nextPartKey = snapshot.progress.nextStep.chapterId ?? snapshot.progress.nextStep.sectionId;
+  const nextCheckpoint = (nextPartKey ? milestones.flatMap((milestone) => milestone.miniCheckpoints).find((checkpoint) => checkpoint.partKey === nextPartKey) : undefined)
+    ?? currentMilestone.miniCheckpoints.find((checkpoint) => !checkpoint.completed);
+  const nextStep = { title: snapshot.progress.nextStep.title, time: nextCheckpoint ? `About ${getJourneyStepTime(snapshot, nextCheckpoint, currentPlan).label} · at your pace` : snapshot.progress.nextStep.description };
 
   const openMilestoneDetail = (milestoneId: string) => { if (detailOpen && selectedMilestoneId === milestoneId && !selectedCheckpointId) { closeDetail(); return; } setSelectedMilestoneId(milestoneId); setSelectedCheckpointId(null); setDetailOpen(true); };
   const openCheckpointDetail = (milestoneId: string, checkpointId: string) => { if (detailOpen && selectedMilestoneId === milestoneId && selectedCheckpointId === checkpointId) { closeDetail(); return; } setSelectedMilestoneId(milestoneId); setSelectedCheckpointId(checkpointId); setDetailOpen(true); };
@@ -5955,7 +5994,7 @@ function Journey({ projects, activeProject, onSelectProject, onUpdateProject, on
   })();
   const buildCelebration = (key: string, kind: JourneyCelebrationKind, title: string, detail: string, icon: string, actionLabel?: string): JourneyCelebration => ({
     key, kind, title, detail, icon, actionLabel,
-    stats: kind === 'mini' ? [`${formatCount(snapshot.wordCount)} words total`] : kind === 'planning' ? [`${snapshot.completedUnits} ${snapshot.blueprint.unitLabelPlural.toLowerCase()} outlined`, `${snapshot.selectedStructureCount} planning tasks`, `${snapshot.progressPercent}% complete`] : [`${formatCount(snapshot.wordCount)} words`, `${snapshot.completedUnits} ${snapshot.blueprint.unitLabelPlural.toLowerCase()}`, `${snapshot.progressPercent}% complete`, `${totalWritingMinutes} min writing`].concat(kind === 'final' ? [`${longestWritingStreak} day longest streak`, new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })] : []),
+    stats: kind === 'mini' ? [`${formatCount(snapshot.wordCount)} words total`] : kind === 'planning' ? [`${currentPlan.unitIdeas.filter((idea) => idea.trim()).length} ${snapshot.blueprint.unitLabelPlural.toLowerCase()} outlined`, `${snapshot.selectedStructureCount} planning tasks`, `${snapshot.progressPercent}% complete`] : [`${formatCount(snapshot.wordCount)} words`, `${snapshot.completedUnits} ${snapshot.blueprint.unitLabelPlural.toLowerCase()}`, `${snapshot.progressPercent}% complete`, `${totalWritingMinutes} min writing`].concat(kind === 'final' ? [`${longestWritingStreak} day longest streak`, new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })] : []),
   });
   const rememberCelebration = (key: string) => {
     if (currentPlan.journeyCelebrations?.[key] || celebrationWrites.current.has(key)) return;
@@ -6001,14 +6040,14 @@ function Journey({ projects, activeProject, onSelectProject, onUpdateProject, on
       if (snapshot.manuscriptComplete) showPending(buildCelebration('final-manuscript', 'final', 'Your manuscript is complete', 'You reached 100% of the required writing path.', '✦', 'Open Book Studio'));
       else if (snapshot.draftComplete) showPending(buildCelebration('first-draft-complete', 'draft', 'First draft complete', 'You wrote an entire manuscript. The revision stage is ready.', '✓'));
       else if (snapshot.halfwayReady) showPending(buildCelebration('halfway', 'halfway', 'Halfway there', 'Your manuscript is taking shape.', '½'));
-      else if (snapshot.outlineReady) showPending(buildCelebration('planning-complete', 'planning', 'Your plan is complete', 'Your book is ready to write.', '⌁'));
+      else if (snapshot.outlineReady) showPending(buildCelebration('planning-complete', 'planning', 'Your outline is ready', 'There is enough direction to begin drafting.', '⌁'));
       return;
     }
 
     if (snapshot.manuscriptComplete && !previous.manuscriptComplete) showPending(buildCelebration('final-manuscript', 'final', 'Your manuscript is complete', 'You reached 100% of the required writing path.', '✦', 'Open Book Studio'));
     else if (snapshot.draftComplete && !previous.draftComplete) showPending(buildCelebration('first-draft-complete', 'draft', 'First draft complete', 'You wrote an entire manuscript. The revision stage is ready.', '✓'));
     else if (snapshot.halfwayReady && !previous.halfwayReady) showPending(buildCelebration('halfway', 'halfway', 'Halfway there', 'Your manuscript is taking shape.', '½'));
-    else if (snapshot.outlineReady && !previous.outlineReady) showPending(buildCelebration('planning-complete', 'planning', 'Your plan is complete', 'Your book is ready to write.', '⌁'));
+    else if (snapshot.outlineReady && !previous.outlineReady) showPending(buildCelebration('planning-complete', 'planning', 'Your outline is ready', 'There is enough direction to begin drafting.', '⌁'));
     else if (newlyCompletedPartKey) {
       const completedPart = snapshot.parts.find((part) => part.key === newlyCompletedPartKey);
       if (completedPart) showPending(buildCelebration(snapshot.requiredDraftedPartKeys.length === 1 ? 'first-chapter' : `chapter:${completedPart.key}`, 'chapter', `${completedPart.title} complete`, 'The next writing step is ready.', '✓'));
@@ -6027,7 +6066,7 @@ function Journey({ projects, activeProject, onSelectProject, onUpdateProject, on
     setSelectorOpen(false);
   };
 
-  return <>
+  return <View onLayout={(event) => setContainerWidth(event.nativeEvent.layout.width)} style={{ width: '100%', maxWidth: 720, alignSelf: 'center' }}>
     <BookezInkReveal triggerKey={`Journey-${currentProject.title}`} style={s.journeyHeader}>
       <Pressable onPress={onBack} style={s.journeyBackButton} accessibilityLabel="Back to book library"><Text style={s.journeyBackIcon}>‹</Text></Pressable>
       <View style={s.journeyHeaderCopy}><Text style={s.journeyOverline}>BOOK PROGRESS</Text><Text style={s.journeyHeaderTitle}>Journey</Text><Text style={journeyEditorialS.journeyHeaderSub}>Track your progress. Stay inspired.</Text></View>
@@ -6048,7 +6087,7 @@ function Journey({ projects, activeProject, onSelectProject, onUpdateProject, on
       <View style={s.journeyStatsRow}><View style={s.journeyStat}><BookezAnimatedNumber value={snapshot.wordCount} triggerKey={journeySignature} formatter={(value) => formatCount(Math.round(value))} reduceMotion={reduceMotion} style={s.journeyStatValue} /><Text style={s.journeyStatLabel}>WORDS WRITTEN</Text><Text style={s.journeyStatSub}>{snapshot.targetWords ? `of ${formatCount(snapshot.targetWords)} est. target` : 'Target not set'}</Text></View><View style={s.journeyStatDivider} /><View style={s.journeyStat}><Text style={s.journeyStatValue}>{snapshot.completedUnits} of {snapshot.unitCount}</Text><Text style={s.journeyStatLabel}>{snapshot.blueprint.unitLabelPlural.toUpperCase()}</Text><Text style={s.journeyStatSub}>with a draft</Text></View></View>
       <View style={s.journeyEstimateCard}><View style={s.journeyEstimateIcon}><Text style={s.journeyEstimateIconText}>◷</Text></View><View style={s.journeyEstimateCopy}><Text style={s.journeyEstimateLabel}>ESTIMATED FINISH</Text><Text style={s.journeyEstimateValue}>{snapshot.estimateLabel}</Text><Text style={s.journeyEstimateDetail}>{snapshot.estimateDetail}</Text></View></View>
       <View style={s.journeyNextRow}><View style={s.journeyNextDot}><Text style={s.journeyNextDotText}>{currentMilestone.icon}</Text></View><View style={s.journeyNextCopy}><Text style={s.journeyNextEyebrow}>NEXT STEP</Text><Text style={s.journeyNextTitle}>{nextStep.title}</Text><Text style={s.journeyNextMeta}>{nextStep.time}</Text></View><Text style={s.journeyNextArrow}>→</Text></View>
-      <Pressable onPress={() => onContinueProgress ? onContinueProgress(snapshot.progress.nextStep) : snapshot.progress.nextStep.route === 'BookStudio' ? onOpenBookStudio(currentProject.title, snapshot.progress.nextStep.routeSection ?? 'read') : onOpenWritingBook(currentProject.title)} style={s.journeyContinueButton}><Text style={s.journeyContinueText}>{snapshot.progress.nextStep.buttonLabel}</Text><Text style={s.journeyContinueAction}>{nextAction}</Text><Text style={s.journeyContinueArrow}>→</Text></Pressable>
+      <Pressable onPress={() => onContinueProgress ? onContinueProgress(snapshot.progress.nextStep) : snapshot.progress.nextStep.route === 'BookStudio' ? onOpenBookStudio(currentProject.title, snapshot.progress.nextStep.routeSection ?? 'read') : onOpenWritingBook(currentProject.title)} style={s.journeyContinueButton} accessibilityRole="button"><Text style={[s.journeyContinueText, { flex: 1 }]}>{snapshot.progress.nextStep.buttonLabel}</Text><Text style={s.journeyContinueArrow}>→</Text></Pressable>
     </BookezInstrumentReveal>
 
     {todayPlan && <View style={[s.journeyTodayCard, todayPlan.tone === 'paused' && s.journeyTodayCardPaused, todayPlan.tone === 'foundation' && s.journeyTodayCardFoundation]}>
@@ -6060,7 +6099,7 @@ function Journey({ projects, activeProject, onSelectProject, onUpdateProject, on
     {latestMilestone && <View style={[s.journeyMilestoneReached, latestMilestone.id === 'manuscript-complete' && journeyPopupS.journeyMilestoneReachedCelebration]}><View style={[s.journeyMilestoneReachedIcon, latestMilestone.id === 'manuscript-complete' && journeyPopupS.journeyMilestoneReachedCelebrationIcon]}><Text style={s.journeyMilestoneReachedIconText}>{latestMilestone.icon}</Text></View><View style={s.journeyMilestoneReachedCopy}><Text style={[s.journeyMilestoneReachedEyebrow, latestMilestone.id === 'manuscript-complete' && journeyPopupS.journeyMilestoneReachedCelebrationEyebrow]}>{latestMilestone.id === 'manuscript-complete' ? 'BOOK COMPLETE' : 'MILESTONE REACHED'}</Text><Text style={s.journeyMilestoneReachedTitle}>{latestMilestone.id === 'manuscript-complete' ? 'Your manuscript is complete' : latestMilestone.title} <Text style={s.journeyMilestoneReachedCheck}>✓</Text></Text></View></View>}
     {celebration && <JourneyCelebration celebration={celebration} reduceMotion={reduceMotion} onDismiss={() => setCelebration(null)} onPrimary={celebration.kind === 'final' ? () => { setCelebration(null); onOpenBookStudio(currentProject.title, 'read'); } : undefined} />}
 
-    <View style={s.journeyMapHeading}><View><Text style={s.journeyMapEyebrow}>YOUR PATH</Text><Text style={s.journeyMapTitle}>Small steps lead to big moments.</Text></View><Text style={s.journeyMapHint}>Tap any dot</Text></View>
+    <View style={s.journeyMapHeading}><View style={{ flex: 1, minWidth: 0 }}><Text style={s.journeyMapEyebrow}>YOUR PATH</Text><Text style={s.journeyMapTitle}>Small steps lead to big moments.</Text><Text style={journeyCardGuideS.copy}>Time badges show approximate active time. One step, or a few sessions — go at your pace.</Text></View><Text style={s.journeyMapHint}>Tap a step</Text></View>
     <View onLayout={(event) => setJourneyMapOffsetY(event.nativeEvent.layout.y)} style={[s.journeyMap, { height: journeyLayout.height, width: journeyMapWidth }]}>
       <JourneyEnvironment width={journeyMapWidth} height={journeyLayout.height} progress={snapshot.progressPercent} reduceMotion={reduceMotion} scrollY={scrollY} mapOffsetY={journeyMapOffsetY} celebrating={Boolean(celebration)} />
       {detailOpen && <Pressable onPress={closeDetail} style={journeyEnhancementS.mapDismiss} accessibilityLabel="Dismiss checkpoint details" />}
@@ -6078,16 +6117,13 @@ function Journey({ projects, activeProject, onSelectProject, onUpdateProject, on
         const isCurrent = milestone.status === 'current' && firstIncomplete === index;
         const accessibilityStatus = checkpointProgress.progress === 100 ? 'complete' : milestone.status === 'locked' ? 'locked' : isCurrent ? 'current' : 'available';
         const labelOnRight = point.x <= journeyMapWidth / 2;
-        const labelWidth = Math.min(126, Math.max(84, journeyMapWidth * 0.31));
+        const labelWidth = Math.min(126, labelOnRight ? journeyMapWidth - point.x - 30 : point.x - 30);
         const labelLeft = labelOnRight ? Math.min(journeyMapWidth - labelWidth - 7, point.x + 23) : Math.max(7, point.x - labelWidth - 23);
-        const showLabel = milestone.miniCheckpoints.length <= 6 || isCurrent || selectedCheckpointId === checkpoint.id || index === 0 || index === milestone.miniCheckpoints.length - 1;
         return <Fragment key={`${milestoneId}:${checkpoint.id}`}>
           <Pressable onPress={() => openCheckpointDetail(milestoneId, checkpoint.id)} style={[s.journeyMiniHit, journeyEnhancementS.miniHit, { left: point.x - 24, top: point.y - 24 }]} accessibilityRole="button" accessibilityLabel={checkpoint.title + ', ' + checkpointProgress.progress + ' percent complete, ' + accessibilityStatus + ', double tap for details'}>
             <Animated.View style={[s.journeyMiniDotPath, checkpointProgress.progress === 100 && s.journeyMiniDotPathComplete, isCurrent && s.journeyMiniDotPathCurrent, milestone.status === 'locked' && s.journeyMiniDotPathLocked, isCurrent && journeyEnhancementS.miniDotRecommended, selectedCheckpointId === checkpoint.id && journeyEnhancementS.miniDotSelected, isCurrent && !reduceMotion && { transform: [{ scale: pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.1] }) }] }]}>{milestone.status === 'locked' ? <JourneyLockIcon /> : <Text style={[s.journeyMiniDotPathText, checkpointProgress.progress === 100 && s.journeyMiniDotPathTextComplete]}>{checkpointProgress.progress === 100 ? '✓' : String(index + 1)}</Text>}</Animated.View>
           </Pressable>
-          {showLabel && <Pressable onPress={() => openCheckpointDetail(milestoneId, checkpoint.id)} style={[journeyEnhancementS.miniLabel, { top: point.y - 12, width: labelWidth, left: labelLeft }]} accessibilityRole="button" accessibilityLabel={`Open ${checkpoint.title} details`}>
-            <Text numberOfLines={1} style={journeyEnhancementS.miniLabelText}>{checkpoint.title}</Text>
-          </Pressable>}
+          <JourneyStepCard compact title={checkpoint.title} milestoneId={milestoneId} estimate={getJourneyStepTime(snapshot, checkpoint, currentPlan).label} progress={checkpointProgress.progress} current={isCurrent} locked={milestone.status === 'locked'} selected={detailOpen && selectedMilestoneId === milestoneId && selectedCheckpointId === checkpoint.id} index={index} pulse={pulse} reduceMotion={reduceMotion} style={{ top: point.y - 24, width: labelWidth, left: labelLeft }} onPress={() => openCheckpointDetail(milestoneId, checkpoint.id)} />
         </Fragment>;
       })}
       {milestones.map((milestone, index) => {
@@ -6096,25 +6132,21 @@ function Journey({ projects, activeProject, onSelectProject, onUpdateProject, on
         const progress = milestoneProgress[index];
         const completedChildren = milestone.miniCheckpoints.filter((checkpoint) => getJourneyMiniCheckpointProgress(snapshot, milestone, checkpoint, currentPlan).progress === 100).length;
         const stateLabel = milestone.status === 'complete' ? 'COMPLETE' : milestone.status === 'current' ? 'CURRENT' : milestone.status === 'locked' ? 'LOCKED' : 'UP NEXT';
-        const labelWidth = Math.min(156, Math.max(112, journeyMapWidth * 0.39));
         const freeRight = journeyMapWidth - point.x - 40;
         const freeLeft = point.x - 40;
-        const labelOnRight = freeRight >= labelWidth || freeRight >= freeLeft;
+        const labelOnRight = freeRight >= freeLeft;
+        const labelWidth = Math.min(156, Math.max(freeRight, freeLeft) - 8);
         const labelLeft = labelOnRight ? Math.min(journeyMapWidth - labelWidth - 8, point.x + 40) : Math.max(8, point.x - labelWidth - 40);
         return <Fragment key={milestone.id}>
           <Pressable onPress={() => openMilestoneDetail(milestone.id)} style={[s.journeyMilestoneHit, journeyEnhancementS.majorHit, { left: point.x - 48, top: point.y - 48 }]} accessibilityRole="button" accessibilityLabel={milestone.title + ', ' + progress + ' percent complete, ' + stateLabel.toLowerCase() + ', double tap for details'}>
             <Animated.View style={[journeyEnhancementS.nodeOrbit, milestone.status === 'complete' && journeyEnhancementS.nodeOrbitComplete, milestone.status === 'current' && journeyEnhancementS.nodeOrbitCurrent, selected && journeyEnhancementS.nodeOrbitSelected, !reduceMotion && milestone.status === 'current' && { transform: [{ scale: pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.08] }) }] }]} />
             <Animated.View style={[s.journeyNodeLarge, journeyEnhancementS.majorMedallion, milestone.status === 'complete' ? s.journeyNodeLargeComplete : milestone.status === 'current' ? s.journeyNodeLargeCurrent : milestone.status === 'locked' ? s.journeyNodeLargeLocked : s.journeyNodeLargeFuture, selected && s.journeyNodeSelected, milestone.id === 'manuscript-complete' && journeyEnhancementS.finalMedallion, milestone.id === 'manuscript-complete' && milestone.status === 'complete' && journeyPopupS.journeyNodeLargeCelebration, !reduceMotion && milestone.status === 'current' && { transform: [{ scale: pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.05] }) }] }]}>{milestone.id === 'manuscript-complete' ? <JourneyManuscriptGlyph locked={milestone.status === 'locked'} complete={milestone.status === 'complete'} /> : milestone.status === 'locked' ? <JourneyLockIcon light /> : <Text style={[s.journeyNodeIcon, journeyEnhancementS.majorIcon]}>{milestone.status === 'complete' ? '✓' : milestone.icon}</Text>}{milestone.id === 'manuscript-complete' && milestone.status === 'complete' && <Text style={journeyPopupS.journeyNodeSparkle}>✦</Text>}</Animated.View>
           </Pressable>
-          <Pressable onPress={() => openMilestoneDetail(milestone.id)} style={[s.journeyMilestoneLabel, journeyEnhancementS.milestoneFlag, { top: point.y - 27, left: labelLeft, width: labelWidth }, selected && s.journeyMilestoneLabelSelected, milestone.id === 'manuscript-complete' && milestone.status === 'complete' && journeyPopupS.journeyMilestoneLabelCelebration]} accessibilityRole="button">
-            <Text numberOfLines={2} style={s.journeyMilestoneLabelTitle}>{milestone.title}</Text>
-            <Text style={[s.journeyMilestoneLabelState, milestone.status === 'complete' ? s.journeyStateComplete : milestone.status === 'current' ? s.journeyStateCurrent : milestone.status === 'locked' ? s.journeyStateLocked : s.journeyStateFuture]}>{stateLabel}</Text>
-            <Text style={s.journeyMilestoneLabelMeta}>{milestone.miniCheckpoints.length ? completedChildren + ' of ' + milestone.miniCheckpoints.length + ' steps' : progress + '% complete'}</Text>
-          </Pressable>
+          <JourneyStepCard title={milestone.title} milestoneId={milestone.id} estimate={getJourneyMilestoneTime(snapshot, milestone, currentPlan).label} progress={progress} current={milestone.status === 'current'} locked={milestone.status === 'locked'} selected={selected} index={index} pulse={pulse} reduceMotion={reduceMotion} meta={milestone.miniCheckpoints.length ? completedChildren + ' of ' + milestone.miniCheckpoints.length + ' steps' : progress + '% complete'} style={{ top: point.y - 36, left: labelLeft, width: labelWidth }} onPress={() => openMilestoneDetail(milestone.id)} />
         </Fragment>;
       })}
 
-    {detailOpen && selectedMilestone && selectedCheckpointProgress && <Animated.View style={[journeyPopupS.journeyInlinePopup, { width: popupWidth, left: popupLeft, top: popupTop, opacity: detailAnimation, transform: [{ scale: detailAnimation.interpolate({ inputRange: [0, 1], outputRange: [0.96, 1] }) }] }, selectedMilestone.id === 'manuscript-complete' && selectedMilestone.status === 'complete' && journeyPopupS.journeyInlinePopupCelebration]}><View style={[popupOnRight ? journeyEnhancementS.popupTailLeft : journeyEnhancementS.popupTailRight, { top: popupTailTop }]} /><Pressable onPress={closeDetail} style={journeyPopupS.journeyInlinePopupClose} accessibilityLabel="Close checkpoint details"><Text style={journeyPopupS.journeyInlinePopupCloseText}>×</Text></Pressable>{selectedMilestone.id === 'manuscript-complete' && selectedMilestone.status === 'complete' && <Text style={journeyPopupS.journeyInlinePopupCelebrationLabel}>✦  BOOK COMPLETE  ✦</Text>}<Text style={journeyPopupS.journeyInlinePopupEyebrow}>{selectedCheckpoint ? 'MINI CHECKPOINT' : 'MAIN CHECKPOINT'} · {detailStatus.toUpperCase()}</Text><Text numberOfLines={3} style={journeyPopupS.journeyInlinePopupTitle}>{selectedCheckpoint?.title ?? selectedMilestone.title}</Text>{selectedCheckpoint && <Text style={journeyPopupS.journeyInlinePopupParent}>Part of {selectedMilestone.title}</Text>}<Text numberOfLines={4} style={journeyPopupS.journeyInlinePopupDescription}>{selectedCheckpoint?.description ?? selectedMilestone.detail}</Text>{detailCompletedAt && <Text style={journeyPopupS.journeyInlinePopupCompletedAt}>Completed {new Date(detailCompletedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</Text>}<View style={journeyPopupS.journeyInlinePopupProgressRow}><Text style={journeyPopupS.journeyInlinePopupProgress}>{selectedCheckpointProgress.progress}%</Text><View style={journeyPopupS.journeyInlinePopupTime}><Text style={journeyPopupS.journeyInlinePopupTimeLabel}>ESTIMATED TIME</Text><Text style={journeyPopupS.journeyInlinePopupTimeValue}>{selectedCheckpoint?.estimatedTime ?? selectedCheckpointProgress.estimateLabel}</Text></View></View><View style={s.journeyCheckpointTrack}><View style={[s.journeyCheckpointFill, { width: String(selectedCheckpointProgress.progress) + '%' }]} /></View>{selectedCheckpointProgress.progress === 100 && <Pressable onPress={replaySelectedCelebration} style={journeyPopupS.journeyInlinePopupReplay}><Text style={journeyPopupS.journeyInlinePopupReplayText}>Replay celebration</Text></Pressable>}<Pressable onPress={openDetailAction} style={journeyPopupS.journeyInlinePopupAction}><Text style={journeyPopupS.journeyInlinePopupActionText}>{detailActionLabel}</Text><Text style={journeyPopupS.journeyInlinePopupActionArrow}>→</Text></Pressable></Animated.View>}
+    {detailOpen && selectedMilestone && selectedCheckpointProgress && <Animated.View style={[journeyPopupS.journeyInlinePopup, { width: popupWidth, left: popupLeft, top: popupTop, opacity: detailAnimation, transform: [{ scale: detailAnimation.interpolate({ inputRange: [0, 1], outputRange: [0.96, 1] }) }] }, selectedMilestone.id === 'manuscript-complete' && selectedMilestone.status === 'complete' && journeyPopupS.journeyInlinePopupCelebration]}><View style={[popupOnRight ? journeyEnhancementS.popupTailLeft : journeyEnhancementS.popupTailRight, { top: popupTailTop }]} /><Pressable onPress={closeDetail} style={journeyPopupS.journeyInlinePopupClose} accessibilityLabel="Close checkpoint details"><Text style={journeyPopupS.journeyInlinePopupCloseText}>×</Text></Pressable>{selectedMilestone.id === 'manuscript-complete' && selectedMilestone.status === 'complete' && <Text style={journeyPopupS.journeyInlinePopupCelebrationLabel}>✦  BOOK COMPLETE  ✦</Text>}<Text style={journeyPopupS.journeyInlinePopupEyebrow}>{selectedCheckpoint ? 'MINI CHECKPOINT' : 'MAIN CHECKPOINT'} · {detailStatus.toUpperCase()}</Text><Text numberOfLines={3} style={journeyPopupS.journeyInlinePopupTitle}>{selectedCheckpoint?.title ?? selectedMilestone.title}</Text>{selectedCheckpoint && <Text style={journeyPopupS.journeyInlinePopupParent}>Part of {selectedMilestone.title}</Text>}<Text numberOfLines={4} style={journeyPopupS.journeyInlinePopupDescription}>{selectedCheckpoint?.description ?? selectedMilestone.detail}</Text>{detailCompletedAt && <Text style={journeyPopupS.journeyInlinePopupCompletedAt}>Completed {new Date(detailCompletedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</Text>}<View style={journeyPopupS.journeyInlinePopupProgressRow}><Text style={journeyPopupS.journeyInlinePopupProgress}>{selectedCheckpointProgress.progress}%</Text><View style={journeyPopupS.journeyInlinePopupTime}><Text style={journeyPopupS.journeyInlinePopupTimeLabel}>ACTIVE TIME · EST.</Text><Text style={journeyPopupS.journeyInlinePopupTimeValue}>{selectedCheckpointProgress.estimateLabel}</Text></View></View><Text style={journeyCardGuideS.popupNote}>{selectedCheckpointProgress.estimateDetail}</Text><View style={s.journeyCheckpointTrack}><View style={[s.journeyCheckpointFill, { width: String(selectedCheckpointProgress.progress) + '%' }]} /></View>{selectedCheckpointProgress.progress === 100 && <Pressable onPress={replaySelectedCelebration} style={journeyPopupS.journeyInlinePopupReplay}><Text style={journeyPopupS.journeyInlinePopupReplayText}>Replay celebration</Text></Pressable>}<Pressable onPress={openDetailAction} style={journeyPopupS.journeyInlinePopupAction}><Text style={journeyPopupS.journeyInlinePopupActionText}>{detailActionLabel}</Text><Text style={journeyPopupS.journeyInlinePopupActionArrow}>→</Text></Pressable></Animated.View>}
 
     </View>
 
@@ -6125,7 +6157,7 @@ function Journey({ projects, activeProject, onSelectProject, onUpdateProject, on
     <Modal animationType="fade" visible={menuOpen} transparent onRequestClose={() => setMenuOpen(false)}>
       <Pressable style={s.journeyMenuShade} onPress={() => setMenuOpen(false)}><View style={s.journeyMenu}><Text style={s.journeySheetEyebrow}>THIS BOOK</Text><Text style={s.journeyMenuTitle}>{currentProject.title}</Text><Pressable onPress={() => { setMenuOpen(false); onOpenBookStudio(currentProject.title, getBookStudioState(currentProject).lastSection); }} style={s.journeyMenuRow}><Text style={s.journeyMenuIcon}>▣</Text><Text style={s.journeyMenuLabel}>Open Book Studio</Text><Text style={s.journeyMenuArrow}>›</Text></Pressable><Pressable onPress={() => { setMenuOpen(false); onPage('Plan'); }} style={s.journeyMenuRow}><Text style={s.journeyMenuIcon}>⌁</Text><Text style={s.journeyMenuLabel}>Open planning</Text><Text style={s.journeyMenuArrow}>›</Text></Pressable><Pressable onPress={() => { setMenuOpen(false); onOpenWritingBook(currentProject.title); }} style={s.journeyMenuRow}><Text style={s.journeyMenuIcon}>✎</Text><Text style={s.journeyMenuLabel}>Open manuscript</Text><Text style={s.journeyMenuArrow}>›</Text></Pressable></View></Pressable>
     </Modal>
-  </>;
+  </View>;
 }
 
 function BookStudio({ projects, project, userId, authorName: profileAuthorName, initialSection, onBack, onPage, onSelectProject, onUpdateProject, onOpenBookStudio, onOpenWritingBook, onOpenEditor }: { projects: Project[]; project?: Project; userId: string | null; authorName?: string; initialSection: StudioSection; onBack: () => void; onPage: (page: Page) => void; onSelectProject: (title: string) => void; onUpdateProject: (title: string, changes: Partial<Project>) => void; onOpenBookStudio: (title: string, section: StudioSection) => void; onOpenWritingBook: (title: string) => void; onOpenEditor: (projectId: string, returnSection?: StudioSection) => void }) {
@@ -8703,6 +8735,12 @@ const editorEntryS = StyleSheet.create({
 });
 
 const libraryEditorialS = StyleSheet.create({
+  writingRhythm: { marginTop: 13, borderRadius: 14, borderWidth: 1, borderColor: bookezColors.border, backgroundColor: bookezColors.surfaceRaised, overflow: 'hidden' },
+  rhythmToggle: { minHeight: 66, paddingHorizontal: 16, paddingVertical: 13, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 14 },
+  rhythmTitle: { color: bookezColors.textPrimary, fontSize: 12, lineHeight: 17, fontWeight: '700' },
+  rhythmHint: { color: bookezColors.textSecondary, fontSize: 10, lineHeight: 15, marginTop: 3 },
+  rhythmArrow: { color: bookezColors.accent, fontSize: 23 },
+  rhythmContent: { paddingHorizontal: 16, paddingBottom: 16 },
   orb: { opacity: 0.08 },
   header: { marginBottom: 8, paddingBottom: 8, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: bookezWithAlpha(bookezColors.secondaryAccent, 0.42) },
   headerTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
@@ -8736,26 +8774,25 @@ const libraryEditorialS = StyleSheet.create({
   newProjectButton: { backgroundColor: bookezColors.surfaceRaised, borderWidth: 1, borderColor: bookezColors.border, borderRadius: 10 },
   newProjectText: { color: bookezColors.accent, letterSpacing: 0.8 },
   librarySectionEyebrow: { color: bookezColors.secondaryAccent, fontSize: 8, letterSpacing: 1.25, fontWeight: '800' },
-  projectCard: { marginBottom: 12, padding: 14, borderRadius: 16, backgroundColor: bookezColors.card, borderWidth: 1, borderLeftWidth: 2, borderColor: bookezColors.cardBorder, borderLeftColor: bookezWithAlpha(bookezColors.secondaryAccent, 0.68), ...bookezShadows.subtle },
   projectMark: { width: 48, height: 48, borderRadius: 16, shadowColor: '#493F35', shadowOpacity: 0.12, shadowRadius: 7, shadowOffset: { width: 0, height: 3 }, elevation: 2 },
   projectTitle: { color: bookezColors.textPrimary, fontFamily: bookezType.sectionTitle.fontFamily, fontSize: 15, lineHeight: 19, fontWeight: '600' },
-  projectType: { color: bookezColors.secondaryAccent, fontSize: 9, marginTop: 3, fontWeight: '700' },
+  projectType: { color: bookezColors.goldDark, fontSize: 9, marginTop: 3, fontWeight: '700' },
   projectDetail: { color: bookezColors.cardTextSecondary, marginTop: 4, fontSize: 9, letterSpacing: 0.15 },
-  projectOverflowButton: { backgroundColor: bookezColors.surfaceMuted, borderWidth: 1, borderColor: bookezColors.border },
+  projectOverflowButton: { backgroundColor: bookezColors.surfacePrimary, borderWidth: 1, borderColor: bookezColors.libraryCardBorder },
   projectOverflowText: { color: bookezColors.accent },
   projectStats: { borderTopColor: bookezColors.divider },
   projectStatText: { color: bookezColors.cardTextSecondary },
   projectStatDot: { color: bookezColors.manuscriptEdge },
   projectCommunityBadge: { backgroundColor: bookezColors.successSoft },
   projectCommunityBadgeText: { color: bookezColors.success },
-  projectEngagementRow: { backgroundColor: bookezColors.secondaryAccentSoft, borderColor: bookezColors.goldSoft },
+  projectEngagementRow: { backgroundColor: bookezColors.libraryCardInset, borderColor: bookezColors.libraryCardInset },
   projectEngagementIcon: { color: bookezColors.secondaryAccent },
   projectEngagementText: { color: bookezColors.textPrimary },
   projectEngagementHint: { color: bookezColors.textSecondary },
   projectCardActions: { marginTop: bookezSpacing.sm, gap: bookezSpacing.xs },
   projectContinueButton: { flex: 1, backgroundColor: bookezColors.accentStrong, borderColor: bookezColors.accentStrong },
-  projectPreviewButton: { flex: 0.66, backgroundColor: bookezColors.surfaceRaised, borderColor: bookezColors.border },
-  addProjectRow: { marginTop: 4, borderRadius: 16, borderColor: bookezColors.cardBorder, minHeight: 76, paddingHorizontal: 14, backgroundColor: bookezColors.card, ...bookezShadows.subtle },
+  projectPreviewButton: { flex: 0.66, backgroundColor: bookezColors.surfacePrimary, borderColor: bookezColors.libraryCardBorder },
+  addProjectRow: { marginTop: 4, borderRadius: 16, borderColor: bookezColors.libraryCardBorder, minHeight: 70, paddingHorizontal: 14, backgroundColor: bookezColors.libraryCard, ...bookezShadows.subtle },
   addProjectPlus: { backgroundColor: bookezColors.accentSoft, borderWidth: 1, borderColor: bookezColors.burgundySoft },
   addProjectPlusText: { color: bookezColors.accent },
   addProjectTitle: { color: bookezColors.textPrimary, fontFamily: bookezType.sectionTitle.fontFamily, fontSize: 14, fontWeight: '600' },
@@ -9340,6 +9377,11 @@ const writeRhythmEditorialS = StyleSheet.create({
   writeRhythmResearch: { color: bookezColors.textMuted },
 });
 
+const journeyCardGuideS = StyleSheet.create({
+  popupNote: { color: bookezColors.textSecondary, fontSize: 9, lineHeight: 13, marginTop: 7 },
+  copy: { color: bookezColors.textSecondary, fontSize: 11, lineHeight: 17, marginTop: 7, maxWidth: 360 },
+});
+
 const journeyEditorialS = StyleSheet.create({
   journeyHeader: { marginTop: 1, minHeight: 66 },
   journeyBackButton: { backgroundColor: bookezColors.surface, borderColor: bookezColors.border, ...bookezShadows.subtle },
@@ -9407,10 +9449,10 @@ const journeyEditorialS = StyleSheet.create({
   journeyMilestoneReachedEyebrow: { color: bookezColors.success, letterSpacing: 0.85 },
   journeyMilestoneReachedTitle: { color: bookezColors.textPrimary, fontFamily: bookezType.cardTitle.fontFamily },
   journeyMilestoneReachedCheck: { color: bookezColors.success },
-  journeyMapHeading: { marginTop: 32, marginBottom: 9 },
+  journeyMapHeading: { marginTop: 32, marginBottom: 9, gap: 14 },
   journeyMapEyebrow: { color: bookezColors.secondaryAccent, letterSpacing: 1.05, fontWeight: '800' },
   journeyMapTitle: { color: bookezColors.textPrimary, fontFamily: bookezType.sectionTitle.fontFamily, fontSize: 20, lineHeight: 25, fontWeight: '600' },
-  journeyMapHint: { color: bookezColors.accent, backgroundColor: bookezColors.accentSoft, borderColor: bookezColors.burgundySoft, borderWidth: 1 },
+  journeyMapHint: { flexShrink: 0, color: bookezColors.accent, backgroundColor: bookezColors.accentSoft, borderColor: bookezColors.burgundySoft, borderWidth: 1 },
   journeyMap: { marginTop: 12, borderRadius: bookezRadii.cardLarge, overflow: 'hidden', backgroundColor: bookezColors.surfaceMuted, borderColor: bookezColors.manuscriptEdge, ...bookezShadows.lifted },
   journeyRouteCompleteDynamic: { backgroundColor: bookezColors.accent },
   journeyStateComplete: { color: bookezColors.success },
@@ -9597,7 +9639,7 @@ const rhythmS: any = StyleSheet.create({
 });
 
 const journeyPopupS: any = StyleSheet.create({
-  journeyInlinePopup: { position: 'absolute', padding: 12, borderRadius: 18, backgroundColor: '#F9F4EA', borderWidth: 1, borderColor: '#667A60', shadowColor: '#493F35', shadowOpacity: 0.2, shadowRadius: 14, shadowOffset: { width: 0, height: 6 }, elevation: 9, zIndex: 20 },
+  journeyInlinePopup: { position: 'absolute', padding: 12, borderRadius: 18, backgroundColor: '#FFF8EE', borderWidth: 1, borderColor: bookezWithAlpha(bookezColors.success, 0.35), shadowColor: '#493F35', shadowOpacity: 0.14, shadowRadius: 14, shadowOffset: { width: 0, height: 6 }, elevation: 9, zIndex: 20 },
   journeyInlinePopupCelebration: { backgroundColor: '#F9F4EA', borderColor: '#5B1830' },
   journeyInlinePopupClose: { position: 'absolute', top: 6, right: 7, width: 24, height: 24, borderRadius: 8, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F9F4EA', zIndex: 2 },
   journeyInlinePopupCloseText: { color: C.muted, fontSize: 16, lineHeight: 17 },
@@ -9605,7 +9647,7 @@ const journeyPopupS: any = StyleSheet.create({
   journeyInlinePopupEyebrow: { color: C.periwinkle, fontSize: 7, letterSpacing: 0.75, fontWeight: '700', paddingRight: 24 },
   journeyInlinePopupTitle: { color: C.ink, fontSize: 14, lineHeight: 18, fontWeight: '700', marginTop: 4, paddingRight: 18 },
   journeyInlinePopupParent: { color: '#667A60', fontSize: 8, marginTop: 3 },
-  journeyInlinePopupDescription: { color: C.muted, fontSize: 9, lineHeight: 13, marginTop: 7 },
+  journeyInlinePopupDescription: { color: bookezColors.textSecondary, fontSize: 10, lineHeight: 15, marginTop: 9, padding: 9, borderRadius: 10, borderWidth: 1, borderColor: bookezWithAlpha(bookezColors.secondaryAccent, 0.2), backgroundColor: bookezWithAlpha(bookezColors.secondaryAccent, 0.04) },
   journeyInlinePopupCompletedAt: { color: '#667A60', fontSize: 8, fontWeight: '700', marginTop: 7 },
   journeyInlinePopupProgressRow: { marginTop: 10, flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', gap: 8 },
   journeyInlinePopupProgress: { color: C.periwinkle, fontSize: 21, fontWeight: '700' },
@@ -11644,11 +11686,11 @@ const statsAncientS = StyleSheet.create({
   statsOverline: { color: ancientGameColors.brass, letterSpacing: 1.5 },
   statsTitle: { color: ancientGameColors.goldPale, textShadowColor: 'rgba(19,36,61,0.12)', textShadowOffset: { width: 0, height: 2 }, textShadowRadius: 3 },
   statsSubtitle: { color: ancientGameColors.bone },
-  statsJourneyButton: { backgroundColor: ancientGameColors.panel, borderColor: ancientGameColors.brassDark, borderRadius: 9, shadowColor: '#493F35', shadowOpacity: 0.42, shadowRadius: 5, shadowOffset: { width: 0, height: 3 } },
+  statsJourneyButton: { backgroundColor: ancientGameColors.panel, borderColor: ancientGameColors.brassDark, borderRadius: 9, shadowColor: bookezColors.shadowWarm, shadowOpacity: bookezShadows.subtle.shadowOpacity, shadowRadius: bookezShadows.subtle.shadowRadius, shadowOffset: bookezShadows.subtle.shadowOffset },
   statsJourneyButtonText: { color: ancientGameColors.gold },
   statsJourneyButtonArrow: { color: ancientGameColors.gold },
   statsBookName: { color: ancientGameColors.muted },
-  statsScopeToggle: { padding: 3, borderRadius: 10, backgroundColor: bookezColors.surfaceMuted, borderColor: ancientGameColors.brassDark, shadowColor: '#493F35', shadowOpacity: 0.34, shadowRadius: 5, shadowOffset: { width: 0, height: 3 } },
+  statsScopeToggle: { padding: 3, borderRadius: 10, backgroundColor: bookezColors.surfaceMuted, borderColor: ancientGameColors.brassDark, shadowColor: bookezColors.shadowWarm, shadowOpacity: bookezShadows.subtle.shadowOpacity, shadowRadius: bookezShadows.subtle.shadowRadius, shadowOffset: bookezShadows.subtle.shadowOffset },
   statsScopeOption: { borderRadius: 7 },
   statsScopeOptionActive: { backgroundColor: ancientGameColors.panel, borderWidth: 1, borderColor: ancientGameColors.brass, shadowColor: ancientGameColors.gold, shadowOpacity: 0.12, shadowRadius: 4, shadowOffset: { width: 0, height: 1 } },
   statsScopeOptionText: { color: ancientGameColors.muted },
@@ -11658,7 +11700,7 @@ const statsAncientS = StyleSheet.create({
   statsProjectOptionText: { color: ancientGameColors.muted },
   statsProjectOptionTextActive: { color: ancientGameColors.goldPale },
   rangeRow: { gap: 7, marginTop: 15 },
-  pill: { minHeight: 36, borderRadius: 8, backgroundColor: ancientGameColors.panel, borderColor: ancientGameColors.brassDark, shadowColor: '#493F35', shadowOpacity: 0.4, shadowRadius: 4, shadowOffset: { width: 0, height: 3 } },
+  pill: { minHeight: 36, borderRadius: 8, backgroundColor: ancientGameColors.panel, borderColor: ancientGameColors.brassDark, shadowColor: bookezColors.shadowWarm, shadowOpacity: bookezShadows.subtle.shadowOpacity, shadowRadius: bookezShadows.subtle.shadowRadius, shadowOffset: bookezShadows.subtle.shadowOffset },
   pillSelected: { backgroundColor: bookezColors.inkPrimary, borderColor: bookezColors.inkPrimary, shadowColor: ancientGameColors.gold, shadowOpacity: 0.18 },
   pillText: { color: ancientGameColors.muted, fontFamily: bookezType.sectionTitle.fontFamily, fontSize: 12 },
   pillTextSelected: { color: bookezColors.textOnAccent, textShadowColor: 'rgba(19,36,61,0.18)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 1 },
@@ -11667,7 +11709,7 @@ const statsAncientS = StyleSheet.create({
   bigNumber: { color: bookezColors.textOnAccent, textShadowColor: 'rgba(19,36,61,0.2)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 1 },
   bigNumberLabel: { color: bookezColors.borderWarm },
   statsMetricHint: { color: bookezColors.borderWarm },
-  statsMetricCard: { minHeight: 106, borderRadius: 10, borderColor: bookezColors.cardBorder, shadowColor: '#493F35', shadowOpacity: 0.48, shadowRadius: 7, shadowOffset: { width: 0, height: 5 }, elevation: 4 },
+  statsMetricCard: { minHeight: 106, borderRadius: 10, borderColor: bookezColors.cardBorder, shadowColor: bookezColors.shadowWarm, shadowOpacity: bookezShadows.subtle.shadowOpacity, shadowRadius: bookezShadows.subtle.shadowRadius, shadowOffset: bookezShadows.subtle.shadowOffset, elevation: bookezShadows.subtle.elevation },
   statsMetricCardLavender: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder },
   statsMetricCardWarm: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder },
   statsMetricCardSuccess: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder },
@@ -11675,7 +11717,7 @@ const statsAncientS = StyleSheet.create({
   statsMetricIcon: { color: ancientGameColors.gold },
   statsMetricCardValue: { color: bookezColors.textPrimary, textShadowColor: 'rgba(19,36,61,0.12)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 2 },
   statsMetricCardLabel: { color: bookezColors.cardTextSecondary },
-  achievementOverviewCard: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder, borderRadius: 12, shadowColor: '#493F35', shadowOpacity: 0.48 },
+  achievementOverviewCard: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder, borderRadius: 12, shadowColor: bookezColors.shadowWarm, shadowOpacity: bookezShadows.subtle.shadowOpacity },
   achievementOverviewIcon: { backgroundColor: bookezColors.secondaryAccentSoft, borderColor: ancientGameColors.brass },
   achievementOverviewEyebrow: { color: ancientGameColors.brass },
   achievementOverviewTitle: { color: bookezColors.textPrimary },
@@ -11721,7 +11763,7 @@ const statsAncientS = StyleSheet.create({
   achievementFilterSelected: { backgroundColor: bookezColors.accentSoft, borderColor: ancientGameColors.brass },
   achievementFilterText: { color: ancientGameColors.muted },
   achievementFilterTextSelected: { color: ancientGameColors.goldPale },
-  chartCard: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder, borderRadius: 12, shadowColor: '#493F35', shadowOpacity: 0.5 },
+  chartCard: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder, borderRadius: 12, shadowColor: bookezColors.shadowWarm, shadowOpacity: bookezShadows.subtle.shadowOpacity },
   chartTitle: { color: bookezColors.textPrimary },
   chartTotal: { color: ancientGameColors.gold },
   chartLegendText: { color: bookezColors.cardTextSecondary },
@@ -11730,7 +11772,7 @@ const statsAncientS = StyleSheet.create({
   barTime: { backgroundColor: bookezColors.sage },
   barLabel: { color: bookezColors.cardTextSecondary },
   statsEmptyHint: { color: bookezColors.cardTextSecondary },
-  statsDayRow: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder, borderRadius: 9, shadowColor: '#493F35', shadowOpacity: 0.25 },
+  statsDayRow: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder, borderRadius: 9, shadowColor: bookezColors.shadowWarm, shadowOpacity: bookezShadows.subtle.shadowOpacity },
   statsDayTitle: { color: ancientGameColors.bone },
   statsDaySub: { color: bookezColors.cardTextSecondary },
   statsDayValue: { color: bookezColors.textPrimary },
@@ -11739,7 +11781,7 @@ const statsAncientS = StyleSheet.create({
   statsEmptyIcon: { color: ancientGameColors.gold },
   statsEmptyTitle: { color: bookezColors.textPrimary },
   statsEmptyCopy: { color: bookezColors.cardTextSecondary },
-  statsBreakdownCard: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder, borderRadius: 11, shadowColor: '#493F35', shadowOpacity: 0.35 },
+  statsBreakdownCard: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder, borderRadius: 11, shadowColor: bookezColors.shadowWarm, shadowOpacity: bookezShadows.subtle.shadowOpacity },
   inputMixTrack: { backgroundColor: ancientGameColors.panelSoft },
   inputMixDictation: { backgroundColor: bookezColors.success },
   inputMixWriting: { backgroundColor: ancientGameColors.gold },
@@ -11772,7 +11814,7 @@ const statsAncientS = StyleSheet.create({
   statsInsightMetric: { borderTopColor: ancientGameColors.brassDark },
   statsInsightMetricLabel: { color: ancientGameColors.brass },
   statsInsightMetricValue: { color: ancientGameColors.goldPale },
-  statsBookCard: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder, borderRadius: 11, shadowColor: '#493F35', shadowOpacity: 0.32 },
+  statsBookCard: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder, borderRadius: 11, shadowColor: bookezColors.shadowWarm, shadowOpacity: bookezShadows.subtle.shadowOpacity },
   statsBookCardDivider: { backgroundColor: ancientGameColors.brassDark },
   statsBookCardLabel: { color: ancientGameColors.brass },
   statsBookCardValue: { color: ancientGameColors.goldPale },
@@ -11792,7 +11834,7 @@ const statsAncientS = StyleSheet.create({
 });
 
 const profileAncientS = StyleSheet.create({
-  profileHero: { marginTop: 7, padding: 15, borderRadius: 12, backgroundColor: bookezColors.card, borderWidth: 1.5, borderColor: bookezColors.cardBorder, shadowColor: '#493F35', shadowOpacity: 0.58, shadowRadius: 14, shadowOffset: { width: 0, height: 8 }, elevation: 7 },
+  profileHero: { marginTop: 7, padding: 15, borderRadius: 12, backgroundColor: bookezColors.card, borderWidth: 1, borderColor: bookezColors.cardBorder, shadowColor: bookezColors.shadowWarm, shadowOpacity: bookezShadows.feature.shadowOpacity, shadowRadius: bookezShadows.feature.shadowRadius, shadowOffset: bookezShadows.feature.shadowOffset, elevation: bookezShadows.feature.elevation },
   profileAvatar: { backgroundColor: bookezColors.surfaceAccent, borderWidth: 2, borderColor: ancientGameColors.brass, shadowColor: ancientGameColors.gold, shadowOpacity: 0.18 },
   profileAvatarText: { color: ancientGameColors.goldPale, fontFamily: bookezType.pageTitle.fontFamily },
   profileHalo: { borderColor: bookezColors.surfaceRaised },
@@ -11803,7 +11845,7 @@ const profileAncientS = StyleSheet.create({
   profileEditButton: { backgroundColor: bookezColors.accentSoft, borderColor: ancientGameColors.brassDark, borderRadius: 8, shadowColor: '#493F35', shadowOpacity: 0.36, shadowRadius: 4, shadowOffset: { width: 0, height: 3 } },
   profileEditButtonText: { color: ancientGameColors.goldPale, fontFamily: bookezType.sectionTitle.fontFamily, fontSize: 11 },
   preferenceTitle: { marginTop: 26, marginBottom: 9, color: ancientGameColors.brass, fontFamily: bookezType.label.fontFamily, fontSize: 10, lineHeight: 14, letterSpacing: 1.15, fontWeight: '800', textTransform: 'uppercase' },
-  onboardingProfileCard: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder, borderRadius: 11, shadowColor: '#493F35', shadowOpacity: 0.42, overflow: 'hidden' },
+  onboardingProfileCard: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder, borderRadius: 11, shadowColor: bookezColors.shadowWarm, shadowOpacity: bookezShadows.subtle.shadowOpacity, overflow: 'hidden' },
   onboardingProfileGlow: { backgroundColor: 'rgba(91,24,48,0.08)' },
   onboardingProfileIcon: { backgroundColor: bookezColors.secondaryAccentSoft, borderWidth: 1, borderColor: ancientGameColors.brass },
   onboardingProfileIconText: { color: ancientGameColors.goldPale },
@@ -11813,7 +11855,7 @@ const profileAncientS = StyleSheet.create({
   onboardingProfileButton: { backgroundColor: bookezColors.surface, borderColor: ancientGameColors.brassDark, borderRadius: 8 },
   onboardingProfileButtonText: { color: ancientGameColors.bone, fontFamily: bookezType.sectionTitle.fontFamily },
   onboardingProfileButtonArrow: { color: ancientGameColors.gold },
-  notificationPanel: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder, borderRadius: 11, shadowColor: '#493F35', shadowOpacity: 0.42 },
+  notificationPanel: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder, borderRadius: 11, shadowColor: bookezColors.shadowWarm, shadowOpacity: bookezShadows.subtle.shadowOpacity },
   notificationBell: { backgroundColor: bookezColors.secondaryAccentSoft, borderWidth: 1, borderColor: ancientGameColors.brassDark },
   notificationBellText: { color: ancientGameColors.gold },
   notificationTitle: { color: bookezColors.textPrimary, fontFamily: bookezType.sectionTitle.fontFamily },
@@ -11850,7 +11892,7 @@ const profileAncientS = StyleSheet.create({
   notificationAddIcon: { color: ancientGameColors.gold },
   notificationAddText: { color: ancientGameColors.goldPale },
   notificationDisabledCopy: { color: bookezColors.cardTextSecondary },
-  voicePanel: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder, borderRadius: 11, shadowColor: '#493F35', shadowOpacity: 0.42 },
+  voicePanel: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder, borderRadius: 11, shadowColor: bookezColors.shadowWarm, shadowOpacity: bookezShadows.subtle.shadowOpacity },
   voicePanelIcon: { backgroundColor: bookezColors.secondaryAccentSoft, borderWidth: 1, borderColor: ancientGameColors.brassDark },
   voicePanelIconText: { color: ancientGameColors.gold },
   voicePanelKicker: { color: ancientGameColors.brass },
@@ -11868,8 +11910,8 @@ const profileAncientS = StyleSheet.create({
   voicePreviewButton: { backgroundColor: bookezColors.secondaryAccentSoft, borderWidth: 1, borderColor: ancientGameColors.brassDark, borderRadius: 8 },
   voicePreviewButtonIcon: { color: ancientGameColors.gold },
   voicePreviewButtonText: { color: ancientGameColors.goldPale },
-  settingsCard: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder, borderRadius: 11, shadowColor: '#493F35', shadowOpacity: 0.42 },
-  accountCard: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder, borderRadius: 11, shadowColor: '#493F35', shadowOpacity: 0.42 },
+  settingsCard: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder, borderRadius: 11, shadowColor: bookezColors.shadowWarm, shadowOpacity: bookezShadows.subtle.shadowOpacity },
+  accountCard: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder, borderRadius: 11, shadowColor: bookezColors.shadowWarm, shadowOpacity: bookezShadows.subtle.shadowOpacity },
   accountEmailPanel: { paddingVertical: 12 },
   accountEmailKicker: { color: ancientGameColors.brass },
   accountEmailValue: { color: ancientGameColors.bone },
@@ -11886,7 +11928,7 @@ const profileAncientS = StyleSheet.create({
   prefLine: { backgroundColor: ancientGameColors.brassDark },
   chevron: { color: ancientGameColors.gold },
   profileFootnote: { color: ancientGameColors.muted },
-  accountClosureCard: { backgroundColor: bookezColors.destructiveSoft, borderColor: bookezColors.roseSoft, borderRadius: 11, shadowColor: bookezColors.goldDark, shadowOpacity: 0.42 },
+  accountClosureCard: { backgroundColor: bookezColors.destructiveSoft, borderColor: bookezColors.roseSoft, borderRadius: 11, shadowColor: bookezColors.shadowWarm, shadowOpacity: bookezShadows.subtle.shadowOpacity },
   accountClosureRuleLine: { backgroundColor: bookezColors.roseSoft },
   accountClosureRuleMark: { color: ancientGameColors.danger },
   accountClosureSeal: { backgroundColor: bookezColors.destructiveSoft, borderColor: bookezColors.roseSoft },
@@ -11903,7 +11945,7 @@ const profileAncientS = StyleSheet.create({
 });
 
 const profileSyncAncientS = StyleSheet.create({
-  dropdown: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder, borderRadius: 11, shadowColor: '#493F35', shadowOpacity: 0.42 },
+  dropdown: { backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder, borderRadius: 11, shadowColor: bookezColors.shadowWarm, shadowOpacity: bookezShadows.subtle.shadowOpacity },
   dropdownIcon: { backgroundColor: bookezColors.secondaryAccentSoft, borderWidth: 1, borderColor: ancientGameColors.brassDark },
   dropdownIconText: { color: ancientGameColors.gold },
   dropdownKicker: { color: ancientGameColors.brass },

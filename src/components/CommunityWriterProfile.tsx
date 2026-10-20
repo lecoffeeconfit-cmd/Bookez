@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, Image, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { supabase } from '../lib/supabase';
-import { bookezColors, bookezPlaceholderCoverGradient, bookezType } from '../theme/bookez';
+import { bookezColors, bookezPlaceholderCoverGradient, bookezShadows, bookezType } from '../theme/bookez';
 
 const C = {
   ink: bookezColors.textPrimary,
@@ -274,7 +274,7 @@ export function WriterProfileSheet({ visible, userId, viewerId, fallback, onClos
 
 const wS = StyleSheet.create({
   summaryCard: { marginTop: 13, padding: 15, borderRadius: 18, backgroundColor: bookezColors.card, borderWidth: 1, borderColor: bookezColors.cardBorder },
-  summaryCardArtifact: { borderRadius: 11, backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder, shadowColor: '#493F35', shadowOpacity: 0.46, shadowRadius: 9, shadowOffset: { width: 0, height: 6 }, elevation: 4 },
+  summaryCardArtifact: { borderRadius: 11, backgroundColor: bookezColors.card, borderColor: bookezColors.cardBorder, ...bookezShadows.subtle },
   summaryHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 },
   summaryHeaderCopy: { flex: 1, minWidth: 0 },
   overline: { color: C.periwinkle, fontSize: 7, letterSpacing: 0.9, fontWeight: '800' },
